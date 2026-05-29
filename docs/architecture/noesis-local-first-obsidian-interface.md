@@ -106,7 +106,7 @@ Every Noesis note should have these YAML properties:
 | --- | --- | --- |
 | `title` | text | Human-readable title. |
 | `noesis_id` | text | Stable local identifier, usually `type-slug`. |
-| `type` | text | One of `source`, `evidence`, `claim`, `synthesis`, `review`, `reviewed-knowledge`, `operational-context`, `stale-memory`, `archived-history`. |
+| `type` | text | One of `source`, `evidence`, `claim`, `synthesis`, `review`, `reviewed-knowledge`, `operational-context`, `stale-memory`, `archived-history`, or `dashboard`. |
 | `lifecycle_stage` | text | One of `source`, `evidence`, `claim`, `synthesis`, `review`, `knowledge`, `context`, `stale`, `archive`. |
 | `status` | text | Current lifecycle status, such as `captured`, `extracted`, `draft`, `needs-review`, `reviewed`, `active`, `stale`, `superseded`, `archived`. |
 | `review_state` | text | `none`, `ready-for-review`, `in-review`, `changes-requested`, `approved`, or `reviewed`. |
@@ -117,6 +117,10 @@ Every Noesis note should have these YAML properties:
 
 Use flat YAML. Avoid nested metadata because Obsidian Properties and simple
 agent parsers handle flat fields more predictably.
+
+Dashboard notes are interface notes, not lifecycle memory items. They can use
+`type: dashboard` with `review_state: none` so they remain inspectable while
+staying out of lifecycle and review Base results.
 
 ### Relationship Properties
 
