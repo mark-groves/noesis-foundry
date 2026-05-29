@@ -1,0 +1,18 @@
+filters:
+  and:
+    - 'file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")'
+    - 'noesis_id != null'
+views:
+  - type: table
+    name: Lifecycle dashboard
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - updated
