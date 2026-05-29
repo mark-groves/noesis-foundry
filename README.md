@@ -157,6 +157,18 @@ The initial aim is to turn the Noesis vision into a working local-first memory s
 
 Implementation details will evolve as the project takes shape.
 
+### Current Prototype
+
+The first local-first Obsidian interface design is documented in
+[`docs/architecture/noesis-local-first-obsidian-interface.md`](./docs/architecture/noesis-local-first-obsidian-interface.md).
+
+The plugin and adapter decision is captured in
+[`docs/adr/0001-obsidian-stack.md`](./docs/adr/0001-obsidian-stack.md).
+
+A small example vault lives in [`examples/noesis-vault`](./examples/noesis-vault)
+and demonstrates the complete Noesis lifecycle from source to operational
+context.
+
 ---
 
 ## Long-Term Aim
