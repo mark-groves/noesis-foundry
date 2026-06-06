@@ -215,6 +215,26 @@ This note covers a separate topic for an unrelated handoff.
                 issues,
             )
 
+    def test_validator_rejects_bare_relationship_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    '  - "[[reviewed-knowledge-noesis-lifecycle]]"',
+                    "  - reviewed-knowledge-noesis-lifecycle",
+                ),
+                encoding="utf-8",
+            )
+
+            vault = Vault.load(vault_path)
+            issues = [issue.message for issue in vault.validate()]
+            self.assertIn(
+                "reviewed_knowledge relationship entry 'reviewed-knowledge-noesis-lifecycle' must be a wikilink",
+                issues,
+            )
+
     def test_validator_rejects_blank_noesis_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"

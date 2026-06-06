@@ -390,6 +390,7 @@ def validate_notes(vault: Vault) -> list[Issue]:
                 issues.append(Issue(note.path, f"{date_key} must be a date or date-like string"))
 
         issues.extend(validate_type_stage(note))
+        issues.extend(validate_relationship_syntax(note))
         issues.extend(validate_context_exclusions(vault, note))
 
     return issues
@@ -417,6 +418,17 @@ def validate_type_stage(note: Note) -> list[Issue]:
     if note.type in expected and note.lifecycle_stage != expected[note.type]:
         return [Issue(note.path, f"type {note.type!r} must use lifecycle_stage {expected[note.type]!r}")]
     return []
+
+
+def validate_relationship_syntax(note: Note) -> list[Issue]:
+    issues: list[Issue] = []
+    for key in sorted(RELATIONSHIP_FIELDS & note.metadata.keys()):
+        for item in as_list(note.metadata.get(key)):
+            if not isinstance(item, str):
+                issues.append(Issue(note.path, f"{key} relationship entries must be wikilink strings"))
+            elif not extract_wikilinks(item):
+                issues.append(Issue(note.path, f"{key} relationship entry {item!r} must be a wikilink"))
+    return issues
 
 
 def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
