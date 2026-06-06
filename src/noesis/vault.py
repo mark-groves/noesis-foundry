@@ -866,7 +866,7 @@ aliases: []
 
 
 def build_context(vault: Vault, scope: str | None = None, purpose: str | None = None) -> str:
-    knowledge = vault.current_reviewed_knowledge()
+    knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
     title = "Noesis Operational Context"
     lines = [f"# {title}", ""]
     if scope:
@@ -902,6 +902,26 @@ def build_context(vault: Vault, scope: str | None = None, purpose: str | None = 
         )
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def filter_knowledge_by_scope(knowledge: list[Note], scope: str | None) -> list[Note]:
+    if scope is None or not scope.strip():
+        return knowledge
+    normalized_scope = scope.strip().lower()
+    return [note for note in knowledge if normalized_scope in searchable_note_text(note)]
+
+
+def searchable_note_text(note: Note) -> str:
+    metadata_values = [
+        note.noesis_id,
+        note.title,
+        note.rel_path.as_posix(),
+    ]
+    for key in ("tags", "aliases"):
+        for value in as_list(note.metadata.get(key)):
+            metadata_values.append(str(value))
+    metadata_values.append(note.body)
+    return "\n".join(metadata_values).lower()
 
 
 def is_excluded(note: Note) -> bool:

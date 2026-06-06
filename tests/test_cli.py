@@ -112,6 +112,49 @@ class NoesisCliTests(unittest.TestCase):
         self.assertNotIn("Build Custom Obsidian Plugin First", result.stdout)
         self.assertNotIn("stale-custom-plugin-first", result.stdout)
 
+    def test_context_build_filters_reviewed_knowledge_by_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            other = vault_path / "knowledge" / "reviewed-knowledge-other-topic.md"
+            other.write_text(
+                """---
+title: Other Topic Knowledge
+noesis_id: reviewed-knowledge-other-topic
+type: reviewed-knowledge
+lifecycle_stage: knowledge
+status: active
+review_state: reviewed
+confidence: high
+created: 2026-05-29
+updated: 2026-05-29
+reviewed_at: 2026-05-29
+tags:
+  - other-topic
+aliases: []
+---
+
+# Other Topic Knowledge
+
+## Current Knowledge
+
+This note covers a separate topic for an unrelated handoff.
+""",
+                encoding="utf-8",
+            )
+
+            result = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "noesis",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Noesis Lifecycle Knowledge", result.stdout)
+            self.assertNotIn("Other Topic Knowledge", result.stdout)
+
     def test_validator_rejects_broken_wikilink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
