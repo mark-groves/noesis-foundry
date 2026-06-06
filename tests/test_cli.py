@@ -131,6 +131,468 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("evidence-lifecycle-review", trace.stdout)
             self.assertIn("claim-memory-needs-review", trace.stdout)
 
+    def test_full_cli_lifecycle_writes_context_from_fresh_vault(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "memory-source.md"
+            raw_source.write_text(
+                "# Memory Source\n\nUseful memory needs source-backed review before reuse.\n",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Memory Source",
+                "--slug",
+                "memory-source",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+
+            evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-memory-source",
+                "--title",
+                "Source-Backed Review Evidence",
+                "--evidence",
+                "The source says useful memory needs source-backed review before reuse.",
+                "--slug",
+                "source-backed-review",
+            )
+            self.assertEqual(evidence.returncode, 0, evidence.stderr)
+
+            evidence_review = run_noesis(
+                "review",
+                "approve",
+                "evidence-source-backed-review",
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "Evidence accurately reflects the source.",
+                "--slug",
+                "evidence-source-backed-review",
+            )
+            self.assertEqual(evidence_review.returncode, 0, evidence_review.stderr)
+            self.assertIn("created review-evidence-source-backed-review", evidence_review.stdout)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-source-backed-review",
+                "--title",
+                "Memory Needs Review Before Reuse",
+                "--claim",
+                "Reusable memory should be reviewed against source-backed evidence.",
+                "--slug",
+                "memory-needs-review-before-reuse",
+            )
+            self.assertEqual(claim.returncode, 0, claim.stderr)
+
+            claim_review = run_noesis(
+                "review",
+                "approve",
+                "claim-memory-needs-review-before-reuse",
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "Claim is grounded in approved evidence.",
+                "--slug",
+                "claim-memory-needs-review-before-reuse",
+            )
+            self.assertEqual(claim_review.returncode, 0, claim_review.stderr)
+
+            synthesis = run_noesis(
+                "synthesize",
+                "--vault",
+                str(vault_path),
+                "--claim",
+                "claim-memory-needs-review-before-reuse",
+                "--title",
+                "Review Before Reuse Synthesis",
+                "--synthesis",
+                "Noesis should reuse memory only after it is grounded and reviewed.",
+                "--slug",
+                "review-before-reuse",
+            )
+            self.assertEqual(synthesis.returncode, 0, synthesis.stderr)
+            self.assertIn("created synthesis-review-before-reuse", synthesis.stdout)
+
+            synthesis_review = run_noesis(
+                "review",
+                "approve",
+                "synthesis-review-before-reuse",
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "Synthesis follows from the approved claim.",
+                "--slug",
+                "synthesis-review-before-reuse",
+                "--next-review",
+                "2026-07-06",
+            )
+            self.assertEqual(synthesis_review.returncode, 0, synthesis_review.stderr)
+
+            promote = run_noesis(
+                "knowledge",
+                "promote",
+                "--vault",
+                str(vault_path),
+                "--synthesis",
+                "synthesis-review-before-reuse",
+                "--title",
+                "Review Before Reuse Knowledge",
+                "--knowledge",
+                "Noesis operational context should use reviewed memory, not raw drafts.",
+                "--slug",
+                "review-before-reuse",
+                "--next-review",
+                "2026-08-06",
+            )
+            self.assertEqual(promote.returncode, 0, promote.stderr)
+            self.assertIn("created reviewed-knowledge-review-before-reuse", promote.stdout)
+
+            context = run_noesis(
+                "context",
+                "write",
+                "--vault",
+                str(vault_path),
+                "--purpose",
+                "prepare a future agent",
+                "--title",
+                "Review Before Reuse Context",
+                "--slug",
+                "review-before-reuse",
+                "--next-review",
+                "2026-08-06",
+            )
+            self.assertEqual(context.returncode, 0, context.stderr)
+            self.assertIn("created context-review-before-reuse", context.stdout)
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            queue = run_noesis("review", "queue", "--vault", str(vault_path))
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            self.assertIn("review queue empty", queue.stdout)
+
+            trace = run_noesis("trace", "context-review-before-reuse", "--vault", str(vault_path))
+            self.assertEqual(trace.returncode, 0, trace.stderr)
+            for expected in (
+                "source-memory-source",
+                "evidence-source-backed-review",
+                "claim-memory-needs-review-before-reuse",
+                "synthesis-review-before-reuse",
+                "review-synthesis-review-before-reuse",
+                "reviewed-knowledge-review-before-reuse",
+                "context-review-before-reuse",
+            ):
+                self.assertIn(expected, trace.stdout)
+
+            context_note = (vault_path / "context" / "context-review-before-reuse.md").read_text(encoding="utf-8")
+            self.assertIn("reviewed_knowledge:", context_note)
+            self.assertIn("[[reviewed-knowledge-review-before-reuse]]", context_note)
+            self.assertIn("Noesis operational context should use reviewed memory", context_note)
+
+    def test_review_request_changes_keeps_note_in_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "review-source.md"
+            raw_source.write_text("Review changes source.\n", encoding="utf-8")
+
+            self.assertEqual(run_noesis("vault", "init", str(vault_path)).returncode, 0)
+            self.assertEqual(
+                run_noesis(
+                    "ingest",
+                    "source",
+                    "--vault",
+                    str(vault_path),
+                    "--file",
+                    str(raw_source),
+                    "--title",
+                    "Review Source",
+                    "--slug",
+                    "review-source",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "extract",
+                    "evidence",
+                    "--vault",
+                    str(vault_path),
+                    "--source",
+                    "source-review-source",
+                    "--title",
+                    "Review Evidence",
+                    "--slug",
+                    "review-evidence",
+                ).returncode,
+                0,
+            )
+
+            review = run_noesis(
+                "review",
+                "request-changes",
+                "evidence-review-evidence",
+                "--vault",
+                str(vault_path),
+                "--changes-requested",
+                "Replace placeholder evidence with source-backed text.",
+                "--slug",
+                "review-evidence-change-request",
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+
+            queue = run_noesis("review", "queue", "--vault", str(vault_path))
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            self.assertIn("evidence-review-evidence", queue.stdout)
+            self.assertIn("changes-requested", queue.stdout)
+
+    def test_promote_rejects_unapproved_synthesis(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "unapproved-source.md"
+            raw_source.write_text("Unapproved promotion source.\n", encoding="utf-8")
+
+            self.assertEqual(run_noesis("vault", "init", str(vault_path)).returncode, 0)
+            self.assertEqual(
+                run_noesis(
+                    "ingest",
+                    "source",
+                    "--vault",
+                    str(vault_path),
+                    "--file",
+                    str(raw_source),
+                    "--title",
+                    "Unapproved Source",
+                    "--slug",
+                    "unapproved-source",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "extract",
+                    "evidence",
+                    "--vault",
+                    str(vault_path),
+                    "--source",
+                    "source-unapproved-source",
+                    "--title",
+                    "Unapproved Evidence",
+                    "--slug",
+                    "unapproved-evidence",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "review",
+                    "approve",
+                    "evidence-unapproved-evidence",
+                    "--vault",
+                    str(vault_path),
+                    "--slug",
+                    "unapproved-evidence",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "propose",
+                    "claim",
+                    "--vault",
+                    str(vault_path),
+                    "--evidence",
+                    "evidence-unapproved-evidence",
+                    "--title",
+                    "Unapproved Claim",
+                    "--slug",
+                    "unapproved-claim",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "review",
+                    "approve",
+                    "claim-unapproved-claim",
+                    "--vault",
+                    str(vault_path),
+                    "--slug",
+                    "unapproved-claim",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "synthesize",
+                    "--vault",
+                    str(vault_path),
+                    "--claim",
+                    "claim-unapproved-claim",
+                    "--title",
+                    "Unapproved Synthesis",
+                    "--slug",
+                    "unapproved-synthesis",
+                ).returncode,
+                0,
+            )
+
+            promote = run_noesis(
+                "knowledge",
+                "promote",
+                "--vault",
+                str(vault_path),
+                "--synthesis",
+                "synthesis-unapproved-synthesis",
+                "--title",
+                "Should Not Promote",
+            )
+            self.assertNotEqual(promote.returncode, 0)
+            self.assertIn("synthesis must be approved before promotion", promote.stderr)
+            self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_promote_rejects_ungrounded_synthesis(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            (vault_path / "review" / "review-ungrounded-synthesis.md").write_text(
+                """---
+title: Review Ungrounded Synthesis
+noesis_id: review-ungrounded-synthesis
+type: review
+lifecycle_stage: review
+status: complete
+review_state: approved
+confidence: medium
+created: 2026-06-06
+updated: 2026-06-06
+reviewer: test
+reviewed_at: 2026-06-06
+reviewed_notes:
+  - "[[synthesis-ungrounded]]"
+decision: approved
+tags:
+  - noesis
+  - review
+aliases: []
+---
+
+# Review Ungrounded Synthesis
+""",
+                encoding="utf-8",
+            )
+            (vault_path / "syntheses" / "synthesis-ungrounded.md").write_text(
+                """---
+title: Ungrounded Synthesis
+noesis_id: synthesis-ungrounded
+type: synthesis
+lifecycle_stage: synthesis
+status: reviewed
+review_state: approved
+confidence: medium
+created: 2026-06-06
+updated: 2026-06-06
+reviewed_by:
+  - "[[review-ungrounded-synthesis]]"
+tags:
+  - noesis
+  - synthesis
+aliases: []
+---
+
+# Ungrounded Synthesis
+
+## Synthesis
+
+This approved-looking synthesis has no source, evidence, or claim lineage.
+""",
+                encoding="utf-8",
+            )
+            validate_before_promote = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_before_promote.returncode, 0, validate_before_promote.stderr)
+
+            promote = run_noesis(
+                "knowledge",
+                "promote",
+                "--vault",
+                str(vault_path),
+                "--synthesis",
+                "synthesis-ungrounded",
+                "--title",
+                "Should Not Promote",
+            )
+            self.assertNotEqual(promote.returncode, 0)
+            self.assertIn("synthesis must preserve source, evidence, and claim lineage", promote.stderr)
+            self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
+
+    def test_mark_memory_stale_excludes_existing_context_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "reviewed-knowledge-noesis-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "The lifecycle contract changed and this knowledge needs replacement.",
+                "--superseded-by",
+                "synthesis-local-first-lifecycle-interface",
+                "--slug",
+                "noesis-lifecycle-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+            self.assertIn("created stale-noesis-lifecycle-old", stale.stdout)
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            context = run_noesis("context", "build", "--vault", str(vault_path))
+            self.assertEqual(context.returncode, 0, context.stderr)
+            self.assertIn("No current reviewed knowledge found.", context.stdout)
+            self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
+
+            context_note = (
+                vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("excluded_memory:", context_note)
+            self.assertIn("[[stale-custom-plugin-first]]", context_note)
+            self.assertIn('[[reviewed-knowledge-noesis-lifecycle]]', context_note)
+            self.assertIn('[[stale-noesis-lifecycle-old]]', context_note)
+
     def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
