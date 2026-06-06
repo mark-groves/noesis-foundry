@@ -9,7 +9,7 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 sources:
-  - "<source-note>"
+  - "[[<source-note>]]"
 tags:
   - noesis
   - evidence

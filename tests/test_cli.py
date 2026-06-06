@@ -43,6 +43,9 @@ class NoesisCliTests(unittest.TestCase):
             self.assertTrue((vault_path / "_canvas" / "noesis-lifecycle.canvas").exists())
             self.assertTrue((vault_path / "_templates" / "source.md").exists())
 
+            evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
+            self.assertIn('  - "[[<source-note>]]"', evidence_template)
+
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -151,6 +154,23 @@ class NoesisCliTests(unittest.TestCase):
             issues = [issue.message for issue in vault.validate()]
             self.assertIn(
                 "reviewed_knowledge reference '[[raw/2026-05-29-noesis-readme-excerpt]]' does not resolve to a Noesis note",
+                issues,
+            )
+
+    def test_validator_rejects_non_current_reviewed_knowledge_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            knowledge_path = vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md"
+            knowledge_path.write_text(
+                knowledge_path.read_text(encoding="utf-8").replace("status: active", "status: complete"),
+                encoding="utf-8",
+            )
+
+            vault = Vault.load(vault_path)
+            issues = [issue.message for issue in vault.validate()]
+            self.assertIn(
+                "reviewed_knowledge reference '[[reviewed-knowledge-noesis-lifecycle]]' is not current reviewed knowledge",
                 issues,
             )
 

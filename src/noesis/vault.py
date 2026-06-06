@@ -424,7 +424,9 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             continue
         if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
-        if is_excluded(target):
+        elif target.status not in CURRENT_KNOWLEDGE_STATUSES:
+            issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not current reviewed knowledge"))
+        elif is_excluded(target):
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is stale, superseded, or archived"))
 
     for ref in as_list(note.metadata.get("excluded_memory")):
@@ -709,7 +711,7 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 sources:
-  - "<source-note>"
+  - "[[<source-note>]]"
 tags:
   - noesis
   - evidence
@@ -737,9 +739,9 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 sources:
-  - "<source-note>"
+  - "[[<source-note>]]"
 evidence:
-  - "<evidence-note>"
+  - "[[<evidence-note>]]"
 tags:
   - noesis
   - claim
@@ -767,11 +769,11 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 sources:
-  - "<source-note>"
+  - "[[<source-note>]]"
 evidence:
-  - "<evidence-note>"
+  - "[[<evidence-note>]]"
 claims:
-  - "<claim-note>"
+  - "[[<claim-note>]]"
 tags:
   - noesis
   - synthesis
@@ -801,7 +803,7 @@ updated: "{{date}}"
 reviewer: unknown
 reviewed_at: "{{date}}"
 reviewed_notes:
-  - "<note-under-review>"
+  - "[[<note-under-review>]]"
 decision: approved
 tags:
   - noesis
@@ -830,9 +832,9 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 syntheses:
-  - "<synthesis-note>"
+  - "[[<synthesis-note>]]"
 reviewed_knowledge:
-  - "<reviewed-knowledge-note>"
+  - "[[<reviewed-knowledge-note>]]"
 excluded_memory: []
 next_review: "{{date}}"
 tags:

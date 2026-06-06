@@ -11,7 +11,7 @@ updated: "{{date}}"
 reviewer: unknown
 reviewed_at: "{{date}}"
 reviewed_notes:
-  - "<note-under-review>"
+  - "[[<note-under-review>]]"
 decision: approved
 tags:
   - noesis
