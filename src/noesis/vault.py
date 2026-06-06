@@ -918,9 +918,10 @@ def write_review_decision(
     target_metadata = dict(target.metadata)
     target_metadata["updated"] = reviewed_at
     if decision == "approved":
-        if is_excluded(target):
+        if is_excluded(target) and target.type != "stale-memory":
             raise ValueError("stale, superseded, or archived memory cannot be approved")
-        target_metadata["status"] = "reviewed"
+        if target.type != "stale-memory":
+            target_metadata["status"] = "reviewed"
         target_metadata["review_state"] = "approved"
         if next_review:
             target_metadata["next_review"] = next_review

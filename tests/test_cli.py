@@ -623,6 +623,33 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("stale, superseded, or archived memory cannot be approved", review.stderr)
             self.assertEqual(list((vault_path / "review").glob("review-stale-knowledge-approval*.md")), [])
 
+    def test_review_approve_allows_stale_memory_audit_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            review = run_noesis(
+                "review",
+                "approve",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--basis",
+                "Stale-memory audit is still valid.",
+                "--slug",
+                "stale-audit-approval",
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+
+            stale_note = (vault_path / "stale" / "stale-custom-plugin-first.md").read_text(encoding="utf-8")
+            self.assertIn("status: superseded", stale_note)
+            self.assertIn("review_state: approved", stale_note)
+            self.assertIn("review-stale-audit-approval", stale_note)
+
+            queue = run_noesis("review", "queue", "--vault", str(vault_path))
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            self.assertNotIn("stale-custom-plugin-first", queue.stdout)
+
     def test_promote_rejects_stale_claim_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
