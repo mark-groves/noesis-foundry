@@ -46,6 +46,284 @@ class NoesisCliTests(unittest.TestCase):
             evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
             self.assertIn('  - "[[<source-note>]]"', evidence_template)
 
+    def test_authoring_loop_creates_reviewable_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "research-note.md"
+            raw_source.write_text(
+                "# Research Note\n\nMemory needs lifecycle-aware review.\n",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Research Note",
+                "--slug",
+                "research-note",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            self.assertIn("created source-research-note", ingest.stdout)
+            self.assertTrue((vault_path / "raw" / "research-note.md").exists())
+            self.assertTrue((vault_path / "sources" / "source-research-note.md").exists())
+            validate_after_ingest = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_after_ingest.returncode, 0, validate_after_ingest.stderr)
+
+            evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-research-note",
+                "--title",
+                "Lifecycle Review Evidence",
+                "--evidence",
+                "The source says useful memory needs lifecycle-aware review.",
+                "--slug",
+                "lifecycle-review",
+            )
+            self.assertEqual(evidence.returncode, 0, evidence.stderr)
+            self.assertIn("created evidence-lifecycle-review", evidence.stdout)
+            self.assertTrue((vault_path / "evidence" / "evidence-lifecycle-review.md").exists())
+            validate_after_evidence = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_after_evidence.returncode, 0, validate_after_evidence.stderr)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-lifecycle-review",
+                "--title",
+                "Memory Needs Review",
+                "--claim",
+                "Useful memory requires lifecycle-aware review.",
+                "--slug",
+                "memory-needs-review",
+            )
+            self.assertEqual(claim.returncode, 0, claim.stderr)
+            self.assertIn("created claim-memory-needs-review", claim.stdout)
+            self.assertTrue((vault_path / "claims" / "claim-memory-needs-review.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            queue = run_noesis("review", "queue", "--vault", str(vault_path))
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            self.assertIn("evidence-lifecycle-review", queue.stdout)
+            self.assertIn("claim-memory-needs-review", queue.stdout)
+            self.assertIn("ready-for-review", queue.stdout)
+
+            trace = run_noesis("trace", "claim-memory-needs-review", "--vault", str(vault_path))
+            self.assertEqual(trace.returncode, 0, trace.stderr)
+            self.assertIn("source-research-note", trace.stdout)
+            self.assertIn("evidence-lifecycle-review", trace.stdout)
+            self.assertIn("claim-memory-needs-review", trace.stdout)
+
+    def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "dated-note.md"
+            raw_source.write_text("Invalid date should not dirty the vault.\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Dated Note",
+                "--source-date",
+                "2026/06/06",
+            )
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn("source_date must be YYYY-MM-DD or unknown", ingest.stderr)
+            self.assertFalse((vault_path / "raw" / "dated-note.md").exists())
+            self.assertEqual(list((vault_path / "sources").glob("source-dated-note*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_draft_commands_reject_blank_titles_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "draft-source.md"
+            raw_source.write_text("Draft title validation source.\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Draft Source",
+                "--slug",
+                "draft-source",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+
+            evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-draft-source",
+                "--title",
+                "   ",
+            )
+            self.assertNotEqual(evidence.returncode, 0)
+            self.assertIn("title must not be blank", evidence.stderr)
+            self.assertEqual(list((vault_path / "evidence").glob("evidence-*.md")), [])
+
+            valid_evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-draft-source",
+                "--title",
+                "Draft Evidence",
+                "--slug",
+                "draft-evidence",
+            )
+            self.assertEqual(valid_evidence.returncode, 0, valid_evidence.stderr)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-draft-evidence",
+                "--title",
+                "   ",
+            )
+            self.assertNotEqual(claim.returncode, 0)
+            self.assertIn("title must not be blank", claim.stderr)
+            self.assertEqual(list((vault_path / "claims").glob("claim-*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_failed_evidence_validation_rolls_back_written_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "rollback-source.md"
+            raw_source.write_text("Rollback validation source.\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Rollback Source",
+                "--slug",
+                "rollback-source",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+
+            evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-rollback-source",
+                "--title",
+                "Rollback Evidence",
+                "--slug",
+                "rollback-evidence",
+                "--evidence",
+                "This invalid draft points to [[missing-note]].",
+            )
+            self.assertNotEqual(evidence.returncode, 0)
+            self.assertIn("unresolved wikilink [[missing-note]]", evidence.stderr)
+            self.assertFalse((vault_path / "evidence" / "evidence-rollback-evidence.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_propose_claim_rejects_evidence_without_source_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            (vault_path / "evidence" / "evidence-ungrounded.md").write_text(
+                """---
+title: Ungrounded Evidence
+noesis_id: evidence-ungrounded
+type: evidence
+lifecycle_stage: evidence
+status: extracted
+review_state: ready-for-review
+confidence: medium
+created: 2026-06-06
+updated: 2026-06-06
+tags:
+  - noesis
+  - evidence
+aliases: []
+---
+
+# Ungrounded Evidence
+
+## Evidence
+
+This legacy evidence note does not link to a source.
+""",
+                encoding="utf-8",
+            )
+            validate_before_claim = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_before_claim.returncode, 0, validate_before_claim.stderr)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-ungrounded",
+                "--title",
+                "Ungrounded Claim",
+            )
+            self.assertNotEqual(claim.returncode, 0)
+            self.assertIn("claim evidence must link to at least one source note", claim.stderr)
+            self.assertEqual(list((vault_path / "claims").glob("claim-*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)

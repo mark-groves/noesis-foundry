@@ -5,6 +5,7 @@ from datetime import date
 import json
 from pathlib import Path
 import re
+import shutil
 from typing import Any, Iterable
 
 import yaml
@@ -168,6 +169,12 @@ class Note:
     @property
     def review_state(self) -> str:
         return str(self.metadata.get("review_state", ""))
+
+
+@dataclass(frozen=True)
+class CreatedNote:
+    note_id: str
+    path: Path
 
 
 @dataclass
@@ -541,6 +548,209 @@ def init_vault(path: Path | str, force: bool = False) -> list[Path]:
     return created
 
 
+def ingest_source(
+    vault_path: Path | str,
+    source_file: Path | str,
+    title: str,
+    *,
+    slug: str | None = None,
+    source_type: str = "file",
+    original_url: str = "unknown",
+    author: str = "unknown",
+    source_date: str = "unknown",
+    today: str | None = None,
+) -> CreatedNote:
+    root = ensure_valid_vault(vault_path)
+    source_path = Path(source_file).expanduser().resolve()
+    if not source_path.is_file():
+        raise ValueError(f"source file does not exist: {source_file}")
+    if is_blank(title):
+        raise ValueError("title must not be blank")
+    if not is_date_like(source_date):
+        raise ValueError("source_date must be YYYY-MM-DD or unknown")
+
+    created_at = today or date.today().isoformat()
+    note_slug = slugify(slug or title)
+    raw_name = unique_filename(root / "raw", source_path.name)
+    raw_target = root / "raw" / raw_name
+    shutil.copy2(source_path, raw_target)
+
+    note_id = unique_noesis_id(root, f"source-{note_slug}")
+    note_path = unique_note_path(root / "sources", f"{note_id}.md")
+    metadata = {
+        "title": title,
+        "noesis_id": note_id,
+        "type": "source",
+        "lifecycle_stage": "source",
+        "status": "captured",
+        "review_state": "none",
+        "confidence": "unknown",
+        "created": created_at,
+        "updated": created_at,
+        "source_type": source_type,
+        "raw_path": f"../raw/{raw_name}",
+        "original_url": original_url,
+        "author": author,
+        "source_date": source_date,
+        "captured": created_at,
+        "tags": ["noesis", "source"],
+        "aliases": [],
+    }
+    body = f"""# {title}
+
+Raw source: [{raw_name}](../raw/{raw_name})
+
+## Summary
+
+## Key Claims
+
+## Evidence Candidates
+
+## Open Questions
+"""
+    write_note_and_validate(root, note_path, metadata, body, cleanup_paths=[raw_target])
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def extract_evidence(
+    vault_path: Path | str,
+    source_ref: str,
+    *,
+    title: str | None = None,
+    evidence: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    source = vault.find_note(source_ref)
+    if source is None:
+        raise ValueError(f"source note not found: {source_ref}")
+    if source.type != "source":
+        raise ValueError(f"source reference is not a source note: {source_ref}")
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+
+    created_at = today or date.today().isoformat()
+    note_title = title or f"Evidence from {source.title}"
+    note_slug = slugify(slug or note_title)
+    note_id = unique_noesis_id(root, f"evidence-{note_slug}")
+    note_path = unique_note_path(root / "evidence", f"{note_id}.md")
+    metadata = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "evidence",
+        "lifecycle_stage": "evidence",
+        "status": "extracted",
+        "review_state": "ready-for-review",
+        "confidence": "medium",
+        "created": created_at,
+        "updated": created_at,
+        "sources": [wikilink(source.noesis_id)],
+        "tags": ["noesis", "evidence"],
+        "aliases": [],
+    }
+    evidence_text = evidence or "Review this draft against the source and replace this placeholder with atomic evidence."
+    body = f"""# {note_title}
+
+## Evidence
+
+{evidence_text}
+
+## Source Basis
+
+- {wikilink(source.noesis_id)}
+
+## Extraction Notes
+
+Generated as a reviewable evidence draft.
+
+## Candidate Claims
+"""
+    write_note_and_validate(root, note_path, metadata, body)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def propose_claim(
+    vault_path: Path | str,
+    evidence_refs: list[str],
+    *,
+    title: str | None = None,
+    claim: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if not evidence_refs:
+        raise ValueError("at least one evidence reference is required")
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    evidence_notes: list[Note] = []
+    for ref in evidence_refs:
+        note = vault.find_note(ref)
+        if note is None:
+            raise ValueError(f"evidence note not found: {ref}")
+        if note.type != "evidence":
+            raise ValueError(f"evidence reference is not an evidence note: {ref}")
+        evidence_notes.append(note)
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+
+    created_at = today or date.today().isoformat()
+    note_title = title or f"Claim from {evidence_notes[0].title}"
+    note_slug = slugify(slug or note_title)
+    note_id = unique_noesis_id(root, f"claim-{note_slug}")
+    note_path = unique_note_path(root / "claims", f"{note_id}.md")
+    source_links = sorted(collect_source_links(vault, evidence_notes))
+    if not source_links:
+        raise ValueError("claim evidence must link to at least one source note")
+    evidence_links = [wikilink(note.noesis_id) for note in evidence_notes]
+    metadata = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "claim",
+        "lifecycle_stage": "claim",
+        "status": "draft",
+        "review_state": "ready-for-review",
+        "confidence": "medium",
+        "created": created_at,
+        "updated": created_at,
+        "sources": source_links,
+        "evidence": evidence_links,
+        "tags": ["noesis", "claim"],
+        "aliases": [],
+    }
+    claim_text = claim or "Review this draft and replace this placeholder with a source-backed claim."
+    body = f"""# {note_title}
+
+## Claim
+
+{claim_text}
+
+## Supporting Evidence
+
+{format_link_list(evidence_links)}
+
+## Limits
+
+## Review Notes
+"""
+    write_note_and_validate(root, note_path, metadata, body)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def ensure_valid_vault(vault_path: Path | str) -> Path:
+    root = Path(vault_path).expanduser().resolve()
+    vault = Vault.load(root)
+    issues = vault.validate()
+    if issues:
+        formatted = "; ".join(issue.format(vault.root) for issue in issues[:3])
+        remaining = len(issues) - 3
+        if remaining > 0:
+            formatted = f"{formatted}; and {remaining} more issue(s)"
+        raise ValueError(f"vault validation failed before write: {formatted}")
+    return root
+
+
 def default_vault_files(today: str) -> dict[Path, str]:
     return {
         Path("_dashboards/noesis-review-dashboard.md"): f"""---
@@ -602,7 +812,7 @@ The canonical sortable queue is [[review-queue.base]].
 """,
         Path("_bases/review-queue.base"): """filters:
   and:
-    - file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
+    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
     - review_state != "none"
     - review_state != "reviewed"
     - review_state != "approved"
@@ -939,6 +1149,95 @@ def searchable_note_text(note: Note) -> str:
 
 def is_excluded(note: Note) -> bool:
     return note.lifecycle_stage in {"stale", "archive"} or note.status in EXCLUDED_STATUSES
+
+
+def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frontmatter = yaml.safe_dump(metadata, sort_keys=False, allow_unicode=False)
+    path.write_text(f"---\n{frontmatter}---\n\n{body.rstrip()}\n", encoding="utf-8")
+
+
+def write_note_and_validate(
+    root: Path,
+    path: Path,
+    metadata: dict[str, Any],
+    body: str,
+    *,
+    cleanup_paths: list[Path] | None = None,
+) -> None:
+    write_note(path, metadata, body)
+    try:
+        ensure_valid_vault(root)
+    except ValueError:
+        path.unlink(missing_ok=True)
+        for cleanup_path in cleanup_paths or []:
+            cleanup_path.unlink(missing_ok=True)
+        raise
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "untitled"
+
+
+def wikilink(target: str) -> str:
+    return f"[[{target}]]"
+
+
+def format_link_list(links: list[str]) -> str:
+    if not links:
+        return ""
+    return "\n".join(f"- {link}" for link in links)
+
+
+def collect_source_links(vault: Vault, notes: list[Note]) -> set[str]:
+    links: set[str] = set()
+    for note in notes:
+        for target in iter_metadata_wikilinks(note.metadata):
+            target_note = vault.find_note(target)
+            if target_note is not None and target_note.type == "source":
+                links.add(wikilink(target_note.noesis_id))
+    return links
+
+
+def unique_filename(folder: Path, filename: str) -> str:
+    candidate = Path(filename).name
+    if not (folder / candidate).exists():
+        return candidate
+    stem = Path(candidate).stem
+    suffix = Path(candidate).suffix
+    counter = 2
+    while True:
+        next_candidate = f"{stem}-{counter}{suffix}"
+        if not (folder / next_candidate).exists():
+            return next_candidate
+        counter += 1
+
+
+def unique_note_path(folder: Path, filename: str) -> Path:
+    candidate = folder / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        next_candidate = folder / f"{stem}-{counter}{suffix}"
+        if not next_candidate.exists():
+            return next_candidate
+        counter += 1
+
+
+def unique_noesis_id(root: Path, base_id: str) -> str:
+    existing = Vault.load(root).by_id
+    if base_id not in existing:
+        return base_id
+    counter = 2
+    while True:
+        candidate = f"{base_id}-{counter}"
+        if candidate not in existing:
+            return candidate
+        counter += 1
 
 
 def is_date_like(value: Any) -> bool:
