@@ -439,7 +439,6 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     for ref in as_list(note.metadata.get("reviewed_knowledge")):
         target = vault.find_note(str(ref))
         if target is None:
-            issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} does not resolve to a Noesis note"))
             continue
         if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
@@ -451,7 +450,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     for ref in as_list(note.metadata.get("excluded_memory")):
         target = vault.find_note(str(ref))
         if target is None:
-            issues.append(Issue(note.path, f"excluded_memory reference {ref!r} does not resolve to a Noesis note"))
+            continue
         elif not is_excluded(target):
             issues.append(Issue(note.path, f"excluded_memory reference {ref!r} is not stale, superseded, or archived"))
 
@@ -461,13 +460,12 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
 def validate_wikilinks(vault: Vault) -> list[Issue]:
     issues: list[Issue] = []
     for note in vault.notes:
-        metadata_targets = set(iter_metadata_wikilinks(note.metadata))
-        for target in sorted(extract_wikilinks(note.body) | metadata_targets):
+        for target in sorted(extract_wikilinks(note.body)):
             if vault.by_link.get(normalize_wikilink_target(target)) is None:
                 issues.append(Issue(note.path, f"unresolved wikilink [[{target}]]"))
-        for target in sorted(metadata_targets):
+        for key, target in sorted(iter_metadata_relationship_targets(note.metadata)):
             if vault.find_note(target) is None:
-                issues.append(Issue(note.path, f"relationship wikilink [[{target}]] does not resolve to a Noesis note"))
+                issues.append(Issue(note.path, f"{key} relationship wikilink [[{target}]] does not resolve to a Noesis note"))
     return issues
 
 
@@ -974,6 +972,11 @@ def extract_wikilinks(text: str) -> set[str]:
 
 
 def iter_metadata_wikilinks(metadata: dict[str, Any]) -> Iterable[str]:
+    for _, target in iter_metadata_relationship_targets(metadata):
+        yield target
+
+
+def iter_metadata_relationship_targets(metadata: dict[str, Any]) -> Iterable[tuple[str, str]]:
     for key, value in metadata.items():
         if key not in RELATIONSHIP_FIELDS:
             continue
@@ -981,7 +984,8 @@ def iter_metadata_wikilinks(metadata: dict[str, Any]) -> Iterable[str]:
             if isinstance(item, str):
                 matches = extract_wikilinks(item)
                 if matches:
-                    yield from matches
+                    for target in matches:
+                        yield key, target
 
 
 def normalize_wikilink_target(target: str) -> str:

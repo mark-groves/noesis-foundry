@@ -211,7 +211,7 @@ This note covers a separate topic for an unrelated handoff.
             vault = Vault.load(vault_path)
             issues = [issue.message for issue in vault.validate()]
             self.assertIn(
-                "relationship wikilink [[raw/2026-05-29-noesis-readme-excerpt]] does not resolve to a Noesis note",
+                "sources relationship wikilink [[raw/2026-05-29-noesis-readme-excerpt]] does not resolve to a Noesis note",
                 issues,
             )
 
@@ -282,7 +282,7 @@ This note covers a separate topic for an unrelated handoff.
             vault = Vault.load(vault_path)
             issues = [issue.message for issue in vault.validate()]
             self.assertIn(
-                "reviewed_knowledge reference '[[raw/2026-05-29-noesis-readme-excerpt]]' does not resolve to a Noesis note",
+                "reviewed_knowledge relationship wikilink [[raw/2026-05-29-noesis-readme-excerpt]] does not resolve to a Noesis note",
                 issues,
             )
 
