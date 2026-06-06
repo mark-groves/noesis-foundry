@@ -629,6 +629,8 @@ def extract_evidence(
         raise ValueError(f"source note not found: {source_ref}")
     if source.type != "source":
         raise ValueError(f"source reference is not a source note: {source_ref}")
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
 
     created_at = today or date.today().isoformat()
     note_title = title or f"Evidence from {source.title}"
@@ -692,6 +694,8 @@ def propose_claim(
         if note.type != "evidence":
             raise ValueError(f"evidence reference is not an evidence note: {ref}")
         evidence_notes.append(note)
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
 
     created_at = today or date.today().isoformat()
     note_title = title or f"Claim from {evidence_notes[0].title}"

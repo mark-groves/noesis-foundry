@@ -161,6 +161,74 @@ class NoesisCliTests(unittest.TestCase):
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
 
+    def test_draft_commands_reject_blank_titles_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "draft-source.md"
+            raw_source.write_text("Draft title validation source.\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Draft Source",
+                "--slug",
+                "draft-source",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+
+            evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-draft-source",
+                "--title",
+                "   ",
+            )
+            self.assertNotEqual(evidence.returncode, 0)
+            self.assertIn("title must not be blank", evidence.stderr)
+            self.assertEqual(list((vault_path / "evidence").glob("evidence-*.md")), [])
+
+            valid_evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-draft-source",
+                "--title",
+                "Draft Evidence",
+                "--slug",
+                "draft-evidence",
+            )
+            self.assertEqual(valid_evidence.returncode, 0, valid_evidence.stderr)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-draft-evidence",
+                "--title",
+                "   ",
+            )
+            self.assertNotEqual(claim.returncode, 0)
+            self.assertIn("title must not be blank", claim.stderr)
+            self.assertEqual(list((vault_path / "claims").glob("claim-*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)
