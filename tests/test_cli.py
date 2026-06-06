@@ -556,6 +556,69 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("synthesis must preserve source, evidence, and claim lineage", promote.stderr)
             self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
 
+    def test_review_approve_rejects_stale_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "reviewed-knowledge-noesis-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "This knowledge was superseded and needs an explicit restore flow.",
+                "--slug",
+                "reviewed-knowledge-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+
+            review = run_noesis(
+                "review",
+                "approve",
+                "reviewed-knowledge-noesis-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--slug",
+                "stale-knowledge-approval",
+            )
+            self.assertNotEqual(review.returncode, 0)
+            self.assertIn("stale, superseded, or archived memory cannot be approved", review.stderr)
+            self.assertEqual(list((vault_path / "review").glob("review-stale-knowledge-approval*.md")), [])
+
+    def test_promote_rejects_stale_claim_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "claim-useful-memory-requires-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "The claim is no longer valid support for promotion.",
+                "--slug",
+                "lifecycle-claim-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+
+            promote = run_noesis(
+                "knowledge",
+                "promote",
+                "--vault",
+                str(vault_path),
+                "--synthesis",
+                "synthesis-local-first-lifecycle-interface",
+                "--title",
+                "Should Not Promote",
+            )
+            self.assertNotEqual(promote.returncode, 0)
+            self.assertIn("synthesis claims must be approved before knowledge promotion", promote.stderr)
+            self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
+
     def test_mark_memory_stale_excludes_existing_context_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"

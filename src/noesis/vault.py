@@ -918,6 +918,8 @@ def write_review_decision(
     target_metadata = dict(target.metadata)
     target_metadata["updated"] = reviewed_at
     if decision == "approved":
+        if is_excluded(target):
+            raise ValueError("stale, superseded, or archived memory cannot be approved")
         target_metadata["status"] = "reviewed"
         target_metadata["review_state"] = "approved"
         if next_review:
@@ -996,7 +998,12 @@ def promote_synthesis(
         raise ValueError("synthesis must preserve source, evidence, and claim lineage before promotion")
     for claim_link in claim_links:
         claim_note = vault.find_note(claim_link)
-        if claim_note is None or claim_note.review_state not in {"approved", "reviewed"}:
+        if (
+            claim_note is None
+            or claim_note.review_state not in {"approved", "reviewed"}
+            or claim_note.status != "reviewed"
+            or is_excluded(claim_note)
+        ):
             raise ValueError("synthesis claims must be approved before knowledge promotion")
 
     reviewed_at = today or date.today().isoformat()
