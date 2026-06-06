@@ -46,6 +46,91 @@ class NoesisCliTests(unittest.TestCase):
             evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
             self.assertIn('  - "[[<source-note>]]"', evidence_template)
 
+    def test_authoring_loop_creates_reviewable_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "research-note.md"
+            raw_source.write_text(
+                "# Research Note\n\nMemory needs lifecycle-aware review.\n",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Research Note",
+                "--slug",
+                "research-note",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            self.assertIn("created source-research-note", ingest.stdout)
+            self.assertTrue((vault_path / "raw" / "research-note.md").exists())
+            self.assertTrue((vault_path / "sources" / "source-research-note.md").exists())
+            validate_after_ingest = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_after_ingest.returncode, 0, validate_after_ingest.stderr)
+
+            evidence = run_noesis(
+                "extract",
+                "evidence",
+                "--vault",
+                str(vault_path),
+                "--source",
+                "source-research-note",
+                "--title",
+                "Lifecycle Review Evidence",
+                "--evidence",
+                "The source says useful memory needs lifecycle-aware review.",
+                "--slug",
+                "lifecycle-review",
+            )
+            self.assertEqual(evidence.returncode, 0, evidence.stderr)
+            self.assertIn("created evidence-lifecycle-review", evidence.stdout)
+            self.assertTrue((vault_path / "evidence" / "evidence-lifecycle-review.md").exists())
+            validate_after_evidence = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_after_evidence.returncode, 0, validate_after_evidence.stderr)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-lifecycle-review",
+                "--title",
+                "Memory Needs Review",
+                "--claim",
+                "Useful memory requires lifecycle-aware review.",
+                "--slug",
+                "memory-needs-review",
+            )
+            self.assertEqual(claim.returncode, 0, claim.stderr)
+            self.assertIn("created claim-memory-needs-review", claim.stdout)
+            self.assertTrue((vault_path / "claims" / "claim-memory-needs-review.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            queue = run_noesis("review", "queue", "--vault", str(vault_path))
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            self.assertIn("evidence-lifecycle-review", queue.stdout)
+            self.assertIn("claim-memory-needs-review", queue.stdout)
+            self.assertIn("ready-for-review", queue.stdout)
+
+            trace = run_noesis("trace", "claim-memory-needs-review", "--vault", str(vault_path))
+            self.assertEqual(trace.returncode, 0, trace.stderr)
+            self.assertIn("source-research-note", trace.stdout)
+            self.assertIn("evidence-lifecycle-review", trace.stdout)
+            self.assertIn("claim-memory-needs-review", trace.stdout)
+
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)

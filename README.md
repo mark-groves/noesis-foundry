@@ -181,6 +181,9 @@ install the package in editable mode to use the `noesis` console script.
 ```bash
 PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
 PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
+PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
+PYTHONPATH=src python -m noesis extract evidence --vault examples/noesis-vault --source source-id --title "Evidence Title"
+PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --evidence evidence-id --title "Claim Title"
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-lifecycle --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --purpose "prepare the next agent"
@@ -192,6 +195,9 @@ Supported commands:
 | --- | --- |
 | `noesis vault validate <path>` | Validate required frontmatter, lifecycle stage/status values, wikilinks, Base YAML, Canvas JSON, and active-context exclusions. |
 | `noesis vault init <path>` | Create the folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
+| `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/` and create a linked source note in `sources/`. |
+| `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
+| `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
 | `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention. |
 | `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
 | `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. |

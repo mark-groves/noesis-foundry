@@ -7,6 +7,11 @@ lifecycle:
 source -> evidence -> claim -> synthesis -> reviewed knowledge -> operational context
 ```
 
+It also includes a second minimal `source -> evidence -> claim` chain created
+by the write-side CLI commands. That fixture starts at
+`sources/source-cli-authoring-loop.md` and proves the CLI can author new
+source-backed draft memory outside the original hand-written demo.
+
 Open this folder as a vault in Obsidian, then start at
 `_dashboards/noesis-review-dashboard.md`.
 

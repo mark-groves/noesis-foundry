@@ -1,6 +1,6 @@
 filters:
   and:
-    - file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
+    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
     - review_state != "none"
     - review_state != "reviewed"
     - review_state != "approved"

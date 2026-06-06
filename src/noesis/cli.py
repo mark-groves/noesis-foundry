@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from .vault import Vault, build_context, init_vault
+from .vault import Vault, build_context, extract_evidence, ingest_source, init_vault, propose_claim
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +28,39 @@ def build_parser() -> argparse.ArgumentParser:
     validate = vault_commands.add_parser("validate", help="Validate a Noesis vault")
     validate.add_argument("path", type=Path)
     validate.set_defaults(func=cmd_vault_validate)
+
+    ingest = subcommands.add_parser("ingest", help="Ingest source material")
+    ingest_commands = ingest.add_subparsers(dest="ingest_command", required=True)
+    source = ingest_commands.add_parser("source", help="Copy a raw source and create a source note")
+    source.add_argument("--vault", type=Path, required=True)
+    source.add_argument("--file", type=Path, required=True)
+    source.add_argument("--title", required=True)
+    source.add_argument("--slug", default=None)
+    source.add_argument("--source-type", default="file")
+    source.add_argument("--original-url", default="unknown")
+    source.add_argument("--author", default="unknown")
+    source.add_argument("--source-date", default="unknown")
+    source.set_defaults(func=cmd_ingest_source)
+
+    extract = subcommands.add_parser("extract", help="Extract lifecycle drafts")
+    extract_commands = extract.add_subparsers(dest="extract_command", required=True)
+    evidence = extract_commands.add_parser("evidence", help="Create a reviewable evidence draft")
+    evidence.add_argument("--vault", type=Path, required=True)
+    evidence.add_argument("--source", required=True)
+    evidence.add_argument("--title", default=None)
+    evidence.add_argument("--evidence", default=None)
+    evidence.add_argument("--slug", default=None)
+    evidence.set_defaults(func=cmd_extract_evidence)
+
+    propose = subcommands.add_parser("propose", help="Propose lifecycle drafts")
+    propose_commands = propose.add_subparsers(dest="propose_command", required=True)
+    claim = propose_commands.add_parser("claim", help="Create a review-ready claim draft")
+    claim.add_argument("--vault", type=Path, required=True)
+    claim.add_argument("--evidence", action="append", required=True)
+    claim.add_argument("--title", default=None)
+    claim.add_argument("--claim", default=None)
+    claim.add_argument("--slug", default=None)
+    claim.set_defaults(func=cmd_propose_claim)
 
     review = subcommands.add_parser("review", help="Review workflows")
     review_commands = review.add_subparsers(dest="review_command", required=True)
@@ -69,6 +102,57 @@ def cmd_vault_validate(args: argparse.Namespace) -> int:
         return 1
     print(f"validation ok: {vault.root}")
     print(f"notes: {len(vault.notes)}")
+    return 0
+
+
+def cmd_ingest_source(args: argparse.Namespace) -> int:
+    try:
+        created = ingest_source(
+            args.vault,
+            args.file,
+            args.title,
+            slug=args.slug,
+            source_type=args.source_type,
+            original_url=args.original_url,
+            author=args.author,
+            source_date=args.source_date,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print(f"created {created.note_id}\t{created.path}")
+    return 0
+
+
+def cmd_extract_evidence(args: argparse.Namespace) -> int:
+    try:
+        created = extract_evidence(
+            args.vault,
+            args.source,
+            title=args.title,
+            evidence=args.evidence,
+            slug=args.slug,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print(f"created {created.note_id}\t{created.path}")
+    return 0
+
+
+def cmd_propose_claim(args: argparse.Namespace) -> int:
+    try:
+        created = propose_claim(
+            args.vault,
+            args.evidence,
+            title=args.title,
+            claim=args.claim,
+            slug=args.slug,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print(f"created {created.note_id}\t{created.path}")
     return 0
 
 
