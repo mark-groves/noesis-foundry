@@ -953,13 +953,13 @@ def write_review_decision(
 
 {next_review or "Not scheduled."}
 """
-    write_notes_and_validate(
-        root,
-        [
-            (target.path, target_metadata, target.body),
-            (note_path, review_metadata, body),
-        ],
-    )
+    writes = [
+        (target.path, target_metadata, target.body),
+        (note_path, review_metadata, body),
+    ]
+    if decision == "changes-requested":
+        append_dependent_memory_review_changes(vault, target, reviewed_at, writes)
+    write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
 
 
@@ -1177,6 +1177,8 @@ Keep this note so future context builders can explain why {target_link} no longe
             vault,
             remaining_knowledge,
             sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
+            scope=context_scope(context_note),
+            purpose=context_purpose(context_note),
         )
         writes.append((context_note.path, context_metadata, context_body))
 
@@ -1230,6 +1232,10 @@ def write_context_note(
     }
     if next_review:
         metadata["next_review"] = next_review
+    if scope:
+        metadata["scope"] = scope
+    if purpose:
+        metadata["purpose"] = purpose
 
     body = build_context(vault, scope=scope, purpose=purpose)
     body = body.rstrip() + "\n\n## Traceability\n\n"
@@ -1636,16 +1642,87 @@ def render_context(knowledge: list[Note], scope: str | None = None, purpose: str
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_context_body(vault: Vault, knowledge: list[Note], excluded_links: list[str]) -> str:
+def build_context_body(
+    vault: Vault,
+    knowledge: list[Note],
+    excluded_links: list[str],
+    *,
+    scope: str | None = None,
+    purpose: str | None = None,
+) -> str:
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
-    body = render_context(knowledge).rstrip() + "\n\n## Traceability\n\n"
+    body = render_context(knowledge, scope=scope, purpose=purpose).rstrip() + "\n\n## Traceability\n\n"
     body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
     if synthesis_links:
         body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
     if excluded_links:
         body += f"- Excluded memory: {format_inline_links(excluded_links)}\n"
     return body
+
+
+def append_dependent_memory_review_changes(
+    vault: Vault,
+    target: Note,
+    reviewed_at: str,
+    writes: list[tuple[Path, dict[str, Any], str]],
+) -> None:
+    dependent_knowledge = [
+        note
+        for note in vault.current_reviewed_knowledge()
+        if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
+    ]
+    for note in dependent_knowledge:
+        note_metadata = dict(note.metadata)
+        note_metadata["status"] = "needs-review"
+        note_metadata["review_state"] = "changes-requested"
+        note_metadata["updated"] = reviewed_at
+        writes.append((note.path, note_metadata, note.body))
+
+    for context_note in vault.notes:
+        if context_note.type != "operational-context":
+            continue
+        if not context_references_memory(vault, context_note, target.noesis_id):
+            continue
+        context_metadata = dict(context_note.metadata)
+        remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
+        context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
+        context_metadata["syntheses"] = sorted(
+            collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
+        )
+        remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
+        context_metadata["updated"] = reviewed_at
+        context_body = build_context_body(
+            vault,
+            remaining_knowledge,
+            sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
+            scope=context_scope(context_note),
+            purpose=context_purpose(context_note),
+        )
+        writes.append((context_note.path, context_metadata, context_body))
+
+
+def context_scope(context_note: Note) -> str | None:
+    scope = context_note.metadata.get("scope")
+    if isinstance(scope, str) and not is_blank(scope):
+        return scope
+    return context_body_field(context_note, "Scope")
+
+
+def context_purpose(context_note: Note) -> str | None:
+    purpose = context_note.metadata.get("purpose")
+    if isinstance(purpose, str) and not is_blank(purpose):
+        return purpose
+    return context_body_field(context_note, "Purpose")
+
+
+def context_body_field(context_note: Note, label: str) -> str | None:
+    pattern = re.compile(rf"^{re.escape(label)}:\s*(.+?)\s*$", re.MULTILINE)
+    match = pattern.search(context_note.body)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
 
 
 def context_references_memory(vault: Vault, context_note: Note, target_noesis_id: str) -> bool:

@@ -372,6 +372,42 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("evidence-review-evidence", queue.stdout)
             self.assertIn("changes-requested", queue.stdout)
 
+    def test_review_request_changes_invalidates_dependent_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            review = run_noesis(
+                "review",
+                "request-changes",
+                "claim-useful-memory-requires-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--changes-requested",
+                "Revise this claim before it can support reviewed knowledge.",
+                "--slug",
+                "claim-lifecycle-changes",
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+
+            context = run_noesis("context", "build", "--vault", str(vault_path))
+            self.assertEqual(context.returncode, 0, context.stderr)
+            self.assertIn("No current reviewed knowledge found.", context.stdout)
+            self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
+
+            knowledge_note = (
+                vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("status: needs-review", knowledge_note)
+            self.assertIn("review_state: changes-requested", knowledge_note)
+
+            context_note = (
+                vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("reviewed_knowledge: []", context_note)
+            self.assertIn("No current reviewed knowledge found.", context_note)
+            self.assertNotIn("Build CLI commands against the vault schema", context_note)
+
     def test_promote_rejects_unapproved_synthesis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -734,6 +770,45 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("[[stale-lifecycle-synthesis-old]]", context_note)
             self.assertIn("No current reviewed knowledge found.", context_note)
             self.assertNotIn("Build CLI commands against the vault schema", context_note)
+
+    def test_mark_stale_preserves_context_scope_and_purpose(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            context = run_noesis(
+                "context",
+                "write",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "lifecycle",
+                "--purpose",
+                "prepare scoped agent",
+                "--slug",
+                "scoped-lifecycle",
+            )
+            self.assertEqual(context.returncode, 0, context.stderr)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "synthesis-local-first-lifecycle-interface",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "The synthesis has been replaced.",
+                "--slug",
+                "scoped-lifecycle-synthesis-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+
+            context_note = (vault_path / "context" / "context-scoped-lifecycle.md").read_text(encoding="utf-8")
+            self.assertIn("scope: lifecycle", context_note)
+            self.assertIn("purpose: prepare scoped agent", context_note)
+            self.assertIn("Scope: lifecycle", context_note)
+            self.assertIn("Purpose: prepare scoped agent", context_note)
+            self.assertIn("No current reviewed knowledge found.", context_note)
 
     def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
