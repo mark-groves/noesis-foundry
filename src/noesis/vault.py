@@ -369,6 +369,10 @@ def validate_notes(vault: Vault) -> list[Issue]:
         if missing:
             issues.append(Issue(note.path, f"missing required properties: {', '.join(missing)}"))
 
+        for key in sorted(REQUIRED_PROPERTIES - {"tags"}):
+            if key in metadata and is_blank(metadata[key]):
+                issues.append(Issue(note.path, f"{key} must not be blank"))
+
         issues.extend(validate_enum(note, "type", TYPES))
         issues.extend(validate_enum(note, "lifecycle_stage", LIFECYCLE_STAGES))
         issues.extend(validate_enum(note, "status", STATUSES))
@@ -442,9 +446,13 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
 def validate_wikilinks(vault: Vault) -> list[Issue]:
     issues: list[Issue] = []
     for note in vault.notes:
-        for target in sorted(extract_wikilinks(note.body) | set(iter_metadata_wikilinks(note.metadata))):
+        metadata_targets = set(iter_metadata_wikilinks(note.metadata))
+        for target in sorted(extract_wikilinks(note.body) | metadata_targets):
             if vault.by_link.get(normalize_wikilink_target(target)) is None:
                 issues.append(Issue(note.path, f"unresolved wikilink [[{target}]]"))
+        for target in sorted(metadata_targets):
+            if vault.find_note(target) is None:
+                issues.append(Issue(note.path, f"relationship wikilink [[{target}]] does not resolve to a Noesis note"))
     return issues
 
 
@@ -908,6 +916,10 @@ def is_date_like(value: Any) -> bool:
             return True
         return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))
     return False
+
+
+def is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def as_list(value: Any) -> list[Any]:

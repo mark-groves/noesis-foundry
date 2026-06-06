@@ -123,6 +123,43 @@ class NoesisCliTests(unittest.TestCase):
             issues = [issue.message for issue in vault.validate()]
             self.assertIn("unresolved wikilink [[missing-note]]", issues)
 
+    def test_validator_rejects_relationship_wikilink_to_non_note_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "claims" / "claim-useful-memory-requires-lifecycle.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    '  - "[[source-noesis-readme]]"',
+                    '  - "[[raw/2026-05-29-noesis-readme-excerpt]]"',
+                ),
+                encoding="utf-8",
+            )
+
+            vault = Vault.load(vault_path)
+            issues = [issue.message for issue in vault.validate()]
+            self.assertIn(
+                "relationship wikilink [[raw/2026-05-29-noesis-readme-excerpt]] does not resolve to a Noesis note",
+                issues,
+            )
+
+    def test_validator_rejects_blank_noesis_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "claims" / "claim-useful-memory-requires-lifecycle.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    "noesis_id: claim-useful-memory-requires-lifecycle",
+                    'noesis_id: ""',
+                ),
+                encoding="utf-8",
+            )
+
+            vault = Vault.load(vault_path)
+            issues = [issue.message for issue in vault.validate()]
+            self.assertIn("noesis_id must not be blank", issues)
+
     def test_validator_allows_same_note_heading_wikilink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
