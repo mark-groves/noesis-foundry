@@ -997,9 +997,13 @@ def promote_synthesis(
     source_links = sorted(collect_relationship_links(vault, [synthesis_note], "sources", expected_type="source"))
     if not claim_links or not evidence_links or not source_links:
         raise ValueError("synthesis must preserve source, evidence, and claim lineage before promotion")
-    for lineage_link in [*source_links, *evidence_links]:
-        lineage_note = vault.find_note(lineage_link)
-        if lineage_note is None or is_excluded(lineage_note):
+    for source_link in source_links:
+        source_note = vault.find_note(source_link)
+        if source_note is None or is_excluded(source_note):
+            raise ValueError("synthesis source and evidence lineage must be current before knowledge promotion")
+    for evidence_link in evidence_links:
+        evidence_note = vault.find_note(evidence_link)
+        if evidence_note is None or is_excluded(evidence_note):
             raise ValueError("synthesis source and evidence lineage must be current before knowledge promotion")
     for claim_link in claim_links:
         claim_note = vault.find_note(claim_link)
@@ -1010,6 +1014,14 @@ def promote_synthesis(
             or is_excluded(claim_note)
         ):
             raise ValueError("synthesis claims must be approved before knowledge promotion")
+    for evidence_link in evidence_links:
+        evidence_note = vault.find_note(evidence_link)
+        if (
+            evidence_note is None
+            or evidence_note.status != "reviewed"
+            or evidence_note.review_state not in {"approved", "reviewed"}
+        ):
+            raise ValueError("synthesis evidence must be approved before knowledge promotion")
 
     reviewed_at = today or date.today().isoformat()
     note_title = title or f"Reviewed Knowledge - {synthesis_note.title}"

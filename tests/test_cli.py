@@ -717,6 +717,116 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             )
             self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
 
+    def test_promote_rejects_unreviewed_evidence_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "draft-evidence-source.md"
+            raw_source.write_text("Promotion source with draft evidence.\n", encoding="utf-8")
+
+            self.assertEqual(run_noesis("vault", "init", str(vault_path)).returncode, 0)
+            self.assertEqual(
+                run_noesis(
+                    "ingest",
+                    "source",
+                    "--vault",
+                    str(vault_path),
+                    "--file",
+                    str(raw_source),
+                    "--title",
+                    "Draft Evidence Source",
+                    "--slug",
+                    "draft-evidence-source",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "extract",
+                    "evidence",
+                    "--vault",
+                    str(vault_path),
+                    "--source",
+                    "source-draft-evidence-source",
+                    "--title",
+                    "Draft Evidence",
+                    "--evidence",
+                    "This evidence has not been reviewed.",
+                    "--slug",
+                    "draft-evidence",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "propose",
+                    "claim",
+                    "--vault",
+                    str(vault_path),
+                    "--evidence",
+                    "evidence-draft-evidence",
+                    "--title",
+                    "Claim On Draft Evidence",
+                    "--claim",
+                    "This claim should not be promotable yet.",
+                    "--slug",
+                    "draft-evidence-claim",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "review",
+                    "approve",
+                    "claim-draft-evidence-claim",
+                    "--vault",
+                    str(vault_path),
+                    "--slug",
+                    "draft-evidence-claim",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "synthesize",
+                    "--vault",
+                    str(vault_path),
+                    "--claim",
+                    "claim-draft-evidence-claim",
+                    "--title",
+                    "Synthesis On Draft Evidence",
+                    "--slug",
+                    "draft-evidence-synthesis",
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                run_noesis(
+                    "review",
+                    "approve",
+                    "synthesis-draft-evidence-synthesis",
+                    "--vault",
+                    str(vault_path),
+                    "--slug",
+                    "draft-evidence-synthesis",
+                ).returncode,
+                0,
+            )
+
+            promote = run_noesis(
+                "knowledge",
+                "promote",
+                "--vault",
+                str(vault_path),
+                "--synthesis",
+                "synthesis-draft-evidence-synthesis",
+                "--title",
+                "Should Not Promote",
+            )
+            self.assertNotEqual(promote.returncode, 0)
+            self.assertIn("synthesis evidence must be approved before knowledge promotion", promote.stderr)
+            self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
+
     def test_mark_memory_stale_excludes_existing_context_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
