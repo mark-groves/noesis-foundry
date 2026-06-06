@@ -619,6 +619,41 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("synthesis claims must be approved before knowledge promotion", promote.stderr)
             self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
 
+    def test_promote_rejects_stale_evidence_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "evidence-memory-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "The evidence is no longer current support for promotion.",
+                "--slug",
+                "lifecycle-evidence-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+
+            promote = run_noesis(
+                "knowledge",
+                "promote",
+                "--vault",
+                str(vault_path),
+                "--synthesis",
+                "synthesis-local-first-lifecycle-interface",
+                "--title",
+                "Should Not Promote",
+            )
+            self.assertNotEqual(promote.returncode, 0)
+            self.assertIn(
+                "synthesis source and evidence lineage must be current before knowledge promotion",
+                promote.stderr,
+            )
+            self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
+
     def test_mark_memory_stale_excludes_existing_context_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
