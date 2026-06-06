@@ -74,6 +74,12 @@ def cmd_vault_validate(args: argparse.Namespace) -> int:
 
 def cmd_review_queue(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
+        return 1
     queue = vault.review_queue()
     if not queue:
         print("review queue empty")

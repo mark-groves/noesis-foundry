@@ -403,6 +403,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     for ref in as_list(note.metadata.get("reviewed_knowledge")):
         target = vault.find_note(str(ref))
         if target is None:
+            issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} does not resolve to a Noesis note"))
             continue
         if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
@@ -411,7 +412,9 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
 
     for ref in as_list(note.metadata.get("excluded_memory")):
         target = vault.find_note(str(ref))
-        if target is not None and not is_excluded(target):
+        if target is None:
+            issues.append(Issue(note.path, f"excluded_memory reference {ref!r} does not resolve to a Noesis note"))
+        elif not is_excluded(target):
             issues.append(Issue(note.path, f"excluded_memory reference {ref!r} is not stale, superseded, or archived"))
 
     return issues

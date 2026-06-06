@@ -49,6 +49,12 @@ class NoesisCliTests(unittest.TestCase):
         self.assertIn("stale-custom-plugin-first", result.stdout)
         self.assertIn("ready-for-review", result.stdout)
 
+    def test_review_queue_rejects_invalid_vault(self) -> None:
+        result = run_noesis("review", "queue", "--vault", "/tmp/noesis-missing-vault")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("vault path does not exist", result.stderr)
+        self.assertNotIn("review queue empty", result.stdout)
+
     def test_trace_finds_full_lifecycle(self) -> None:
         result = run_noesis(
             "trace",
@@ -93,6 +99,27 @@ class NoesisCliTests(unittest.TestCase):
             vault = Vault.load(vault_path)
             issues = [issue.message for issue in vault.validate()]
             self.assertIn("unresolved wikilink [[missing-note]]", issues)
+
+    def test_validator_rejects_non_note_reviewed_knowledge_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
+            note_text = note_path.read_text(encoding="utf-8")
+            note_path.write_text(
+                note_text.replace(
+                    '  - "[[reviewed-knowledge-noesis-lifecycle]]"',
+                    '  - "[[raw/2026-05-29-noesis-readme-excerpt]]"',
+                ),
+                encoding="utf-8",
+            )
+
+            vault = Vault.load(vault_path)
+            issues = [issue.message for issue in vault.validate()]
+            self.assertIn(
+                "reviewed_knowledge reference '[[raw/2026-05-29-noesis-readme-excerpt]]' does not resolve to a Noesis note",
+                issues,
+            )
 
 
 if __name__ == "__main__":
