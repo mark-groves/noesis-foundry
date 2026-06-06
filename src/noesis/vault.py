@@ -566,6 +566,8 @@ def ingest_source(
         raise ValueError(f"source file does not exist: {source_file}")
     if is_blank(title):
         raise ValueError("title must not be blank")
+    if not is_date_like(source_date):
+        raise ValueError("source_date must be YYYY-MM-DD or unknown")
 
     created_at = today or date.today().isoformat()
     note_slug = slugify(slug or title)

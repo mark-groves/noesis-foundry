@@ -131,6 +131,36 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("evidence-lifecycle-review", trace.stdout)
             self.assertIn("claim-memory-needs-review", trace.stdout)
 
+    def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            raw_source = tmp_path / "dated-note.md"
+            raw_source.write_text("Invalid date should not dirty the vault.\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--file",
+                str(raw_source),
+                "--title",
+                "Dated Note",
+                "--source-date",
+                "2026/06/06",
+            )
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn("source_date must be YYYY-MM-DD or unknown", ingest.stderr)
+            self.assertFalse((vault_path / "raw" / "dated-note.md").exists())
+            self.assertEqual(list((vault_path / "sources").glob("source-dated-note*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)
