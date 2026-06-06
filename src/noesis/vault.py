@@ -608,8 +608,7 @@ Raw source: [{raw_name}](../raw/{raw_name})
 
 ## Open Questions
 """
-    write_note(note_path, metadata, body)
-    ensure_valid_vault(root)
+    write_note_and_validate(root, note_path, metadata, body, cleanup_paths=[raw_target])
     return CreatedNote(note_id=note_id, path=note_path)
 
 
@@ -668,8 +667,7 @@ Generated as a reviewable evidence draft.
 
 ## Candidate Claims
 """
-    write_note(note_path, metadata, body)
-    ensure_valid_vault(root)
+    write_note_and_validate(root, note_path, metadata, body)
     return CreatedNote(note_id=note_id, path=note_path)
 
 
@@ -734,8 +732,7 @@ def propose_claim(
 
 ## Review Notes
 """
-    write_note(note_path, metadata, body)
-    ensure_valid_vault(root)
+    write_note_and_validate(root, note_path, metadata, body)
     return CreatedNote(note_id=note_id, path=note_path)
 
 
@@ -1156,6 +1153,24 @@ def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frontmatter = yaml.safe_dump(metadata, sort_keys=False, allow_unicode=False)
     path.write_text(f"---\n{frontmatter}---\n\n{body.rstrip()}\n", encoding="utf-8")
+
+
+def write_note_and_validate(
+    root: Path,
+    path: Path,
+    metadata: dict[str, Any],
+    body: str,
+    *,
+    cleanup_paths: list[Path] | None = None,
+) -> None:
+    write_note(path, metadata, body)
+    try:
+        ensure_valid_vault(root)
+    except ValueError:
+        path.unlink(missing_ok=True)
+        for cleanup_path in cleanup_paths or []:
+            cleanup_path.unlink(missing_ok=True)
+        raise
 
 
 def slugify(value: str) -> str:
