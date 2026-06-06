@@ -1119,6 +1119,21 @@ def mark_memory_stale(
         add_relationship_link(target_metadata, "superseded_by", superseded_by_links[0])
 
     writes: list[tuple[Path, dict[str, Any], str]] = [(target.path, target_metadata, target.body)]
+    dependent_knowledge = [
+        note
+        for note in vault.current_reviewed_knowledge()
+        if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
+    ]
+    dependent_links = [wikilink(note.noesis_id) for note in dependent_knowledge]
+    for note in dependent_knowledge:
+        note_metadata = dict(note.metadata)
+        note_metadata["status"] = status
+        note_metadata["review_state"] = "reviewed"
+        note_metadata["updated"] = marked_at
+        if superseded_by_links:
+            add_relationship_link(note_metadata, "superseded_by", superseded_by_links[0])
+        writes.append((note.path, note_metadata, note.body))
+
     stale_body = f"""# {note_title}
 
 ## Stale Or Superseded Memory
@@ -1150,6 +1165,8 @@ Keep this note so future context builders can explain why {target_link} no longe
         )
         remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
         add_relationship_link(context_metadata, "excluded_memory", target_link)
+        for dependent_link in dependent_links:
+            add_relationship_link(context_metadata, "excluded_memory", dependent_link)
         add_relationship_link(context_metadata, "excluded_memory", stale_link)
         context_metadata["updated"] = marked_at
         context_body = build_context_body(

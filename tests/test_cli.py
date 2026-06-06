@@ -679,12 +679,23 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
 
+            context = run_noesis("context", "build", "--vault", str(vault_path))
+            self.assertEqual(context.returncode, 0, context.stderr)
+            self.assertIn("No current reviewed knowledge found.", context.stdout)
+            self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
+
+            knowledge_note = (
+                vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("status: stale", knowledge_note)
+
             context_note = (
                 vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
             ).read_text(encoding="utf-8")
             self.assertIn("reviewed_knowledge: []", context_note)
             self.assertIn("syntheses: []", context_note)
             self.assertIn("[[synthesis-local-first-lifecycle-interface]]", context_note)
+            self.assertIn("[[reviewed-knowledge-noesis-lifecycle]]", context_note)
             self.assertIn("[[stale-lifecycle-synthesis-old]]", context_note)
             self.assertIn("No current reviewed knowledge found.", context_note)
             self.assertNotIn("Build CLI commands against the vault schema", context_note)
