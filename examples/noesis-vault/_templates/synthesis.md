@@ -9,11 +9,11 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 sources:
-  - "<source-note>"
+  - "[[<source-note>]]"
 evidence:
-  - "<evidence-note>"
+  - "[[<evidence-note>]]"
 claims:
-  - "<claim-note>"
+  - "[[<claim-note>]]"
 tags:
   - noesis
   - synthesis

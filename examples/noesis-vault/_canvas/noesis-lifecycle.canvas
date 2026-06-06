@@ -1,96 +1,17 @@
 {
-  "nodes": [
-    {
-      "id": "source",
-      "type": "file",
-      "file": "sources/source-noesis-readme.md",
-      "x": 0,
-      "y": 0,
-      "width": 300,
-      "height": 120
-    },
-    {
-      "id": "evidence",
-      "type": "file",
-      "file": "evidence/evidence-memory-lifecycle.md",
-      "x": 360,
-      "y": 0,
-      "width": 300,
-      "height": 120
-    },
-    {
-      "id": "claim",
-      "type": "file",
-      "file": "claims/claim-useful-memory-requires-lifecycle.md",
-      "x": 720,
-      "y": 0,
-      "width": 300,
-      "height": 120
-    },
-    {
-      "id": "synthesis",
-      "type": "file",
-      "file": "syntheses/synthesis-local-first-lifecycle-interface.md",
-      "x": 1080,
-      "y": 0,
-      "width": 300,
-      "height": 120
-    },
-    {
-      "id": "knowledge",
-      "type": "file",
-      "file": "knowledge/reviewed-knowledge-noesis-lifecycle.md",
-      "x": 1440,
-      "y": 0,
-      "width": 300,
-      "height": 120
-    },
-    {
-      "id": "context",
-      "type": "file",
-      "file": "context/operational-context-first-cli-mcp-workflow.md",
-      "x": 1800,
-      "y": 0,
-      "width": 300,
-      "height": 120
-    }
-  ],
-  "edges": [
-    {
-      "id": "source-evidence",
-      "fromNode": "source",
-      "fromSide": "right",
-      "toNode": "evidence",
-      "toSide": "left"
-    },
-    {
-      "id": "evidence-claim",
-      "fromNode": "evidence",
-      "fromSide": "right",
-      "toNode": "claim",
-      "toSide": "left"
-    },
-    {
-      "id": "claim-synthesis",
-      "fromNode": "claim",
-      "fromSide": "right",
-      "toNode": "synthesis",
-      "toSide": "left"
-    },
-    {
-      "id": "synthesis-knowledge",
-      "fromNode": "synthesis",
-      "fromSide": "right",
-      "toNode": "knowledge",
-      "toSide": "left"
-    },
-    {
-      "id": "knowledge-context",
-      "fromNode": "knowledge",
-      "fromSide": "right",
-      "toNode": "context",
-      "toSide": "left"
-    }
-  ]
+	"nodes":[
+		{"id":"source","type":"file","file":"sources/source-noesis-readme.md","x":0,"y":0,"width":300,"height":120},
+		{"id":"evidence","type":"file","file":"evidence/evidence-memory-lifecycle.md","x":360,"y":0,"width":300,"height":120},
+		{"id":"claim","type":"file","file":"claims/claim-useful-memory-requires-lifecycle.md","x":720,"y":0,"width":300,"height":120},
+		{"id":"synthesis","type":"file","file":"syntheses/synthesis-local-first-lifecycle-interface.md","x":1080,"y":0,"width":300,"height":120},
+		{"id":"knowledge","type":"file","file":"knowledge/reviewed-knowledge-noesis-lifecycle.md","x":1440,"y":0,"width":300,"height":120},
+		{"id":"context","type":"file","file":"context/operational-context-first-cli-mcp-workflow.md","x":1800,"y":0,"width":300,"height":120}
+	],
+	"edges":[
+		{"id":"source-evidence","fromNode":"source","fromSide":"right","toNode":"evidence","toSide":"left"},
+		{"id":"evidence-claim","fromNode":"evidence","fromSide":"right","toNode":"claim","toSide":"left"},
+		{"id":"claim-synthesis","fromNode":"claim","fromSide":"right","toNode":"synthesis","toSide":"left"},
+		{"id":"synthesis-knowledge","fromNode":"synthesis","fromSide":"right","toNode":"knowledge","toSide":"left"},
+		{"id":"knowledge-context","fromNode":"knowledge","fromSide":"right","toNode":"context","toSide":"left"}
+	]
 }
-

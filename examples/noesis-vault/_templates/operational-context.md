@@ -9,9 +9,9 @@ confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
 syntheses:
-  - "<synthesis-note>"
+  - "[[<synthesis-note>]]"
 reviewed_knowledge:
-  - "<reviewed-knowledge-note>"
+  - "[[<reviewed-knowledge-note>]]"
 excluded_memory: []
 next_review: "{{date}}"
 tags:
