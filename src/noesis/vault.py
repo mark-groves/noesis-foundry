@@ -1133,14 +1133,24 @@ Keep this note so future context builders can explain why {target_link} no longe
     for context_note in vault.notes:
         if context_note.type != "operational-context":
             continue
-        if not relationship_contains(vault, context_note.metadata, "reviewed_knowledge", target.noesis_id):
+        if not context_references_memory(vault, context_note, target.noesis_id):
             continue
         context_metadata = dict(context_note.metadata)
-        remove_relationship_link(vault, context_metadata, "reviewed_knowledge", target.noesis_id)
+        remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
+        context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
+        context_metadata["syntheses"] = sorted(
+            collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
+        )
+        remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
         add_relationship_link(context_metadata, "excluded_memory", target_link)
         add_relationship_link(context_metadata, "excluded_memory", stale_link)
         context_metadata["updated"] = marked_at
-        writes.append((context_note.path, context_metadata, context_note.body))
+        context_body = build_context_body(
+            vault,
+            remaining_knowledge,
+            sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
+        )
+        writes.append((context_note.path, context_metadata, context_body))
 
     write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
@@ -1557,6 +1567,10 @@ aliases: []
 
 def build_context(vault: Vault, scope: str | None = None, purpose: str | None = None) -> str:
     knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
+    return render_context(knowledge, scope=scope, purpose=purpose)
+
+
+def render_context(knowledge: list[Note], scope: str | None = None, purpose: str | None = None) -> str:
     title = "Noesis Operational Context"
     lines = [f"# {title}", ""]
     if scope:
@@ -1592,6 +1606,73 @@ def build_context(vault: Vault, scope: str | None = None, purpose: str | None = 
         )
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_context_body(vault: Vault, knowledge: list[Note], excluded_links: list[str]) -> str:
+    reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
+    synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
+    body = render_context(knowledge).rstrip() + "\n\n## Traceability\n\n"
+    body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
+    if synthesis_links:
+        body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
+    if excluded_links:
+        body += f"- Excluded memory: {format_inline_links(excluded_links)}\n"
+    return body
+
+
+def context_references_memory(vault: Vault, context_note: Note, target_noesis_id: str) -> bool:
+    if relationship_contains(vault, context_note.metadata, "reviewed_knowledge", target_noesis_id):
+        return True
+    if relationship_contains(vault, context_note.metadata, "syntheses", target_noesis_id):
+        return True
+    return any(
+        note_references_memory(vault, knowledge_note, target_noesis_id)
+        for knowledge_note in context_reviewed_knowledge(vault, context_note.metadata)
+    )
+
+
+def remaining_context_knowledge(
+    vault: Vault,
+    context_metadata: dict[str, Any],
+    stale_noesis_id: str,
+) -> list[Note]:
+    return [
+        note
+        for note in context_reviewed_knowledge(vault, context_metadata)
+        if not note_references_memory(vault, note, stale_noesis_id)
+    ]
+
+
+def context_reviewed_knowledge(vault: Vault, context_metadata: dict[str, Any]) -> list[Note]:
+    notes: list[Note] = []
+    seen: set[str] = set()
+    for item in as_list(context_metadata.get("reviewed_knowledge")):
+        if not isinstance(item, str):
+            continue
+        for target in extract_wikilinks(item):
+            note = vault.find_note(target)
+            if note is None or note.noesis_id in seen:
+                continue
+            if (
+                note.type == "reviewed-knowledge"
+                and note.lifecycle_stage == "knowledge"
+                and note.review_state in {"reviewed", "approved"}
+                and note.status in CURRENT_KNOWLEDGE_STATUSES
+                and not is_excluded(note)
+            ):
+                notes.append(note)
+                seen.add(note.noesis_id)
+    return notes
+
+
+def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> bool:
+    if note.noesis_id == target_noesis_id:
+        return True
+    for target in iter_metadata_wikilinks(note.metadata):
+        target_note = vault.find_note(target)
+        if target_note is not None and target_note.noesis_id == target_noesis_id:
+            return True
+    return False
 
 
 def filter_knowledge_by_scope(knowledge: list[Note], scope: str | None) -> list[Note]:

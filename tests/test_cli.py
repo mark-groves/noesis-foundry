@@ -592,6 +592,39 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("[[stale-custom-plugin-first]]", context_note)
             self.assertIn('[[reviewed-knowledge-noesis-lifecycle]]', context_note)
             self.assertIn('[[stale-noesis-lifecycle-old]]', context_note)
+            self.assertNotIn("Noesis should represent memory as a lifecycle", context_note)
+
+    def test_mark_synthesis_stale_excludes_existing_context_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "synthesis-local-first-lifecycle-interface",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "The synthesis has been replaced by a narrower implementation contract.",
+                "--slug",
+                "lifecycle-synthesis-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+            self.assertIn("created stale-lifecycle-synthesis-old", stale.stdout)
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            context_note = (
+                vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("reviewed_knowledge: []", context_note)
+            self.assertIn("syntheses: []", context_note)
+            self.assertIn("[[synthesis-local-first-lifecycle-interface]]", context_note)
+            self.assertIn("[[stale-lifecycle-synthesis-old]]", context_note)
+            self.assertIn("No current reviewed knowledge found.", context_note)
+            self.assertNotIn("Build CLI commands against the vault schema", context_note)
 
     def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
