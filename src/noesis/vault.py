@@ -738,6 +738,530 @@ def propose_claim(
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+def synthesize_claims(
+    vault_path: Path | str,
+    claim_refs: list[str],
+    *,
+    title: str | None = None,
+    synthesis: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if not claim_refs:
+        raise ValueError("at least one claim reference is required")
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    claims: list[Note] = []
+    for ref in claim_refs:
+        note = vault.find_note(ref)
+        if note is None:
+            raise ValueError(f"claim note not found: {ref}")
+        if note.type != "claim":
+            raise ValueError(f"claim reference is not a claim note: {ref}")
+        if note.review_state == "changes-requested" or is_excluded(note):
+            raise ValueError(f"claim is not ready for synthesis: {ref}")
+        claims.append(note)
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+
+    source_links = sorted(collect_relationship_links(vault, claims, "sources", expected_type="source"))
+    evidence_links = sorted(collect_relationship_links(vault, claims, "evidence", expected_type="evidence"))
+    if not source_links:
+        raise ValueError("synthesis claims must link to at least one source note")
+    if not evidence_links:
+        raise ValueError("synthesis claims must link to at least one evidence note")
+
+    created_at = today or date.today().isoformat()
+    note_title = title or f"Synthesis from {claims[0].title}"
+    note_slug = slugify(slug or note_title)
+    note_id = unique_noesis_id(root, f"synthesis-{note_slug}")
+    note_path = unique_note_path(root / "syntheses", f"{note_id}.md")
+    claim_links = [wikilink(note.noesis_id) for note in claims]
+    metadata = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "synthesis",
+        "lifecycle_stage": "synthesis",
+        "status": "draft",
+        "review_state": "ready-for-review",
+        "confidence": "medium",
+        "created": created_at,
+        "updated": created_at,
+        "sources": source_links,
+        "evidence": evidence_links,
+        "claims": claim_links,
+        "tags": ["noesis", "synthesis"],
+        "aliases": [],
+    }
+    synthesis_text = synthesis or "Review this draft and replace this placeholder with cross-claim synthesis."
+    body = f"""# {note_title}
+
+## Synthesis
+
+{synthesis_text}
+
+## Supporting Claims
+
+{format_link_list(claim_links)}
+
+## Tensions Or Gaps
+
+## Implications
+"""
+    write_note_and_validate(root, note_path, metadata, body)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def approve_review(
+    vault_path: Path | str,
+    note_ref: str,
+    *,
+    reviewer: str = "unknown",
+    basis: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    next_review: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    return write_review_decision(
+        vault_path,
+        note_ref,
+        decision="approved",
+        reviewer=reviewer,
+        basis=basis,
+        title=title,
+        slug=slug,
+        next_review=next_review,
+        today=today,
+    )
+
+
+def request_review_changes(
+    vault_path: Path | str,
+    note_ref: str,
+    *,
+    reviewer: str = "unknown",
+    basis: str | None = None,
+    changes_requested: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    return write_review_decision(
+        vault_path,
+        note_ref,
+        decision="changes-requested",
+        reviewer=reviewer,
+        basis=basis,
+        changes_requested=changes_requested,
+        title=title,
+        slug=slug,
+        today=today,
+    )
+
+
+def write_review_decision(
+    vault_path: Path | str,
+    note_ref: str,
+    *,
+    decision: str,
+    reviewer: str,
+    basis: str | None = None,
+    changes_requested: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    next_review: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if decision not in {"approved", "changes-requested"}:
+        raise ValueError("decision must be approved or changes-requested")
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+    if next_review is not None and not is_date_like(next_review):
+        raise ValueError("next_review must be YYYY-MM-DD or unknown")
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    target = vault.find_note(note_ref)
+    if target is None:
+        raise ValueError(f"review target not found: {note_ref}")
+    if target.type in {"dashboard", "review", "source", "archived-history"}:
+        raise ValueError(f"note type cannot be reviewed by this command: {target.type}")
+
+    reviewed_at = today or date.today().isoformat()
+    note_title = title or f"Review - {target.title}"
+    note_slug = slugify(slug or f"{target.noesis_id}-{decision}")
+    note_id = unique_noesis_id(root, f"review-{note_slug}")
+    note_path = unique_note_path(root / "review", f"{note_id}.md")
+    review_link = wikilink(note_id)
+    target_link = wikilink(target.noesis_id)
+
+    review_metadata: dict[str, Any] = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "review",
+        "lifecycle_stage": "review",
+        "status": "complete",
+        "review_state": "approved",
+        "confidence": "medium",
+        "created": reviewed_at,
+        "updated": reviewed_at,
+        "reviewer": reviewer,
+        "reviewed_at": reviewed_at,
+        "reviewed_notes": [target_link],
+        "decision": decision,
+        "tags": ["noesis", "review"],
+        "aliases": [],
+    }
+    if next_review:
+        review_metadata["next_review"] = next_review
+
+    target_metadata = dict(target.metadata)
+    target_metadata["updated"] = reviewed_at
+    if decision == "approved":
+        if is_excluded(target) and target.type != "stale-memory":
+            raise ValueError("stale, superseded, or archived memory cannot be approved")
+        if target.type != "stale-memory":
+            target_metadata["status"] = "reviewed"
+        target_metadata["review_state"] = "approved"
+        if next_review:
+            target_metadata["next_review"] = next_review
+    else:
+        target_metadata["status"] = "needs-review"
+        target_metadata["review_state"] = "changes-requested"
+    add_relationship_link(target_metadata, "reviewed_by", review_link)
+
+    basis_text = basis or "Reviewed against linked source, evidence, and lifecycle context."
+    requested_changes_text = changes_requested or ("None." if decision == "approved" else "Changes requested before approval.")
+    body = f"""# {note_title}
+
+## Decision
+
+{decision}
+
+## Reviewed Note
+
+- {target_link}
+
+## Basis
+
+{basis_text}
+
+## Changes Requested
+
+{requested_changes_text}
+
+## Next Review
+
+{next_review or "Not scheduled."}
+"""
+    writes = [
+        (target.path, target_metadata, target.body),
+        (note_path, review_metadata, body),
+    ]
+    if decision == "changes-requested":
+        append_dependent_memory_review_changes(vault, target, reviewed_at, writes)
+    write_notes_and_validate(root, writes)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def promote_synthesis(
+    vault_path: Path | str,
+    synthesis_ref: str,
+    *,
+    title: str | None = None,
+    knowledge: str | None = None,
+    slug: str | None = None,
+    next_review: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+    if next_review is not None and not is_date_like(next_review):
+        raise ValueError("next_review must be YYYY-MM-DD or unknown")
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    synthesis_note = vault.find_note(synthesis_ref)
+    if synthesis_note is None:
+        raise ValueError(f"synthesis note not found: {synthesis_ref}")
+    if synthesis_note.type != "synthesis":
+        raise ValueError(f"synthesis reference is not a synthesis note: {synthesis_ref}")
+    if synthesis_note.status != "reviewed" or synthesis_note.review_state != "approved":
+        raise ValueError("synthesis must be approved before promotion")
+
+    review_links = sorted(collect_relationship_links(vault, [synthesis_note], "reviewed_by", expected_type="review"))
+    if not review_links:
+        raise ValueError("synthesis must have a review audit note before promotion")
+
+    claim_links = sorted(collect_relationship_links(vault, [synthesis_note], "claims", expected_type="claim"))
+    evidence_links = sorted(collect_relationship_links(vault, [synthesis_note], "evidence", expected_type="evidence"))
+    source_links = sorted(collect_relationship_links(vault, [synthesis_note], "sources", expected_type="source"))
+    if not claim_links or not evidence_links or not source_links:
+        raise ValueError("synthesis must preserve source, evidence, and claim lineage before promotion")
+    for source_link in source_links:
+        source_note = vault.find_note(source_link)
+        if source_note is None or is_excluded(source_note):
+            raise ValueError("synthesis source and evidence lineage must be current before knowledge promotion")
+    for evidence_link in evidence_links:
+        evidence_note = vault.find_note(evidence_link)
+        if evidence_note is None or is_excluded(evidence_note):
+            raise ValueError("synthesis source and evidence lineage must be current before knowledge promotion")
+    for claim_link in claim_links:
+        claim_note = vault.find_note(claim_link)
+        if (
+            claim_note is None
+            or claim_note.review_state not in {"approved", "reviewed"}
+            or claim_note.status != "reviewed"
+            or is_excluded(claim_note)
+        ):
+            raise ValueError("synthesis claims must be approved before knowledge promotion")
+    for evidence_link in evidence_links:
+        evidence_note = vault.find_note(evidence_link)
+        if (
+            evidence_note is None
+            or evidence_note.status != "reviewed"
+            or evidence_note.review_state not in {"approved", "reviewed"}
+        ):
+            raise ValueError("synthesis evidence must be approved before knowledge promotion")
+
+    reviewed_at = today or date.today().isoformat()
+    note_title = title or f"Reviewed Knowledge - {synthesis_note.title}"
+    note_slug = slugify(slug or note_title)
+    note_id = unique_noesis_id(root, f"reviewed-knowledge-{note_slug}")
+    note_path = unique_note_path(root / "knowledge", f"{note_id}.md")
+    metadata: dict[str, Any] = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "reviewed-knowledge",
+        "lifecycle_stage": "knowledge",
+        "status": "active",
+        "review_state": "reviewed",
+        "confidence": synthesis_note.metadata.get("confidence", "medium"),
+        "created": reviewed_at,
+        "updated": reviewed_at,
+        "sources": source_links,
+        "evidence": evidence_links,
+        "claims": claim_links,
+        "syntheses": [wikilink(synthesis_note.noesis_id)],
+        "reviewed_by": review_links,
+        "reviewed_at": reviewed_at,
+        "tags": ["noesis", "knowledge"],
+        "aliases": [],
+    }
+    if next_review:
+        metadata["next_review"] = next_review
+
+    knowledge_text = knowledge or "Use the approved synthesis as current reviewed knowledge."
+    body = f"""# {note_title}
+
+## Current Knowledge
+
+{knowledge_text}
+
+## Why It Is Trusted
+
+- Synthesis: {wikilink(synthesis_note.noesis_id)}
+- Review: {format_inline_links(review_links)}
+
+## Use In Future Work
+
+Use this only while it remains current reviewed knowledge.
+
+## Staleness Rule
+
+Recheck this note when its source, evidence, claims, or synthesis are superseded.
+"""
+    write_note_and_validate(root, note_path, metadata, body)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def mark_memory_stale(
+    vault_path: Path | str,
+    note_ref: str,
+    *,
+    reason: str,
+    superseded_by: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if is_blank(reason):
+        raise ValueError("reason must not be blank")
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    target = vault.find_note(note_ref)
+    if target is None:
+        raise ValueError(f"memory note not found: {note_ref}")
+    if target.type in {"dashboard", "review", "stale-memory", "archived-history"}:
+        raise ValueError(f"note type cannot be marked stale by this command: {target.type}")
+
+    superseding_note = None
+    if superseded_by:
+        superseding_note = vault.find_note(superseded_by)
+        if superseding_note is None:
+            raise ValueError(f"superseding note not found: {superseded_by}")
+
+    marked_at = today or date.today().isoformat()
+    status = "superseded" if superseding_note else "stale"
+    note_title = title or f"Stale Memory - {target.title}"
+    note_slug = slugify(slug or target.noesis_id)
+    note_id = unique_noesis_id(root, f"stale-{note_slug}")
+    note_path = unique_note_path(root / "stale", f"{note_id}.md")
+    target_link = wikilink(target.noesis_id)
+    superseded_by_links = [wikilink(superseding_note.noesis_id)] if superseding_note else []
+
+    stale_metadata: dict[str, Any] = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "stale-memory",
+        "lifecycle_stage": "stale",
+        "status": status,
+        "review_state": "reviewed",
+        "confidence": target.metadata.get("confidence", "medium"),
+        "created": marked_at,
+        "updated": marked_at,
+        "supersedes": [target_link],
+        "tags": ["noesis", "stale"],
+        "aliases": [],
+    }
+    if superseded_by_links:
+        stale_metadata["superseded_by"] = superseded_by_links
+
+    target_metadata = dict(target.metadata)
+    target_metadata["status"] = status
+    target_metadata["review_state"] = "reviewed"
+    target_metadata["updated"] = marked_at
+    if superseded_by_links:
+        add_relationship_link(target_metadata, "superseded_by", superseded_by_links[0])
+
+    writes: list[tuple[Path, dict[str, Any], str]] = [(target.path, target_metadata, target.body)]
+    dependent_knowledge = [
+        note
+        for note in vault.current_reviewed_knowledge()
+        if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
+    ]
+    dependent_links = [wikilink(note.noesis_id) for note in dependent_knowledge]
+    for note in dependent_knowledge:
+        note_metadata = dict(note.metadata)
+        note_metadata["status"] = status
+        note_metadata["review_state"] = "reviewed"
+        note_metadata["updated"] = marked_at
+        if superseded_by_links:
+            add_relationship_link(note_metadata, "superseded_by", superseded_by_links[0])
+        writes.append((note.path, note_metadata, note.body))
+
+    stale_body = f"""# {note_title}
+
+## Stale Or Superseded Memory
+
+- Supersedes: {target_link}
+- Superseded by: {format_inline_links(superseded_by_links) if superseded_by_links else "None"}
+
+## Reason
+
+{reason}
+
+## Traceability
+
+Keep this note so future context builders can explain why {target_link} no longer guides active work.
+"""
+    writes.append((note_path, stale_metadata, stale_body))
+
+    stale_link = wikilink(note_id)
+    for context_note in vault.notes:
+        if context_note.type != "operational-context":
+            continue
+        if not context_references_memory(vault, context_note, target.noesis_id):
+            continue
+        context_metadata = dict(context_note.metadata)
+        remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
+        context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
+        context_metadata["syntheses"] = sorted(
+            collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
+        )
+        remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
+        add_relationship_link(context_metadata, "excluded_memory", target_link)
+        for dependent_link in dependent_links:
+            add_relationship_link(context_metadata, "excluded_memory", dependent_link)
+        add_relationship_link(context_metadata, "excluded_memory", stale_link)
+        context_metadata["updated"] = marked_at
+        context_body = build_context_body(
+            vault,
+            remaining_knowledge,
+            sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
+            scope=context_scope(context_note),
+            purpose=context_purpose(context_note),
+        )
+        writes.append((context_note.path, context_metadata, context_body))
+
+    write_notes_and_validate(root, writes)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
+def write_context_note(
+    vault_path: Path | str,
+    *,
+    scope: str | None = None,
+    purpose: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    next_review: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+    if next_review is not None and not is_date_like(next_review):
+        raise ValueError("next_review must be YYYY-MM-DD or unknown")
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
+    if not knowledge:
+        raise ValueError("no current reviewed knowledge found for context")
+
+    created_at = today or date.today().isoformat()
+    note_title = title or "Noesis Operational Context"
+    note_slug = slugify(slug or note_title)
+    note_id = unique_noesis_id(root, f"context-{note_slug}")
+    note_path = unique_note_path(root / "context", f"{note_id}.md")
+    reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
+    synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
+    excluded_links = sorted(wikilink(note.noesis_id) for note in vault.notes if is_excluded(note))
+    metadata: dict[str, Any] = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "operational-context",
+        "lifecycle_stage": "context",
+        "status": "active",
+        "review_state": "reviewed",
+        "confidence": "medium",
+        "created": created_at,
+        "updated": created_at,
+        "syntheses": synthesis_links,
+        "reviewed_knowledge": reviewed_knowledge_links,
+        "excluded_memory": excluded_links,
+        "tags": ["noesis", "context"],
+        "aliases": [],
+    }
+    if next_review:
+        metadata["next_review"] = next_review
+    if scope:
+        metadata["scope"] = scope
+    if purpose:
+        metadata["purpose"] = purpose
+
+    body = build_context(vault, scope=scope, purpose=purpose)
+    body = body.rstrip() + "\n\n## Traceability\n\n"
+    body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
+    if synthesis_links:
+        body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
+    if excluded_links:
+        body += f"- Excluded memory: {format_inline_links(excluded_links)}\n"
+
+    write_note_and_validate(root, note_path, metadata, body)
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
 def ensure_valid_vault(vault_path: Path | str) -> Path:
     root = Path(vault_path).expanduser().resolve()
     vault = Vault.load(root)
@@ -1090,6 +1614,10 @@ aliases: []
 
 def build_context(vault: Vault, scope: str | None = None, purpose: str | None = None) -> str:
     knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
+    return render_context(knowledge, scope=scope, purpose=purpose)
+
+
+def render_context(knowledge: list[Note], scope: str | None = None, purpose: str | None = None) -> str:
     title = "Noesis Operational Context"
     lines = [f"# {title}", ""]
     if scope:
@@ -1125,6 +1653,144 @@ def build_context(vault: Vault, scope: str | None = None, purpose: str | None = 
         )
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_context_body(
+    vault: Vault,
+    knowledge: list[Note],
+    excluded_links: list[str],
+    *,
+    scope: str | None = None,
+    purpose: str | None = None,
+) -> str:
+    reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
+    synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
+    body = render_context(knowledge, scope=scope, purpose=purpose).rstrip() + "\n\n## Traceability\n\n"
+    body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
+    if synthesis_links:
+        body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
+    if excluded_links:
+        body += f"- Excluded memory: {format_inline_links(excluded_links)}\n"
+    return body
+
+
+def append_dependent_memory_review_changes(
+    vault: Vault,
+    target: Note,
+    reviewed_at: str,
+    writes: list[tuple[Path, dict[str, Any], str]],
+) -> None:
+    dependent_knowledge = [
+        note
+        for note in vault.current_reviewed_knowledge()
+        if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
+    ]
+    for note in dependent_knowledge:
+        note_metadata = dict(note.metadata)
+        note_metadata["status"] = "needs-review"
+        note_metadata["review_state"] = "changes-requested"
+        note_metadata["updated"] = reviewed_at
+        writes.append((note.path, note_metadata, note.body))
+
+    for context_note in vault.notes:
+        if context_note.type != "operational-context":
+            continue
+        if not context_references_memory(vault, context_note, target.noesis_id):
+            continue
+        context_metadata = dict(context_note.metadata)
+        remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
+        context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
+        context_metadata["syntheses"] = sorted(
+            collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
+        )
+        remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
+        context_metadata["updated"] = reviewed_at
+        context_body = build_context_body(
+            vault,
+            remaining_knowledge,
+            sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
+            scope=context_scope(context_note),
+            purpose=context_purpose(context_note),
+        )
+        writes.append((context_note.path, context_metadata, context_body))
+
+
+def context_scope(context_note: Note) -> str | None:
+    scope = context_note.metadata.get("scope")
+    if isinstance(scope, str) and not is_blank(scope):
+        return scope
+    return context_body_field(context_note, "Scope")
+
+
+def context_purpose(context_note: Note) -> str | None:
+    purpose = context_note.metadata.get("purpose")
+    if isinstance(purpose, str) and not is_blank(purpose):
+        return purpose
+    return context_body_field(context_note, "Purpose")
+
+
+def context_body_field(context_note: Note, label: str) -> str | None:
+    pattern = re.compile(rf"^{re.escape(label)}:\s*(.+?)\s*$", re.MULTILINE)
+    match = pattern.search(context_note.body)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def context_references_memory(vault: Vault, context_note: Note, target_noesis_id: str) -> bool:
+    if relationship_contains(vault, context_note.metadata, "reviewed_knowledge", target_noesis_id):
+        return True
+    if relationship_contains(vault, context_note.metadata, "syntheses", target_noesis_id):
+        return True
+    return any(
+        note_references_memory(vault, knowledge_note, target_noesis_id)
+        for knowledge_note in context_reviewed_knowledge(vault, context_note.metadata)
+    )
+
+
+def remaining_context_knowledge(
+    vault: Vault,
+    context_metadata: dict[str, Any],
+    stale_noesis_id: str,
+) -> list[Note]:
+    return [
+        note
+        for note in context_reviewed_knowledge(vault, context_metadata)
+        if not note_references_memory(vault, note, stale_noesis_id)
+    ]
+
+
+def context_reviewed_knowledge(vault: Vault, context_metadata: dict[str, Any]) -> list[Note]:
+    notes: list[Note] = []
+    seen: set[str] = set()
+    for item in as_list(context_metadata.get("reviewed_knowledge")):
+        if not isinstance(item, str):
+            continue
+        for target in extract_wikilinks(item):
+            note = vault.find_note(target)
+            if note is None or note.noesis_id in seen:
+                continue
+            if (
+                note.type == "reviewed-knowledge"
+                and note.lifecycle_stage == "knowledge"
+                and note.review_state in {"reviewed", "approved"}
+                and note.status in CURRENT_KNOWLEDGE_STATUSES
+                and not is_excluded(note)
+            ):
+                notes.append(note)
+                seen.add(note.noesis_id)
+    return notes
+
+
+def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> bool:
+    if note.noesis_id == target_noesis_id:
+        return True
+    for target in iter_metadata_wikilinks(note.metadata):
+        target_note = vault.find_note(target)
+        if target_note is not None and target_note.noesis_id == target_noesis_id:
+            return True
+    return False
 
 
 def filter_knowledge_by_scope(knowledge: list[Note], scope: str | None) -> list[Note]:
@@ -1175,6 +1841,24 @@ def write_note_and_validate(
         raise
 
 
+def write_notes_and_validate(root: Path, writes: list[tuple[Path, dict[str, Any], str]]) -> None:
+    original_text: dict[Path, str | None] = {
+        path: path.read_text(encoding="utf-8") if path.exists() else None
+        for path, _, _ in writes
+    }
+    try:
+        for path, metadata, body in writes:
+            write_note(path, metadata, body)
+        ensure_valid_vault(root)
+    except ValueError:
+        for path, text in original_text.items():
+            if text is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(text, encoding="utf-8")
+        raise
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "untitled"
@@ -1190,6 +1874,10 @@ def format_link_list(links: list[str]) -> str:
     return "\n".join(f"- {link}" for link in links)
 
 
+def format_inline_links(links: list[str]) -> str:
+    return ", ".join(links) if links else "None"
+
+
 def collect_source_links(vault: Vault, notes: list[Note]) -> set[str]:
     links: set[str] = set()
     for note in notes:
@@ -1198,6 +1886,73 @@ def collect_source_links(vault: Vault, notes: list[Note]) -> set[str]:
             if target_note is not None and target_note.type == "source":
                 links.add(wikilink(target_note.noesis_id))
     return links
+
+
+def collect_relationship_links(
+    vault: Vault,
+    notes: list[Note],
+    key: str,
+    *,
+    expected_type: str | None = None,
+) -> set[str]:
+    links: set[str] = set()
+    for note in notes:
+        for item in as_list(note.metadata.get(key)):
+            if not isinstance(item, str):
+                continue
+            for target in extract_wikilinks(item):
+                target_note = vault.find_note(target)
+                if target_note is None:
+                    continue
+                if expected_type is not None and target_note.type != expected_type:
+                    continue
+                links.add(wikilink(target_note.noesis_id))
+    return links
+
+
+def add_relationship_link(metadata: dict[str, Any], key: str, link: str) -> None:
+    values = [str(value) for value in as_list(metadata.get(key))]
+    if link not in values:
+        values.append(link)
+    metadata[key] = values
+
+
+def remove_relationship_link(
+    vault: Vault,
+    metadata: dict[str, Any],
+    key: str,
+    target_noesis_id: str,
+) -> None:
+    kept: list[Any] = []
+    for item in as_list(metadata.get(key)):
+        if not isinstance(item, str):
+            kept.append(item)
+            continue
+        remove_item = False
+        for target in extract_wikilinks(item):
+            target_note = vault.find_note(target)
+            if target_note is not None and target_note.noesis_id == target_noesis_id:
+                remove_item = True
+                break
+        if not remove_item:
+            kept.append(item)
+    metadata[key] = kept
+
+
+def relationship_contains(
+    vault: Vault,
+    metadata: dict[str, Any],
+    key: str,
+    target_noesis_id: str,
+) -> bool:
+    for item in as_list(metadata.get(key)):
+        if not isinstance(item, str):
+            continue
+        for target in extract_wikilinks(item):
+            target_note = vault.find_note(target)
+            if target_note is not None and target_note.noesis_id == target_noesis_id:
+                return True
+    return False
 
 
 def unique_filename(folder: Path, filename: str) -> str:

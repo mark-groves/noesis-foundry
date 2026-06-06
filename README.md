@@ -184,9 +184,15 @@ PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
 PYTHONPATH=src python -m noesis extract evidence --vault examples/noesis-vault --source source-id --title "Evidence Title"
 PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --evidence evidence-id --title "Claim Title"
+PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer"
+PYTHONPATH=src python -m noesis synthesize --vault examples/noesis-vault --claim claim-id --title "Synthesis Title"
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis review approve synthesis-id --vault examples/noesis-vault --reviewer "Reviewer"
+PYTHONPATH=src python -m noesis knowledge promote --vault examples/noesis-vault --synthesis synthesis-id --title "Reviewed Knowledge Title"
+PYTHONPATH=src python -m noesis memory stale reviewed-knowledge-id --vault examples/noesis-vault --reason "Superseded by newer evidence"
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-lifecycle --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --purpose "prepare the next agent"
+PYTHONPATH=src python -m noesis context write --vault examples/noesis-vault --purpose "prepare the next agent"
 ```
 
 Supported commands:
@@ -198,9 +204,15 @@ Supported commands:
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/` and create a linked source note in `sources/`. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
 | `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
+| `noesis synthesize --vault <path> --claim <claim-id>` | Create a review-ready synthesis draft grounded in claim, evidence, and source links. |
 | `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention. |
+| `noesis review approve <note-id> --vault <path>` | Write an audit review note and mark the reviewed note approved. |
+| `noesis review request-changes <note-id> --vault <path>` | Write an audit review note and keep the reviewed note in the review queue. |
+| `noesis knowledge promote --vault <path> --synthesis <synthesis-id>` | Promote an approved synthesis with a review audit into active reviewed knowledge. |
+| `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded, create a stale-memory trace note, and update affected context exclusions. |
 | `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
 | `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. |
+| `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge. |
 
 The CLI is the shared implementation foundation for future adapters. A future
 MCP server should expose curated tools that call the same parser, validator,
