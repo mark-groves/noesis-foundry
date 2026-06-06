@@ -120,6 +120,19 @@ class NoesisCliTests(unittest.TestCase):
             issues = [issue.message for issue in vault.validate()]
             self.assertIn("unresolved wikilink [[missing-note]]", issues)
 
+    def test_validator_allows_same_note_heading_wikilink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "review" / "review-local-first-lifecycle.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8") + "\n[[#Review Notes]]\n",
+                encoding="utf-8",
+            )
+
+            issues = Vault.load(vault_path).validate()
+            self.assertEqual(issues, [])
+
     def test_validator_rejects_non_note_reviewed_knowledge_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"

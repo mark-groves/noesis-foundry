@@ -918,8 +918,9 @@ def as_list(value: Any) -> list[Any]:
 
 def extract_wikilinks(text: str) -> set[str]:
     return {
-        normalize_wikilink_target(match.group(1) or match.group(2))
+        target
         for match in WIKILINK_RE.finditer(text)
+        if (target := normalize_wikilink_target(match.group(1) or match.group(2)))
     }
 
 
