@@ -176,6 +176,7 @@ class Vault:
     notes: list[Note] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
     by_id: dict[str, Note] = field(default_factory=dict)
+    by_note_link: dict[str, Note] = field(default_factory=dict)
     by_link: dict[str, Path] = field(default_factory=dict)
 
     @classmethod
@@ -208,6 +209,7 @@ class Vault:
                 vault.issues.append(note)
                 continue
             vault.notes.append(note)
+            vault.register_note_aliases(note)
             if note.noesis_id:
                 if note.noesis_id in vault.by_id:
                     vault.issues.append(Issue(path, f"duplicate noesis_id {note.noesis_id!r}"))
@@ -242,10 +244,25 @@ class Vault:
 
     def find_note(self, ref: str) -> Note | None:
         key = normalize_wikilink_target(ref)
+        note = self.by_note_link.get(key) or self.by_id.get(key)
+        if note is not None:
+            return note
         path = self.by_link.get(key)
         if path:
             return next((note for note in self.notes if note.path == path), None)
-        return self.by_id.get(key)
+        return None
+
+    def register_note_aliases(self, note: Note) -> None:
+        rel = note.rel_path
+        for alias in (
+            note.path.name,
+            note.path.stem,
+            rel.as_posix(),
+            rel.with_suffix("").as_posix(),
+            note.noesis_id,
+        ):
+            if alias:
+                self.by_note_link[alias] = note
 
     def lineage(self, ref: str) -> list[Note]:
         start = self.find_note(ref)

@@ -74,6 +74,26 @@ class NoesisCliTests(unittest.TestCase):
         ):
             self.assertIn(expected, result.stdout)
 
+    def test_trace_prefers_note_stems_over_non_note_file_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            source = vault_path / "claims" / "claim-useful-memory-requires-lifecycle.md"
+            claim = vault_path / "claims" / "foo.md"
+            claim.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    "claim-useful-memory-requires-lifecycle",
+                    "claim-foo",
+                ),
+                encoding="utf-8",
+            )
+            (vault_path / "raw" / "foo.md").write_text("raw collision\n", encoding="utf-8")
+
+            result = run_noesis("trace", "foo", "--vault", str(vault_path))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("claim-foo", result.stdout)
+            self.assertIn("claims/foo.md", result.stdout)
+
     def test_context_build_uses_reviewed_knowledge_and_excludes_stale(self) -> None:
         result = run_noesis(
             "context",
