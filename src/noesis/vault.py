@@ -254,15 +254,18 @@ class Vault:
 
     def register_note_aliases(self, note: Note) -> None:
         rel = note.rel_path
-        for alias in (
+        aliases = [
             note.path.name,
             note.path.stem,
             rel.as_posix(),
             rel.with_suffix("").as_posix(),
             note.noesis_id,
-        ):
+        ]
+        aliases.extend(str(alias) for alias in as_list(note.metadata.get("aliases")))
+        for alias in aliases:
             if alias:
                 self.by_note_link[alias] = note
+                self.by_link[alias] = note.path
 
     def lineage(self, ref: str) -> list[Note]:
         start = self.find_note(ref)

@@ -97,6 +97,35 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("claim-foo", result.stdout)
             self.assertIn("claims/foo.md", result.stdout)
 
+    def test_trace_and_validation_resolve_frontmatter_alias_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            source = vault_path / "sources" / "source-noesis-readme.md"
+            source.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    "aliases: []",
+                    "aliases:\n  - README source",
+                ),
+                encoding="utf-8",
+            )
+            claim = vault_path / "claims" / "claim-useful-memory-requires-lifecycle.md"
+            claim.write_text(
+                claim.read_text(encoding="utf-8").replace(
+                    '  - "[[source-noesis-readme]]"',
+                    '  - "[[README source]]"',
+                ),
+                encoding="utf-8",
+            )
+
+            vault = Vault.load(vault_path)
+            self.assertEqual(vault.validate(), [])
+
+            result = run_noesis("trace", "README source", "--vault", str(vault_path))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("source-noesis-readme", result.stdout)
+            self.assertIn("claim-useful-memory-requires-lifecycle", result.stdout)
+
     def test_context_build_uses_reviewed_knowledge_and_excludes_stale(self) -> None:
         result = run_noesis(
             "context",
