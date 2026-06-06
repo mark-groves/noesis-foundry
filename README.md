@@ -169,6 +169,40 @@ A small example vault lives in [`examples/noesis-vault`](./examples/noesis-vault
 and demonstrates the complete Noesis lifecycle from source to operational
 context.
 
+### First CLI Slice
+
+The first working CLI is intentionally file-backed. It treats an Obsidian vault
+as ordinary Markdown files with flat YAML frontmatter, plus Obsidian Base and
+Canvas files as human-facing views.
+
+Run commands from the repository with `PYTHONPATH=src python -m noesis ...`, or
+install the package in editable mode to use the `noesis` console script.
+
+```bash
+PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
+PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
+PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-lifecycle --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --purpose "prepare the next agent"
+```
+
+Supported commands:
+
+| Command | Purpose |
+| --- | --- |
+| `noesis vault validate <path>` | Validate required frontmatter, lifecycle stage/status values, wikilinks, Base YAML, Canvas JSON, and active-context exclusions. |
+| `noesis vault init <path>` | Create the folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
+| `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention. |
+| `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
+| `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. |
+
+The CLI is the shared implementation foundation for future adapters. A future
+MCP server should expose curated tools that call the same parser, validator,
+lineage tracer, review queue, and context builder. Portable Agent Skills should
+prefer these commands when available and fall back to direct Markdown edits
+only as an adapter behavior. Neither MCP nor skills should introduce a second
+schema or make Obsidian plugin APIs the source of truth.
+
 ---
 
 ## Long-Term Aim
