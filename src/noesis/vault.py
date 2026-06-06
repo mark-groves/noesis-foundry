@@ -701,6 +701,8 @@ def propose_claim(
     note_id = unique_noesis_id(root, f"claim-{note_slug}")
     note_path = unique_note_path(root / "claims", f"{note_id}.md")
     source_links = sorted(collect_source_links(vault, evidence_notes))
+    if not source_links:
+        raise ValueError("claim evidence must link to at least one source note")
     evidence_links = [wikilink(note.noesis_id) for note in evidence_notes]
     metadata = {
         "title": note_title,

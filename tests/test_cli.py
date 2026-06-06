@@ -273,6 +273,57 @@ class NoesisCliTests(unittest.TestCase):
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
 
+    def test_propose_claim_rejects_evidence_without_source_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            (vault_path / "evidence" / "evidence-ungrounded.md").write_text(
+                """---
+title: Ungrounded Evidence
+noesis_id: evidence-ungrounded
+type: evidence
+lifecycle_stage: evidence
+status: extracted
+review_state: ready-for-review
+confidence: medium
+created: 2026-06-06
+updated: 2026-06-06
+tags:
+  - noesis
+  - evidence
+aliases: []
+---
+
+# Ungrounded Evidence
+
+## Evidence
+
+This legacy evidence note does not link to a source.
+""",
+                encoding="utf-8",
+            )
+            validate_before_claim = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_before_claim.returncode, 0, validate_before_claim.stderr)
+
+            claim = run_noesis(
+                "propose",
+                "claim",
+                "--vault",
+                str(vault_path),
+                "--evidence",
+                "evidence-ungrounded",
+                "--title",
+                "Ungrounded Claim",
+            )
+            self.assertNotEqual(claim.returncode, 0)
+            self.assertIn("claim evidence must link to at least one source note", claim.stderr)
+            self.assertEqual(list((vault_path / "claims").glob("claim-*.md")), [])
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)
