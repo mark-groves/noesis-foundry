@@ -5,11 +5,13 @@ description = "File-backed Noesis CLI for Obsidian-compatible vaults."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "mcp>=1.27,<2",
   "PyYAML>=6.0",
 ]
 
 [project.scripts]
 noesis = "noesis.cli:main"
+noesis-mcp = "noesis.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

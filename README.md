@@ -221,6 +221,76 @@ prefer these commands when available and fall back to direct Markdown edits
 only as an adapter behavior. Neither MCP nor skills should introduce a second
 schema or make Obsidian plugin APIs the source of truth.
 
+### MCP MVP
+
+The MCP server is the next adapter layer over the same vault contract. It does
+not require Obsidian to be running, and it does not introduce a database,
+custom Obsidian plugin, or second schema.
+
+Run the stdio server from the repository with:
+
+```bash
+PYTHONPATH=src python -m noesis.mcp_server examples/noesis-vault
+```
+
+After installing the package, the equivalent console script is:
+
+```bash
+noesis-mcp examples/noesis-vault
+```
+
+The server defaults to `examples/noesis-vault` when no vault path is provided.
+Tools also accept an optional `vault_path` argument so one server can operate
+on another compatible vault when an MCP client passes the path explicitly.
+
+Read tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `noesis_lint_vault` | Validate folder structure, flat YAML frontmatter, lifecycle values, wikilinks, Bases, Canvases, and context exclusions. |
+| `noesis_search_notes` | Search notes by text with optional `type`, lifecycle, status, review state, and limit filters. |
+| `noesis_get_note` | Return one parsed note by `noesis_id`, filename stem, path, alias, or wikilink target. |
+| `noesis_get_review_queue` | Return notes whose `review_state` still needs attention. |
+| `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, and stale-memory lineage. |
+| `noesis_build_context` | Build operational context from current reviewed knowledge only, excluding stale, superseded, and archived memory. |
+
+Controlled write tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `noesis_ingest_source` | Copy raw source material into `raw/` and create a linked source note. |
+| `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
+| `noesis_create_claim_draft` | Create a review-ready claim draft grounded in evidence notes. |
+| `noesis_create_synthesis_draft` | Create a review-ready synthesis draft grounded in claim lineage. |
+| `noesis_approve_review` | Write an audit review note and mark the reviewed note approved. |
+| `noesis_request_review_changes` | Write an audit review note, request changes, and keep affected memory out of active context where needed. |
+| `noesis_promote_synthesis` | Promote an approved synthesis with review audit into active reviewed knowledge. |
+| `noesis_mark_memory_stale` | Mark memory stale or superseded and update affected context exclusions. |
+| `noesis_write_context` | Write an operational context note from current reviewed knowledge. |
+
+Resources:
+
+| Resource | Purpose |
+| --- | --- |
+| `noesis://vault/summary` | Compact summary of the default vault. |
+| `noesis://note/{note}` | Parsed note from the default vault. |
+
+Write safety is intentionally narrow. MCP write tools call the same lifecycle
+functions in `src/noesis/vault.py` as the CLI, validate the vault before writes
+where the underlying workflow requires it, roll back failed note writes, and
+return structured objects such as `{ "ok": false, "error": "...", "issues": [...] }`
+instead of scraping CLI text.
+
+Example agent workflow:
+
+```text
+1. Call noesis_lint_vault.
+2. Call noesis_get_review_queue to find draft memory.
+3. Call noesis_get_note and noesis_trace_lineage before making a review decision.
+4. Call noesis_approve_review or noesis_request_review_changes to create an audit note.
+5. Call noesis_build_context to prepare current reviewed context for the next task.
+```
+
 ---
 
 ## Long-Term Aim

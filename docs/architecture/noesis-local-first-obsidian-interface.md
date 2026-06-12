@@ -183,42 +183,42 @@ First useful commands:
 
 ### MCP Boundary
 
-The first MCP server should expose curated tools rather than raw filesystem
-access. Tools can call the same parsing and validation code as the CLI.
-This follows MCP's split between model-invoked
-[tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools),
-context [resources](https://modelcontextprotocol.io/docs/concepts/resources),
-and user-selectable [prompts](https://modelcontextprotocol.io/docs/concepts/prompts).
+The first MCP server exposes curated tools rather than raw filesystem access.
+Tools call the same parser, validator, lineage tracer, review queue, context
+builder, and lifecycle write functions as the CLI. MCP is an adapter over the
+vault contract; it is not a custom Obsidian plugin, a database, or a second
+schema.
 
 First useful tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `noesis_search_notes` | Search notes by text, type, status, tags, and lifecycle stage. |
-| `noesis_get_note` | Return a note by `noesis_id` or path, including parsed properties and body. |
+| `noesis_lint_vault` | Validate required folders, flat YAML properties, lifecycle values, wikilinks, Base files, Canvas files, and context exclusions. |
+| `noesis_search_notes` | Search notes by text, type, lifecycle stage, status, and review state. |
+| `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
 | `noesis_get_review_queue` | Return notes that need human or agent review. |
-| `noesis_trace_lineage` | Return upstream and downstream links for a note. |
-| `noesis_create_draft_note` | Create a source, evidence, claim, or synthesis draft from a template. |
-| `noesis_update_review_state` | Move a note through review states with an audit note. |
+| `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
 | `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes. |
-| `noesis_lint_vault` | Report schema, link, and lifecycle problems. |
+| `noesis_ingest_source` | Copy immutable raw source material and create a linked source note. |
+| `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
+| `noesis_create_claim_draft` | Create a review-ready claim draft grounded in evidence notes. |
+| `noesis_create_synthesis_draft` | Create a review-ready synthesis draft grounded in claim lineage. |
+| `noesis_approve_review` | Write an audit review note and mark the reviewed note approved. |
+| `noesis_request_review_changes` | Write an audit review note, request changes, and invalidate affected active context where needed. |
+| `noesis_promote_synthesis` | Promote an approved synthesis with review audit into reviewed knowledge. |
+| `noesis_mark_memory_stale` | Mark memory stale or superseded and update context exclusions. |
+| `noesis_write_context` | Write an operational context note from current reviewed knowledge. |
 
 First useful resources:
 
 | Resource | Purpose |
 | --- | --- |
-| `noesis://vault/index` | Compact vault index grouped by lifecycle stage. |
-| `noesis://review/queue` | Current review queue. |
-| `noesis://note/{noesis_id}` | Parsed note resource. |
-| `noesis://context/{scope}` | Current context package for a scope. |
+| `noesis://vault/summary` | Compact summary of the default vault. |
+| `noesis://note/{note}` | Parsed note from the default vault. |
 
-First useful prompts:
-
-| Prompt | Purpose |
-| --- | --- |
-| `noesis-extract-evidence` | Extract source-backed evidence without writing claims yet. |
-| `noesis-review-claim` | Review whether a claim is supported by evidence. |
-| `noesis-build-context` | Build concise operational context for a future agent. |
+The write surface is intentionally smaller than direct file access. It only
+allows lifecycle operations already implemented in `src/noesis/vault.py`, and
+tool responses are structured objects rather than CLI text.
 
 ### Portable Agent Skills
 
