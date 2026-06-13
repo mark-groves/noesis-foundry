@@ -33,3 +33,17 @@ completion.
 See the root [`README.md`](../README.md) and
 [`docs/architecture/noesis-local-first-obsidian-interface.md`](../docs/architecture/noesis-local-first-obsidian-interface.md)
 for the current vault and CLI contract.
+
+## Dogfood Fixture
+
+The example vault includes a Noesis Foundry project-memory fixture:
+
+```bash
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+```
+
+This fixture shows the intended adapter flow without creating a second schema:
+local project-session source material is captured, evidence and claims are
+reviewed, a synthesis is promoted, stale shortcut memory is preserved, and
+operational context is built from reviewed knowledge only.
