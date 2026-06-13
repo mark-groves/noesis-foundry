@@ -99,6 +99,23 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(due_payload["filters"]["due"], True)
         self.assertEqual([note["noesis_id"] for note in due_payload["notes"]], ["stale-custom-plugin-first"])
 
+        scheduled_due_queue = run_noesis(
+            "review",
+            "queue",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "2026-06-29",
+            "--json",
+        )
+        self.assertEqual(scheduled_due_queue.returncode, 0, scheduled_due_queue.stderr)
+        scheduled_due_payload = parse_json_stdout(scheduled_due_queue)
+        scheduled_due_ids = [note["noesis_id"] for note in scheduled_due_payload["notes"]]
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", scheduled_due_ids)
+        self.assertIn("context-first-cli-mcp-workflow", scheduled_due_ids)
+        self.assertNotIn("review-local-first-lifecycle", scheduled_due_ids)
+        self.assertNotIn("review-queue", scheduled_due_ids)
+
         claim_queue = run_noesis(
             "review",
             "queue",

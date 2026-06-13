@@ -249,8 +249,13 @@ class Vault:
         for note in self.notes:
             if note.type == "dashboard":
                 continue
+            if due and note.type == "review":
+                continue
             if review_state is None:
-                if note.review_state in REVIEW_DONE:
+                if due:
+                    if note.review_state == "none":
+                        continue
+                elif note.review_state in REVIEW_DONE:
                     continue
             elif note.review_state != review_state:
                 continue

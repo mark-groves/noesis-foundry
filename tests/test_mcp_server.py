@@ -115,6 +115,13 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(due_queue["ok"], due_queue)
         self.assertEqual([note["noesis_id"] for note in due_queue["notes"]], ["stale-custom-plugin-first"])
         self.assertEqual(due_queue["filters"]["type"], "stale-memory")
+        scheduled_due_queue = handlers.get_review_queue(due_on="2026-06-29")
+        self.assertTrue(scheduled_due_queue["ok"], scheduled_due_queue)
+        scheduled_due_ids = [note["noesis_id"] for note in scheduled_due_queue["notes"]]
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", scheduled_due_ids)
+        self.assertIn("context-first-cli-mcp-workflow", scheduled_due_ids)
+        self.assertNotIn("review-local-first-lifecycle", scheduled_due_ids)
+        self.assertNotIn("review-queue", scheduled_due_ids)
 
         summary = handlers.get_review_summary(due_on="2026-06-13")
         self.assertTrue(summary["ok"], summary)
