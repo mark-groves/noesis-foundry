@@ -48,6 +48,21 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    note ID, included reviewed knowledge, excluded stale/superseded memory, and
    any assumptions about scope.
 
+## Concrete Example
+
+To prepare context for continuing Noesis Foundry project work from the example
+vault:
+
+```bash
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+```
+
+With MCP, call `noesis_lint_vault`, `noesis_build_context` with
+`scope="agent-memory"`, and `noesis_trace_lineage` on
+`reviewed-knowledge-agent-memory-dogfood` when the context will guide code or
+documentation changes.
+
 ## Fallback
 
 Use direct Markdown/YAML only when the CLI or Python module cannot run. Read
