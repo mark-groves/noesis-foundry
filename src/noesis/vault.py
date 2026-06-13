@@ -177,6 +177,32 @@ class CreatedNote:
     path: Path
 
 
+@dataclass(frozen=True)
+class ContextSelection:
+    note: Note
+    status: str
+    reason: str
+    score: int
+    content_chars: int
+
+
+@dataclass(frozen=True)
+class ContextPackage:
+    scope: str | None
+    purpose: str | None
+    limit: int | None
+    max_chars: int | None
+    available_count: int
+    included: list[ContextSelection]
+    excluded: list[ContextSelection]
+    lifecycle_excluded: list[ContextSelection]
+    content: str
+
+    @property
+    def reviewed_knowledge(self) -> list[Note]:
+        return [selection.note for selection in self.included]
+
+
 @dataclass
 class Vault:
     root: Path
@@ -1204,6 +1230,8 @@ def write_context_note(
     *,
     scope: str | None = None,
     purpose: str | None = None,
+    limit: int | None = None,
+    max_chars: int | None = None,
     title: str | None = None,
     slug: str | None = None,
     next_review: str | None = None,
@@ -1213,9 +1241,11 @@ def write_context_note(
         raise ValueError("title must not be blank")
     if next_review is not None and not is_date_like(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
+    validate_context_budget(limit=limit, max_chars=max_chars)
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
+    package = compose_context(vault, scope=scope, purpose=purpose, limit=limit, max_chars=max_chars)
+    knowledge = package.reviewed_knowledge
     if not knowledge:
         raise ValueError("no current reviewed knowledge found for context")
 
@@ -1249,8 +1279,12 @@ def write_context_note(
         metadata["scope"] = scope
     if purpose:
         metadata["purpose"] = purpose
+    if limit is not None:
+        metadata["context_limit"] = limit
+    if max_chars is not None:
+        metadata["context_max_chars"] = max_chars
 
-    body = build_context(vault, scope=scope, purpose=purpose)
+    body = package.content
     body = body.rstrip() + "\n\n## Traceability\n\n"
     body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
     if synthesis_links:
@@ -1612,18 +1646,195 @@ aliases: []
     return {Path(f"_templates/{name}.md"): content for name, content in templates.items()}
 
 
-def build_context(vault: Vault, scope: str | None = None, purpose: str | None = None) -> str:
-    knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
-    return render_context(knowledge, scope=scope, purpose=purpose)
+def build_context(
+    vault: Vault,
+    scope: str | None = None,
+    purpose: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+) -> str:
+    return compose_context(vault, scope=scope, purpose=purpose, limit=limit, max_chars=max_chars).content
 
 
-def render_context(knowledge: list[Note], scope: str | None = None, purpose: str | None = None) -> str:
+def compose_context(
+    vault: Vault,
+    scope: str | None = None,
+    purpose: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+) -> ContextPackage:
+    validate_context_budget(limit=limit, max_chars=max_chars)
+    available = vault.current_reviewed_knowledge()
+    selected, scoped_out = select_knowledge_for_context(available, scope)
+    included, budgeted_out = apply_context_budget(selected, limit=limit, max_chars=max_chars)
+    excluded = sorted(scoped_out + budgeted_out, key=lambda selection: (selection.status, selection.note.title.lower()))
+    lifecycle_excluded = explain_lifecycle_exclusions(vault)
+    content = render_context(
+        [selection.note for selection in included],
+        scope=scope,
+        purpose=purpose,
+        limit=limit,
+        max_chars=max_chars,
+        total_candidates=len(available),
+        excluded=excluded,
+    )
+    return ContextPackage(
+        scope=scope,
+        purpose=purpose,
+        limit=limit,
+        max_chars=max_chars,
+        available_count=len(available),
+        included=included,
+        excluded=excluded,
+        lifecycle_excluded=lifecycle_excluded,
+        content=content,
+    )
+
+
+def validate_context_budget(*, limit: int | None = None, max_chars: int | None = None) -> None:
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be greater than zero")
+    if max_chars is not None and max_chars < 1:
+        raise ValueError("max_chars must be greater than zero")
+
+
+def select_knowledge_for_context(
+    knowledge: list[Note],
+    scope: str | None,
+) -> tuple[list[ContextSelection], list[ContextSelection]]:
+    scope_terms = context_scope_terms(scope)
+    selected: list[ContextSelection] = []
+    scoped_out: list[ContextSelection] = []
+    for note in knowledge:
+        score = context_scope_score(note, scope_terms)
+        selection = ContextSelection(
+            note=note,
+            status="included",
+            reason=context_include_reason(scope, score),
+            score=score,
+            content_chars=len(note.body.strip()),
+        )
+        if scope_terms and score == 0:
+            scoped_out.append(
+                ContextSelection(
+                    note=note,
+                    status="scoped_out",
+                    reason=f"does not match scope {scope!r}",
+                    score=score,
+                    content_chars=selection.content_chars,
+                )
+            )
+        else:
+            selected.append(selection)
+    selected.sort(key=lambda selection: (-selection.score, selection.note.title.lower()))
+    return selected, scoped_out
+
+
+def apply_context_budget(
+    selections: list[ContextSelection],
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+) -> tuple[list[ContextSelection], list[ContextSelection]]:
+    included: list[ContextSelection] = []
+    budgeted_out: list[ContextSelection] = []
+    used_chars = 0
+    for index, selection in enumerate(selections):
+        if limit is not None and len(included) >= limit:
+            budgeted_out.extend(
+                ContextSelection(
+                    note=remaining.note,
+                    status="budgeted_out",
+                    reason=f"excluded by limit {limit}",
+                    score=remaining.score,
+                    content_chars=remaining.content_chars,
+                )
+                for remaining in selections[index:]
+            )
+            break
+        if max_chars is not None and used_chars + selection.content_chars > max_chars:
+            remaining_chars = max(max_chars - used_chars, 0)
+            budgeted_out.append(
+                ContextSelection(
+                    note=selection.note,
+                    status="budgeted_out",
+                    reason=(
+                        f"excluded by max_chars {max_chars}: "
+                        f"{selection.content_chars} chars exceeds remaining budget {remaining_chars}"
+                    ),
+                    score=selection.score,
+                    content_chars=selection.content_chars,
+                )
+            )
+            continue
+        included.append(selection)
+        used_chars += selection.content_chars
+    return included, budgeted_out
+
+
+def context_scope_terms(scope: str | None) -> list[str]:
+    if scope is None or not scope.strip():
+        return []
+    return [term for term in re.split(r"[\s,]+", scope.strip().lower()) if term]
+
+
+def context_scope_score(note: Note, scope_terms: list[str]) -> int:
+    if not scope_terms:
+        return 0
+    searchable = searchable_note_text(note)
+    return sum(1 for term in scope_terms if term in searchable)
+
+
+def context_include_reason(scope: str | None, score: int) -> str:
+    if scope is None or not scope.strip():
+        return "included because no scope filter was requested"
+    return f"matches scope {scope!r} with score {score}"
+
+
+def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
+    selections: list[ContextSelection] = []
+    for note in vault.notes:
+        if note.type not in {"reviewed-knowledge", "stale-memory"}:
+            continue
+        if not is_excluded(note):
+            continue
+        selections.append(
+            ContextSelection(
+                note=note,
+                status="lifecycle_excluded",
+                reason=f"{note.type} has status {note.status!r} and is not active guidance",
+                score=0,
+                content_chars=len(note.body.strip()),
+            )
+        )
+    return sorted(selections, key=lambda selection: selection.note.title.lower())
+
+
+def render_context(
+    knowledge: list[Note],
+    scope: str | None = None,
+    purpose: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    total_candidates: int | None = None,
+    excluded: list[ContextSelection] | None = None,
+) -> str:
     title = "Noesis Operational Context"
     lines = [f"# {title}", ""]
     if scope:
         lines.extend([f"Scope: {scope}", ""])
     if purpose:
         lines.extend([f"Purpose: {purpose}", ""])
+    if limit is not None or max_chars is not None:
+        budget = []
+        if limit is not None:
+            budget.append(f"limit {limit}")
+        if max_chars is not None:
+            budget.append(f"max_chars {max_chars}")
+        lines.extend([f"Budget: {', '.join(budget)}", ""])
     lines.extend(
         [
             "This context package is built from reviewed knowledge only.",
@@ -1631,6 +1842,14 @@ def render_context(knowledge: list[Note], scope: str | None = None, purpose: str
             "",
         ]
     )
+
+    if total_candidates is not None or excluded:
+        lines.extend(["## Selection Summary", ""])
+        lines.append(f"- Current reviewed knowledge available: {total_candidates if total_candidates is not None else len(knowledge)}")
+        lines.append(f"- Included in active context: {len(knowledge)}")
+        if excluded:
+            lines.append(f"- Excluded by scope or budget: {len(excluded)}")
+        lines.append("")
 
     if not knowledge:
         lines.extend(["## Reviewed Knowledge", "", "No current reviewed knowledge found.", ""])
@@ -1794,10 +2013,10 @@ def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> b
 
 
 def filter_knowledge_by_scope(knowledge: list[Note], scope: str | None) -> list[Note]:
-    if scope is None or not scope.strip():
+    scope_terms = context_scope_terms(scope)
+    if not scope_terms:
         return knowledge
-    normalized_scope = scope.strip().lower()
-    return [note for note in knowledge if normalized_scope in searchable_note_text(note)]
+    return [note for note in knowledge if context_scope_score(note, scope_terms) > 0]
 
 
 def searchable_note_text(note: Note) -> str:

@@ -19,6 +19,19 @@ ends at `context/operational-context-agent-memory-dogfood.md`, and keeps
 `stale/stale-agent-memory-global-summary.md` traceable but excluded from
 generated context.
 
+The CLI context composer can scope and budget the active package without
+weakening lifecycle safety:
+
+```bash
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent"
+PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
+```
+
+`context build` prints active guidance from current reviewed knowledge only.
+`context explain` shows why reviewed notes were included, scoped out, or
+budgeted out, and labels stale/superseded/archive notes as background
+provenance only.
+
 Open this folder as a vault in Obsidian, then start at
 `_dashboards/noesis-review-dashboard.md`.
 
