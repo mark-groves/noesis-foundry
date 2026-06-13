@@ -37,6 +37,7 @@ CONTRACT_REQUIRED_PROPERTIES = {
     "noesis_contract",
     "contract_version",
     "source_of_truth",
+    "requires_noesis",
     "created",
     "updated",
 }
