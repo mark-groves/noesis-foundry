@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
+from typing import Any
 
+from .mcp_server import issue_to_dict, json_safe, note_summary
 from .vault import (
     Vault,
     approve_review,
     build_context,
     extract_evidence,
+    filter_knowledge_by_scope,
     ingest_source,
     init_vault,
     mark_memory_stale,
@@ -40,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = vault_commands.add_parser("validate", help="Validate a Noesis vault")
     validate.add_argument("path", type=Path)
+    validate.add_argument("--json", action="store_true", help="Write structured JSON")
     validate.set_defaults(func=cmd_vault_validate)
 
     ingest = subcommands.add_parser("ingest", help="Ingest source material")
@@ -87,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     review_commands = review.add_subparsers(dest="review_command", required=True)
     queue = review_commands.add_parser("queue", help="List notes that need review")
     queue.add_argument("--vault", type=Path, required=True)
+    queue.add_argument("--json", action="store_true", help="Write structured JSON")
     queue.set_defaults(func=cmd_review_queue)
 
     approve = review_commands.add_parser("approve", help="Approve a reviewable note and write an audit review")
@@ -134,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     trace = subcommands.add_parser("trace", help="Trace one note's lineage")
     trace.add_argument("note", help="noesis_id, filename stem, or wikilink")
     trace.add_argument("--vault", type=Path, required=True)
+    trace.add_argument("--json", action="store_true", help="Write structured JSON")
     trace.set_defaults(func=cmd_trace)
 
     context = subcommands.add_parser("context", help="Operational context workflows")
@@ -143,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--scope", default=None)
     build.add_argument("--purpose", default=None)
     build.add_argument("--output", type=Path, default=None)
+    build.add_argument("--json", action="store_true", help="Write structured JSON")
     build.set_defaults(func=cmd_context_build)
 
     write = context_commands.add_parser("write", help="Write an operational context note")
@@ -167,6 +175,17 @@ def cmd_vault_init(args: argparse.Namespace) -> int:
 def cmd_vault_validate(args: argparse.Namespace) -> int:
     vault = Vault.load(args.path)
     issues = vault.validate()
+    if args.json:
+        write_json(
+            {
+                "ok": not issues,
+                "vault_path": str(vault.root),
+                "note_count": len(vault.notes),
+                "issue_count": len(issues),
+                "issues": [issue_to_dict(issue, vault.root) for issue in issues],
+            }
+        )
+        return 1 if issues else 0
     if issues:
         for issue in issues:
             print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
@@ -247,6 +266,20 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
 def cmd_review_queue(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
     issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        queue = vault.review_queue()
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "count": len(queue),
+                "notes": [note_summary(note, vault.root) for note in queue],
+            }
+        )
+        return 0
     if issues:
         for issue in issues:
             print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
@@ -345,6 +378,32 @@ def cmd_memory_stale(args: argparse.Namespace) -> int:
 
 def cmd_trace(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
+    if args.json:
+        issues = vault.validate()
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        notes = vault.lineage(args.note)
+        if not notes:
+            write_json(
+                {
+                    "ok": False,
+                    "error": f"note not found or no lineage: {args.note}",
+                    "vault_path": str(vault.root),
+                    "note": args.note,
+                }
+            )
+            return 1
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "note": args.note,
+                "count": len(notes),
+                "notes": [note_summary(note, vault.root) for note in notes],
+            }
+        )
+        return 0
     notes = vault.lineage(args.note)
     if not notes:
         print(f"note not found or no lineage: {args.note}", file=sys.stderr)
@@ -368,6 +427,29 @@ def cmd_trace(args: argparse.Namespace) -> int:
 def cmd_context_build(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
     issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        content = build_context(vault, scope=args.scope, purpose=args.purpose)
+        output_path = None
+        if args.output:
+            args.output.write_text(content, encoding="utf-8")
+            output_path = str(args.output)
+        knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), args.scope)
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "scope": args.scope,
+                "purpose": args.purpose,
+                "reviewed_knowledge_count": len(knowledge),
+                "reviewed_knowledge": [note_summary(note, vault.root) for note in knowledge],
+                "content": content,
+                "output_path": output_path,
+            }
+        )
+        return 0
     if issues:
         for issue in issues:
             print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
@@ -396,3 +478,17 @@ def cmd_context_write(args: argparse.Namespace) -> int:
         return 1
     print(f"created {created.note_id}\t{created.path}")
     return 0
+
+
+def validation_error_payload(vault: Vault, issues: list[Any]) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": "vault validation failed",
+        "vault_path": str(vault.root),
+        "issue_count": len(issues),
+        "issues": [issue_to_dict(issue, vault.root) for issue in issues],
+    }
+
+
+def write_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(json_safe(payload), sort_keys=True))
