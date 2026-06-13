@@ -101,6 +101,25 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(invalid_file_payload["ready_for_cli_mcp"], False)
             self.assertIn("vault path is not a directory", invalid_file_payload["issues"][0]["message"])
 
+        with tempfile.TemporaryDirectory() as tmp:
+            future_vault = Path(tmp) / "future-vault"
+            shutil.copytree(EXAMPLE_VAULT, future_vault)
+            contract_path = future_vault / "noesis.vault.yaml"
+            contract_path.write_text(
+                contract_path.read_text(encoding="utf-8").replace(
+                    'requires_noesis: ">=0.1.0"',
+                    'requires_noesis: ">=0.2.0"',
+                ),
+                encoding="utf-8",
+            )
+
+            future = run_noesis("vault", "doctor", str(future_vault), "--json")
+            self.assertNotEqual(future.returncode, 0)
+            future_payload = parse_json_stdout(future)
+            self.assertEqual(future_payload["compatible"], False)
+            self.assertEqual(future_payload["ready_for_cli_mcp"], False)
+            self.assertIn("requires_noesis", future_payload["issues"][0]["message"])
+
     def test_review_queue_json_matches_text_order(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT), "--json")
         self.assertEqual(result.returncode, 0, result.stderr)

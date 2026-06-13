@@ -32,6 +32,7 @@ CONTRACT_FILE = Path("noesis.vault.yaml")
 CONTRACT_VERSION = "1"
 CONTRACT_KIND = "vault"
 CONTRACT_SOURCE_OF_TRUTH = "markdown-flat-yaml"
+NOESIS_VERSION = "0.1.0"
 CONTRACT_REQUIRED_PROPERTIES = {
     "noesis_contract",
     "contract_version",
@@ -480,11 +481,35 @@ def validate_contract(root: Path) -> list[Issue]:
         issues.append(Issue(path, f"contract_version must be supported version {CONTRACT_VERSION!r}"))
     if metadata.get("source_of_truth") != CONTRACT_SOURCE_OF_TRUTH:
         issues.append(Issue(path, f"source_of_truth must be {CONTRACT_SOURCE_OF_TRUTH!r}"))
+    if "requires_noesis" in metadata:
+        issues.extend(validate_requires_noesis(path, metadata["requires_noesis"]))
     for date_key in ("created", "updated"):
         if date_key in metadata and not is_date_like(metadata[date_key]):
             issues.append(Issue(path, f"{date_key} must be a date or date-like string"))
 
     return issues
+
+
+def validate_requires_noesis(path: Path, value: Any) -> list[Issue]:
+    if not isinstance(value, str):
+        return [Issue(path, "requires_noesis must be a string like '>=0.1.0'")]
+
+    match = re.fullmatch(r">=\s*(\d+)\.(\d+)\.(\d+)", value.strip())
+    if match is None:
+        return [Issue(path, "requires_noesis must use a supported minimum version like '>=0.1.0'")]
+
+    required = tuple(int(part) for part in match.groups())
+    current = parse_version_tuple(NOESIS_VERSION)
+    if current < required:
+        return [Issue(path, f"requires_noesis {value!r} is newer than this CLI version {NOESIS_VERSION}")]
+    return []
+
+
+def parse_version_tuple(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
+    if match is None:
+        raise ValueError(f"invalid Noesis version: {value}")
+    return tuple(int(part) for part in match.groups())
 
 
 def validate_notes(vault: Vault) -> list[Issue]:
@@ -1396,7 +1421,7 @@ def default_vault_files(today: str) -> dict[Path, str]:
         CONTRACT_FILE: f"""noesis_contract: {CONTRACT_KIND}
 contract_version: "{CONTRACT_VERSION}"
 source_of_truth: {CONTRACT_SOURCE_OF_TRUTH}
-requires_noesis: ">=0.1.0"
+requires_noesis: ">={NOESIS_VERSION}"
 created: {today}
 updated: {today}
 """,
