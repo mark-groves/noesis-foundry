@@ -624,10 +624,15 @@ def issue_to_dict(issue: Any, vault_root: Path) -> JsonObject:
 
 
 def validation_error(vault: Vault, issues: list[Any]) -> JsonObject:
+    doctor = vault.doctor()
     return {
         "ok": False,
         "error": "vault validation failed",
         "vault_path": str(vault.root),
+        "contract": doctor_payload(doctor),
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
     }

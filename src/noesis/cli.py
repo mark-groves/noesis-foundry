@@ -514,10 +514,15 @@ def cmd_context_write(args: argparse.Namespace) -> int:
 
 
 def validation_error_payload(vault: Vault, issues: list[Any]) -> dict[str, Any]:
+    doctor = vault.doctor()
     return {
         "ok": False,
         "error": "vault validation failed",
         "vault_path": str(vault.root),
+        "contract": doctor_payload(doctor)["contract"],
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
     }

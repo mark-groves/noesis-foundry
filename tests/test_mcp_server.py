@@ -151,7 +151,10 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "vault validation failed")
-        self.assertEqual(result["issue_count"], 15)
+        self.assertEqual(result["issue_count"], 16)
+        self.assertEqual(result["compatible"], False)
+        self.assertEqual(result["ready_for_cli_mcp"], False)
+        self.assertEqual(result["contract"]["supported"], False)
         self.assertIn("vault path does not exist", result["issues"][0]["message"])
 
     def test_write_workflow_creates_audited_context_and_preserves_valid_vault(self) -> None:

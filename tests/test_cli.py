@@ -60,6 +60,9 @@ class NoesisCliTests(unittest.TestCase):
             invalid_payload = parse_json_stdout(invalid)
             self.assertEqual(invalid_payload["ok"], False)
             self.assertEqual(invalid_payload["vault_path"], str(missing_vault.resolve()))
+            self.assertEqual(invalid_payload["compatible"], False)
+            self.assertEqual(invalid_payload["ready_for_cli_mcp"], False)
+            self.assertEqual(invalid_payload["contract"]["supported"], False)
             self.assertGreater(invalid_payload["issue_count"], 0)
             self.assertIn("vault path does not exist", invalid_payload["issues"][0]["message"])
 
@@ -86,6 +89,17 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(legacy_payload["compatible"], False)
             self.assertEqual(legacy_payload["ready_for_cli_mcp"], False)
             self.assertIn("missing Noesis V1 contract metadata", legacy_payload["issues"][0]["message"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            file_vault = Path(tmp) / "not-a-vault.md"
+            file_vault.write_text("not a vault", encoding="utf-8")
+
+            invalid_file = run_noesis("vault", "doctor", str(file_vault), "--json")
+            self.assertNotEqual(invalid_file.returncode, 0)
+            invalid_file_payload = parse_json_stdout(invalid_file)
+            self.assertEqual(invalid_file_payload["compatible"], False)
+            self.assertEqual(invalid_file_payload["ready_for_cli_mcp"], False)
+            self.assertIn("vault path is not a directory", invalid_file_payload["issues"][0]["message"])
 
     def test_review_queue_json_matches_text_order(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT), "--json")

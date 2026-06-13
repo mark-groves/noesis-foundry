@@ -433,10 +433,21 @@ def read_contract(root: Path) -> dict[str, Any]:
 
 
 def validate_contract(root: Path) -> list[Issue]:
-    if not root.is_dir():
-        return []
-
     path = root / CONTRACT_FILE
+    if not root.exists():
+        return [
+            Issue(
+                path,
+                f"missing Noesis V{CONTRACT_VERSION} contract metadata because vault path does not exist",
+            )
+        ]
+    if not root.is_dir():
+        return [
+            Issue(
+                root,
+                f"missing Noesis V{CONTRACT_VERSION} contract metadata because vault path is not a directory",
+            )
+        ]
     if not path.exists():
         return [
             Issue(
