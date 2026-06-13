@@ -238,8 +238,9 @@ Initial skill set:
 | `noesis-claim-review` | Review or mature Noesis memory | Check evidence support, update review state, create review note. |
 | `noesis-context` | Prepare context for an agent task | Load reviewed knowledge, exclude stale/superseded notes, emit focused context. |
 
-Skills are documentation plus small scripts/templates. They should not contain
-the canonical schema. The schema belongs in the vault contract and CLI parser.
+The repo-local skill packages live in `skills/`. Skills are documentation plus
+small scripts/templates when needed. They should not contain the canonical
+schema. The schema belongs in the vault contract and CLI parser.
 
 ## First Slice Behavior
 
