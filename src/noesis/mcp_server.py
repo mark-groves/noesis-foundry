@@ -724,7 +724,7 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
         for audit in audits
         if audit.metadata.get("decision") == "changes-requested"
     ]
-    requires_audit = note.type not in {"source", "dashboard", "review", "archived-history"} and note.review_state in {
+    requires_audit = note.type in {"evidence", "claim", "synthesis", "reviewed-knowledge"} and note.review_state in {
         "approved",
         "reviewed",
     }

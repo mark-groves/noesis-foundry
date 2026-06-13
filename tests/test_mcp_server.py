@@ -139,6 +139,12 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in stale_workbench["impact"]["dependent_contexts"]],
         )
+        for note_id in ("context-first-cli-mcp-workflow", "stale-agent-memory-global-summary"):
+            generated_workbench = handlers.show_review(note_id)
+            self.assertTrue(generated_workbench["ok"], generated_workbench)
+            self.assertEqual(generated_workbench["note"]["review_state"], "reviewed")
+            self.assertEqual(generated_workbench["audit_status"]["requires_audit"], False)
+            self.assertEqual(generated_workbench["audit_status"]["ok"], True)
 
         note = handlers.get_note("reviewed-knowledge-noesis-lifecycle")
         self.assertTrue(note["ok"], note)

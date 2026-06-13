@@ -189,6 +189,22 @@ class NoesisCliTests(unittest.TestCase):
             [note["noesis_id"] for note in payload["impact"]["dependent_contexts"]],
         )
 
+    def test_review_show_does_not_require_audits_for_generated_reviewed_notes(self) -> None:
+        for note_id in ("context-first-cli-mcp-workflow", "stale-agent-memory-global-summary"):
+            show = run_noesis(
+                "review",
+                "show",
+                note_id,
+                "--vault",
+                str(EXAMPLE_VAULT),
+                "--json",
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            payload = parse_json_stdout(show)
+            self.assertEqual(payload["note"]["review_state"], "reviewed")
+            self.assertEqual(payload["audit_status"]["requires_audit"], False)
+            self.assertEqual(payload["audit_status"]["ok"], True)
+
     def test_review_queue_base_scopes_open_queue_filters_to_one_view(self) -> None:
         base = yaml.safe_load((EXAMPLE_VAULT / "_bases" / "review-queue.base").read_text(encoding="utf-8"))
         top_filters = base["filters"]["and"]
