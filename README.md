@@ -182,6 +182,7 @@ install the package in editable mode to use the `noesis` console script.
 PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
 PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
+PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --directory /path/to/sources --recursive --evidence-drafts
 PYTHONPATH=src python -m noesis extract evidence --vault examples/noesis-vault --source source-id --title "Evidence Title"
 PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --evidence evidence-id --title "Claim Title"
 PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer"
@@ -201,7 +202,8 @@ Supported commands:
 | --- | --- |
 | `noesis vault validate <path>` | Validate required frontmatter, lifecycle stage/status values, wikilinks, Base YAML, Canvas JSON, and active-context exclusions. |
 | `noesis vault init <path>` | Create the folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
-| `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/` and create a linked source note in `sources/`. |
+| `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/`, add source provenance and a SHA-256 content hash, skip already-captured content unless `--allow-duplicates` is set, and create a linked source note in `sources/`. |
+| `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order, report created/skipped summaries, and optionally create one reviewable evidence draft for each new source. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
 | `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
 | `noesis synthesize --vault <path> --claim <claim-id>` | Create a review-ready synthesis draft grounded in claim, evidence, and source links. |
