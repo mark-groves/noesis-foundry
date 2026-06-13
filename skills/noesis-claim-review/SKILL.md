@@ -1,7 +1,6 @@
 ---
 name: noesis-claim-review
 description: Review or mature Noesis memory. Use when a user asks to inspect draft claims, evidence, syntheses, or reviewed knowledge, approve supported memory, request changes, or preserve a review audit trail.
-compatibility: Portable Agent Skill for file-backed Noesis vaults; prefer the noesis CLI and use direct Markdown fallback only when the CLI is unavailable.
 ---
 
 # Noesis Claim Review
@@ -10,6 +9,9 @@ Use this skill to review Noesis memory without bypassing provenance or the
 human-inspectable audit trail. The vault contract is defined by the repository
 README, `docs/architecture/noesis-local-first-obsidian-interface.md`, and the
 `noesis` CLI.
+
+This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
+`noesis` CLI and use direct Markdown fallback only when the CLI is unavailable.
 
 ## Workflow
 

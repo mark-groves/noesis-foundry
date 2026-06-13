@@ -1,7 +1,6 @@
 ---
 name: noesis-context
 description: Prepare focused Noesis context for an agent task. Use when a user asks to build, write, refresh, or inspect operational context from reviewed knowledge while excluding stale, superseded, or unreviewed memory.
-compatibility: Portable Agent Skill for file-backed Noesis vaults; prefer the noesis CLI and use direct Markdown fallback only when the CLI is unavailable.
 ---
 
 # Noesis Context
@@ -10,6 +9,9 @@ Use this skill to prepare operational context for an agent task from current
 reviewed Noesis knowledge. The vault contract is defined by the repository
 README, `docs/architecture/noesis-local-first-obsidian-interface.md`, and the
 `noesis` CLI.
+
+This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
+`noesis` CLI and use direct Markdown fallback only when the CLI is unavailable.
 
 ## Workflow
 

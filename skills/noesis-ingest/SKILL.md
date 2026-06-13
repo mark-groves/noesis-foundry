@@ -1,7 +1,6 @@
 ---
 name: noesis-ingest
 description: Add source material to a Noesis vault. Use when a user asks to ingest, capture, import, or preserve research/source material, then create source and evidence drafts while keeping raw files immutable and reviewable.
-compatibility: Portable Agent Skill for file-backed Noesis vaults; prefer the noesis CLI and use direct Markdown fallback only when the CLI is unavailable.
 ---
 
 # Noesis Ingest
@@ -10,6 +9,9 @@ Use this skill to add new source material to a Noesis vault and prepare
 reviewable evidence drafts. The vault contract is defined by the repository
 README, `docs/architecture/noesis-local-first-obsidian-interface.md`, and the
 `noesis` CLI.
+
+This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
+`noesis` CLI and use direct Markdown fallback only when the CLI is unavailable.
 
 ## Workflow
 

@@ -31,10 +31,10 @@ class SkillPackageTests(unittest.TestCase):
                 self.assertIn("description", frontmatter)
                 self.assertLessEqual(len(frontmatter["description"]), 1024)
                 self.assertIn("Use when", frontmatter["description"])
-                self.assertIn("compatibility", frontmatter)
-                self.assertIn("Portable Agent Skill", frontmatter["compatibility"])
+                self.assertLessEqual(set(frontmatter), {"name", "description", "license", "allowed-tools", "metadata"})
 
                 self.assertIn("PYTHONPATH=src python -m noesis vault validate", body)
+                self.assertIn("portable Agent Skill", body)
                 self.assertIn("Fallback", body)
                 self.assertIn("Reviewability", body)
                 self.assertIn("README", body)
