@@ -8,11 +8,13 @@ from typing import Any
 
 from .mcp_server import issue_to_dict, json_safe, note_summary
 from .vault import (
+    ContextPackage,
+    ContextSelection,
     Vault,
     approve_review,
     build_context,
+    compose_context,
     extract_evidence,
-    filter_knowledge_by_scope,
     ingest_source,
     init_vault,
     mark_memory_stale,
@@ -149,14 +151,27 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--vault", type=Path, required=True)
     build.add_argument("--scope", default=None)
     build.add_argument("--purpose", default=None)
+    build.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
+    build.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
     build.add_argument("--output", type=Path, default=None)
     build.add_argument("--json", action="store_true", help="Write structured JSON")
     build.set_defaults(func=cmd_context_build)
+
+    explain = context_commands.add_parser("explain", help="Explain context selection and lifecycle exclusions")
+    explain.add_argument("--vault", type=Path, required=True)
+    explain.add_argument("--scope", default=None)
+    explain.add_argument("--purpose", default=None)
+    explain.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
+    explain.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    explain.add_argument("--json", action="store_true", help="Write structured JSON")
+    explain.set_defaults(func=cmd_context_explain)
 
     write = context_commands.add_parser("write", help="Write an operational context note")
     write.add_argument("--vault", type=Path, required=True)
     write.add_argument("--scope", default=None)
     write.add_argument("--purpose", default=None)
+    write.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
+    write.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
     write.add_argument("--title", default=None)
     write.add_argument("--slug", default=None)
     write.add_argument("--next-review", default=None)
@@ -427,20 +442,34 @@ def cmd_context_build(args: argparse.Namespace) -> int:
         if issues:
             write_json(validation_error_payload(vault, issues))
             return 1
-        content = build_context(vault, scope=args.scope, purpose=args.purpose)
+        try:
+            package = compose_context(
+                vault,
+                scope=args.scope,
+                purpose=args.purpose,
+                limit=args.limit,
+                max_chars=args.max_chars,
+            )
+        except ValueError as exc:
+            write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
+            return 1
+        content = package.content
         output_path = None
         if args.output:
             args.output.write_text(content, encoding="utf-8")
             output_path = str(args.output)
-        knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), args.scope)
         write_json(
             {
                 "ok": True,
                 "vault_path": str(vault.root),
                 "scope": args.scope,
                 "purpose": args.purpose,
-                "reviewed_knowledge_count": len(knowledge),
-                "reviewed_knowledge": [note_summary(note, vault.root) for note in knowledge],
+                "limit": args.limit,
+                "max_chars": args.max_chars,
+                "available_reviewed_knowledge_count": package.available_count,
+                "reviewed_knowledge_count": len(package.reviewed_knowledge),
+                "reviewed_knowledge": [note_summary(note, vault.root) for note in package.reviewed_knowledge],
+                "selection": context_package_selection_payload(package, vault.root),
                 "content": content,
                 "output_path": output_path,
             }
@@ -450,12 +479,73 @@ def cmd_context_build(args: argparse.Namespace) -> int:
         for issue in issues:
             print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
         return 1
-    content = build_context(vault, scope=args.scope, purpose=args.purpose)
+    try:
+        content = build_context(
+            vault,
+            scope=args.scope,
+            purpose=args.purpose,
+            limit=args.limit,
+            max_chars=args.max_chars,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
     if args.output:
         args.output.write_text(content, encoding="utf-8")
         print(f"wrote {args.output}")
     else:
         print(content, end="")
+    return 0
+
+
+def cmd_context_explain(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        try:
+            package = compose_context(
+                vault,
+                scope=args.scope,
+                purpose=args.purpose,
+                limit=args.limit,
+                max_chars=args.max_chars,
+            )
+        except ValueError as exc:
+            write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
+            return 1
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "scope": args.scope,
+                "purpose": args.purpose,
+                "limit": args.limit,
+                "max_chars": args.max_chars,
+                "available_reviewed_knowledge_count": package.available_count,
+                "reviewed_knowledge_count": len(package.reviewed_knowledge),
+                "selection": context_package_selection_payload(package, vault.root),
+            }
+        )
+        return 0
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        return 1
+    try:
+        package = compose_context(
+            vault,
+            scope=args.scope,
+            purpose=args.purpose,
+            limit=args.limit,
+            max_chars=args.max_chars,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print(render_context_explanation(package, vault.root), end="")
     return 0
 
 
@@ -465,6 +555,8 @@ def cmd_context_write(args: argparse.Namespace) -> int:
             args.vault,
             scope=args.scope,
             purpose=args.purpose,
+            limit=args.limit,
+            max_chars=args.max_chars,
             title=args.title,
             slug=args.slug,
             next_review=args.next_review,
@@ -474,6 +566,92 @@ def cmd_context_write(args: argparse.Namespace) -> int:
         return 1
     print(f"created {created.note_id}\t{created.path}")
     return 0
+
+
+def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> dict[str, Any]:
+    return {
+        "included": [context_selection_payload(selection, vault_root) for selection in package.included],
+        "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
+        "lifecycle_excluded": [
+            context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
+        ],
+    }
+
+
+def context_selection_payload(selection: ContextSelection, vault_root: Path) -> dict[str, Any]:
+    payload = note_summary(selection.note, vault_root)
+    payload.update(
+        {
+            "selection_status": selection.status,
+            "selection_reason": selection.reason,
+            "scope_score": selection.score,
+            "content_chars": selection.content_chars,
+        }
+    )
+    return payload
+
+
+def render_context_explanation(package: ContextPackage, vault_root: Path) -> str:
+    lines = ["# Noesis Context Explanation", ""]
+    if package.scope:
+        lines.extend([f"Scope: {package.scope}", ""])
+    if package.purpose:
+        lines.extend([f"Purpose: {package.purpose}", ""])
+    if package.limit is not None or package.max_chars is not None:
+        budget = []
+        if package.limit is not None:
+            budget.append(f"limit {package.limit}")
+        if package.max_chars is not None:
+            budget.append(f"max_chars {package.max_chars}")
+        lines.extend([f"Budget: {', '.join(budget)}", ""])
+    lines.extend(
+        [
+            "Active guidance is built only from current reviewed knowledge.",
+            "Lifecycle-excluded notes are background provenance only.",
+            "",
+            "## Summary",
+            "",
+            f"- Current reviewed knowledge available: {package.available_count}",
+            f"- Included in active context: {len(package.included)}",
+            f"- Excluded by scope or budget: {len(package.excluded)}",
+            f"- Lifecycle-excluded background notes: {len(package.lifecycle_excluded)}",
+            "",
+            "## Included Active Guidance",
+            "",
+        ]
+    )
+    if package.included:
+        for selection in package.included:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No current reviewed knowledge selected.")
+
+    lines.extend(["", "## Excluded By Scope Or Budget", ""])
+    if package.excluded:
+        for selection in package.excluded:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No current reviewed knowledge was excluded by scope or budget.")
+
+    lines.extend(["", "## Lifecycle-Excluded Background", ""])
+    if package.lifecycle_excluded:
+        for selection in package.lifecycle_excluded:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No stale, superseded, or archived reviewed memory found.")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def format_selection_line(selection: ContextSelection, vault_root: Path) -> str:
+    try:
+        rel_path = selection.note.path.relative_to(vault_root).as_posix()
+    except ValueError:
+        rel_path = selection.note.rel_path.as_posix()
+    return (
+        f"- {selection.note.noesis_id} ({selection.status}, score={selection.score}, "
+        f"chars={selection.content_chars}) - {selection.reason}; path: {rel_path}"
+    )
 
 
 def validation_error_payload(vault: Vault, issues: list[Any]) -> dict[str, Any]:
