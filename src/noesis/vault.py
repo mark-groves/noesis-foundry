@@ -343,7 +343,10 @@ class Vault:
                 note
                 for note in self.notes
                 if note.type == "operational-context"
-                and context_references_memory(self, note, target.noesis_id)
+                and (
+                    context_references_memory(self, note, target.noesis_id)
+                    or relationship_contains(self, note.metadata, "excluded_memory", target.noesis_id)
+                )
             ),
             key=lambda note: note.rel_path.as_posix(),
         )
@@ -1450,12 +1453,14 @@ The canonical sortable queue is [[review-queue.base]].
         Path("_bases/review-queue.base"): """filters:
   and:
     - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
-    - review_state != "none"
-    - review_state != "reviewed"
-    - review_state != "approved"
 views:
   - type: table
     name: Open review queue
+    filters:
+      and:
+        - review_state != "none"
+        - review_state != "reviewed"
+        - review_state != "approved"
     groupBy:
       property: review_state
       direction: ASC

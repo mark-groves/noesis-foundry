@@ -133,6 +133,12 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in workbench["impact"]["dependent_contexts"]],
         )
+        stale_workbench = handlers.show_review("stale-custom-plugin-first")
+        self.assertTrue(stale_workbench["ok"], stale_workbench)
+        self.assertIn(
+            "context-first-cli-mcp-workflow",
+            [note["noesis_id"] for note in stale_workbench["impact"]["dependent_contexts"]],
+        )
 
         note = handlers.get_note("reviewed-knowledge-noesis-lifecycle")
         self.assertTrue(note["ok"], note)

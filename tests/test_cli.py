@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+import yaml
+
 from noesis.vault import Vault
 
 
@@ -170,6 +172,43 @@ class NoesisCliTests(unittest.TestCase):
             )
             self.assertIn("source-noesis-readme", [note["noesis_id"] for note in payload["lineage"]])
             self.assertIn("Clarify the claim", payload["changes_requested"][0]["changes_requested"])
+
+    def test_review_show_reports_contexts_that_exclude_stale_memory(self) -> None:
+        show = run_noesis(
+            "review",
+            "show",
+            "stale-custom-plugin-first",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--json",
+        )
+        self.assertEqual(show.returncode, 0, show.stderr)
+        payload = parse_json_stdout(show)
+        self.assertIn(
+            "context-first-cli-mcp-workflow",
+            [note["noesis_id"] for note in payload["impact"]["dependent_contexts"]],
+        )
+
+    def test_review_queue_base_scopes_open_queue_filters_to_one_view(self) -> None:
+        base = yaml.safe_load((EXAMPLE_VAULT / "_bases" / "review-queue.base").read_text(encoding="utf-8"))
+        top_filters = base["filters"]["and"]
+        self.assertNotIn('review_state != "approved"', top_filters)
+        open_queue = next(view for view in base["views"] if view["name"] == "Open review queue")
+        scheduled = next(view for view in base["views"] if view["name"] == "Due and scheduled reviews")
+        self.assertIn('review_state != "approved"', open_queue["filters"]["and"])
+        self.assertNotIn("filters", scheduled)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            initialized_base = yaml.safe_load(
+                (vault_path / "_bases" / "review-queue.base").read_text(encoding="utf-8")
+            )
+            initialized_open_queue = next(
+                view for view in initialized_base["views"] if view["name"] == "Open review queue"
+            )
+            self.assertIn('review_state != "approved"', initialized_open_queue["filters"]["and"])
 
     def test_review_due_on_rejects_invalid_values(self) -> None:
         queue = run_noesis(
