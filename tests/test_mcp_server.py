@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+import sys
 import tempfile
+import types
 import unittest
+from unittest.mock import patch
 
-from noesis.mcp_server import NoesisMcpHandlers
+from noesis.mcp_server import NoesisMcpHandlers, create_server
 from noesis.vault import Vault, build_context, init_vault
 
 
@@ -13,7 +16,84 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
 
 
+class RecordingFastMCP:
+    instances: list["RecordingFastMCP"] = []
+
+    def __init__(self, name: str, **kwargs: object) -> None:
+        self.name = name
+        self.kwargs = kwargs
+        self.tools: dict[str, object] = {}
+        self.resources: dict[str, object] = {}
+        self.runs: list[dict[str, object]] = []
+        self.instances.append(self)
+
+    def tool(self) -> object:
+        def register(function: object) -> object:
+            self.tools[getattr(function, "__name__")] = function
+            return function
+
+        return register
+
+    def resource(self, uri: str) -> object:
+        def register(function: object) -> object:
+            self.resources[uri] = function
+            return function
+
+        return register
+
+    def run(self, **kwargs: object) -> None:
+        self.runs.append(kwargs)
+
+
+def fake_fastmcp_modules() -> dict[str, types.ModuleType]:
+    mcp = types.ModuleType("mcp")
+    server = types.ModuleType("mcp.server")
+    fastmcp = types.ModuleType("mcp.server.fastmcp")
+    fastmcp.FastMCP = RecordingFastMCP
+    return {"mcp": mcp, "mcp.server": server, "mcp.server.fastmcp": fastmcp}
+
+
 class NoesisMcpHandlerTests(unittest.TestCase):
+    def test_create_server_registers_expected_mcp_surface(self) -> None:
+        # FastMCP does not expose a stable public introspection API across all
+        # installed versions, so this smoke test records Noesis' registration
+        # calls without starting the long-running stdio transport.
+        RecordingFastMCP.instances = []
+
+        with patch.dict(sys.modules, fake_fastmcp_modules()):
+            server = create_server(EXAMPLE_VAULT)
+
+        self.assertIsInstance(server, RecordingFastMCP)
+        self.assertEqual(server.name, "Noesis Foundry")
+        self.assertEqual(server.kwargs, {"json_response": True})
+        self.assertEqual(
+            sorted(server.tools),
+            [
+                "noesis_approve_review",
+                "noesis_build_context",
+                "noesis_create_claim_draft",
+                "noesis_create_evidence_draft",
+                "noesis_create_synthesis_draft",
+                "noesis_get_note",
+                "noesis_get_review_queue",
+                "noesis_ingest_source",
+                "noesis_lint_vault",
+                "noesis_mark_memory_stale",
+                "noesis_promote_synthesis",
+                "noesis_request_review_changes",
+                "noesis_search_notes",
+                "noesis_trace_lineage",
+                "noesis_write_context",
+            ],
+        )
+        self.assertEqual(sorted(server.resources), ["noesis://note/{note}", "noesis://vault/summary"])
+
+        lint = server.tools["noesis_lint_vault"]()
+        self.assertTrue(lint["ok"], lint)
+        summary = server.resources["noesis://vault/summary"]()
+        self.assertTrue(summary["ok"], summary)
+        self.assertGreater(summary["note_count"], 0)
+
     def test_read_tools_return_structured_example_vault_data(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
@@ -50,7 +130,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
         result = handlers.search_notes(
-            query="lifecycle",
+            query="useful memory requires",
             note_type="claim",
             review_state="approved",
             limit=10,
@@ -173,7 +253,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             self.assertTrue(stale["ok"], stale)
             self.assertEqual(Vault.load(vault_path).validate(), [])
-            context = handlers.build_context()
+            context = handlers.build_context(scope="lifecycle")
             self.assertTrue(context["ok"], context)
             self.assertIn("No current reviewed knowledge found.", context["content"])
             self.assertNotIn("Noesis should represent memory as a lifecycle", context["content"])
