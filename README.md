@@ -221,6 +221,20 @@ prefer these commands when available and fall back to direct Markdown edits
 only as an adapter behavior. Neither MCP nor skills should introduce a second
 schema or make Obsidian plugin APIs the source of truth.
 
+### Portable Agent Skills
+
+Repo-local portable skills live in [`skills`](./skills):
+
+| Skill | Purpose |
+| --- | --- |
+| [`noesis-ingest`](./skills/noesis-ingest/SKILL.md) | Add source material, preserve raw files, and create evidence drafts. |
+| [`noesis-claim-review`](./skills/noesis-claim-review/SKILL.md) | Review draft memory, write audit notes, approve supported memory, or request changes. |
+| [`noesis-context`](./skills/noesis-context/SKILL.md) | Build or write focused operational context from current reviewed knowledge. |
+
+The skills are documentation adapters over the same file-backed contract as the
+CLI and MCP server. They point agents back to this README, the architecture
+docs, and the CLI instead of duplicating the canonical schema.
+
 ### MCP MVP
 
 The MCP server is the next adapter layer over the same vault contract. It does
