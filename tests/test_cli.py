@@ -211,19 +211,20 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn('review_state != "approved"', initialized_open_queue["filters"]["and"])
 
     def test_review_due_on_rejects_invalid_values(self) -> None:
-        queue = run_noesis(
-            "review",
-            "queue",
-            "--vault",
-            str(EXAMPLE_VAULT),
-            "--due-on",
-            "not-a-date",
-            "--json",
-        )
-        self.assertNotEqual(queue.returncode, 0)
-        queue_payload = parse_json_stdout(queue)
-        self.assertEqual(queue_payload["ok"], False)
-        self.assertEqual(queue_payload["error"], "due_on must be YYYY-MM-DD")
+        for invalid_due_on in ("not-a-date", "2026-02-31"):
+            queue = run_noesis(
+                "review",
+                "queue",
+                "--vault",
+                str(EXAMPLE_VAULT),
+                "--due-on",
+                invalid_due_on,
+                "--json",
+            )
+            self.assertNotEqual(queue.returncode, 0)
+            queue_payload = parse_json_stdout(queue)
+            self.assertEqual(queue_payload["ok"], False)
+            self.assertEqual(queue_payload["error"], "due_on must be YYYY-MM-DD")
 
         summary = run_noesis(
             "review",
@@ -269,6 +270,60 @@ class NoesisCliTests(unittest.TestCase):
             empty_payload = parse_json_stdout(empty_queue)
             self.assertEqual(empty_payload["ok"], False)
             self.assertEqual(empty_payload["error"], "due_on must be YYYY-MM-DD")
+
+    def test_review_workbench_treats_impossible_metadata_dates_as_unscheduled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "stale" / "stale-custom-plugin-first.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-06-05",
+                    'next_review: "2026-02-31"',
+                ),
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            queue = run_noesis("review", "queue", "--vault", str(vault_path), "--json")
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            queue_payload = parse_json_stdout(queue)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in queue_payload["notes"]],
+            )
+
+            summary = run_noesis(
+                "review",
+                "summary",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(summary.returncode, 0, summary.stderr)
+            summary_payload = parse_json_stdout(summary)
+            self.assertNotIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in summary_payload["due_notes"]],
+            )
+
+            show = run_noesis(
+                "review",
+                "show",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            show_payload = parse_json_stdout(show)
+            self.assertEqual(show_payload["review_due"], False)
 
     def test_example_agent_memory_dogfood_context_uses_reviewed_knowledge(self) -> None:
         context = run_noesis(

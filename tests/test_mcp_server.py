@@ -174,9 +174,10 @@ class NoesisMcpHandlerTests(unittest.TestCase):
     def test_review_due_on_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
-        queue = handlers.get_review_queue(due_on="not-a-date")
-        self.assertEqual(queue["ok"], False)
-        self.assertEqual(queue["error"], "due_on must be YYYY-MM-DD")
+        for invalid_due_on in ("not-a-date", "2026-02-31"):
+            queue = handlers.get_review_queue(due_on=invalid_due_on)
+            self.assertEqual(queue["ok"], False)
+            self.assertEqual(queue["error"], "due_on must be YYYY-MM-DD")
 
         summary = handlers.get_review_summary(due_on="not-a-date")
         self.assertEqual(summary["ok"], False)
@@ -194,6 +195,41 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             empty_queue = empty_handlers.get_review_queue(due_on="not-a-date")
             self.assertEqual(empty_queue["ok"], False)
             self.assertEqual(empty_queue["error"], "due_on must be YYYY-MM-DD")
+
+    def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "stale" / "stale-custom-plugin-first.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-06-05",
+                    'next_review: "2026-02-31"',
+                ),
+                encoding="utf-8",
+            )
+            handlers = NoesisMcpHandlers(vault_path)
+
+            lint = handlers.lint_vault()
+            self.assertTrue(lint["ok"], lint)
+
+            queue = handlers.get_review_queue()
+            self.assertTrue(queue["ok"], queue)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in queue["notes"]],
+            )
+
+            summary = handlers.get_review_summary(due_on="2026-06-13")
+            self.assertTrue(summary["ok"], summary)
+            self.assertNotIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in summary["due_notes"]],
+            )
+
+            workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], False)
 
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()
