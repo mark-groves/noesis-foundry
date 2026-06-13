@@ -50,7 +50,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
         result = handlers.search_notes(
-            query="lifecycle",
+            query="useful memory requires",
             note_type="claim",
             review_state="approved",
             limit=10,
@@ -173,7 +173,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             self.assertTrue(stale["ok"], stale)
             self.assertEqual(Vault.load(vault_path).validate(), [])
-            context = handlers.build_context()
+            context = handlers.build_context(scope="lifecycle")
             self.assertTrue(context["ok"], context)
             self.assertIn("No current reviewed knowledge found.", context["content"])
             self.assertNotIn("Noesis should represent memory as a lifecycle", context["content"])

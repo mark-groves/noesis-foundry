@@ -31,6 +31,43 @@ class NoesisCliTests(unittest.TestCase):
         self.assertIn("validation ok", result.stdout)
         self.assertIn("notes:", result.stdout)
 
+    def test_example_agent_memory_dogfood_context_uses_reviewed_knowledge(self) -> None:
+        context = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--purpose",
+            "prepare a future agent",
+        )
+        self.assertEqual(context.returncode, 0, context.stderr)
+        self.assertIn("reviewed-knowledge-agent-memory-dogfood", context.stdout)
+        self.assertIn("Agents should turn session artifacts into reviewed Noesis memory", context.stdout)
+        self.assertNotIn("Agents can safely copy global summary snippets", context.stdout)
+        self.assertNotIn("stale-agent-memory-global-summary", context.stdout)
+
+        context_note = (
+            EXAMPLE_VAULT / "context" / "operational-context-agent-memory-dogfood.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("[[reviewed-knowledge-agent-memory-dogfood]]", context_note)
+        self.assertIn("[[stale-agent-memory-global-summary]]", context_note)
+
+        trace = run_noesis("trace", "context-agent-memory-dogfood", "--vault", str(EXAMPLE_VAULT))
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        for expected in (
+            "source-agent-memory-session",
+            "evidence-agent-memory-dogfood",
+            "claim-agent-memory-dogfood",
+            "review-agent-memory-dogfood",
+            "synthesis-agent-memory-dogfood",
+            "reviewed-knowledge-agent-memory-dogfood",
+            "context-agent-memory-dogfood",
+            "stale-agent-memory-global-summary",
+        ):
+            self.assertIn(expected, trace.stdout)
+
     def test_initialized_vault_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
@@ -390,7 +427,14 @@ class NoesisCliTests(unittest.TestCase):
             )
             self.assertEqual(review.returncode, 0, review.stderr)
 
-            context = run_noesis("context", "build", "--vault", str(vault_path))
+            context = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "lifecycle",
+            )
             self.assertEqual(context.returncode, 0, context.stderr)
             self.assertIn("No current reviewed knowledge found.", context.stdout)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
@@ -851,7 +895,14 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
 
-            context = run_noesis("context", "build", "--vault", str(vault_path))
+            context = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "lifecycle",
+            )
             self.assertEqual(context.returncode, 0, context.stderr)
             self.assertIn("No current reviewed knowledge found.", context.stdout)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
@@ -887,7 +938,14 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
 
-            context = run_noesis("context", "build", "--vault", str(vault_path))
+            context = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "lifecycle",
+            )
             self.assertEqual(context.returncode, 0, context.stderr)
             self.assertIn("No current reviewed knowledge found.", context.stdout)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
