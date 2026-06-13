@@ -23,6 +23,11 @@ views:
       - updated
   - type: table
     name: Due and scheduled reviews
+    filters:
+      and:
+        - next_review != null
+        - review_state != "none"
+        - type != "review"
     groupBy:
       property: next_review
       direction: ASC

@@ -196,7 +196,10 @@ class NoesisCliTests(unittest.TestCase):
         open_queue = next(view for view in base["views"] if view["name"] == "Open review queue")
         scheduled = next(view for view in base["views"] if view["name"] == "Due and scheduled reviews")
         self.assertIn('review_state != "approved"', open_queue["filters"]["and"])
-        self.assertNotIn("filters", scheduled)
+        self.assertEqual(
+            scheduled["filters"]["and"],
+            ["next_review != null", 'review_state != "none"', 'type != "review"'],
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
@@ -208,7 +211,14 @@ class NoesisCliTests(unittest.TestCase):
             initialized_open_queue = next(
                 view for view in initialized_base["views"] if view["name"] == "Open review queue"
             )
+            initialized_scheduled = next(
+                view for view in initialized_base["views"] if view["name"] == "Due and scheduled reviews"
+            )
             self.assertIn('review_state != "approved"', initialized_open_queue["filters"]["and"])
+            self.assertEqual(
+                initialized_scheduled["filters"]["and"],
+                ["next_review != null", 'review_state != "none"', 'type != "review"'],
+            )
 
     def test_review_due_on_rejects_invalid_values(self) -> None:
         for invalid_due_on in ("not-a-date", "2026-02-31"):
