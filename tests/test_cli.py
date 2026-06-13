@@ -591,6 +591,49 @@ sources:
         self.assertIn("stale-agent-memory-global-summary", text.stdout)
         self.assertNotIn("Agents can safely copy global summary snippets", text.stdout)
 
+    def test_context_explain_reports_archived_history_as_lifecycle_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            archived_note = vault_path / "archive" / "history" / "archived-context-note.md"
+            archived_note.write_text(
+                """---
+title: Archived Context Note
+noesis_id: archived-context-note
+type: archived-history
+lifecycle_stage: archive
+status: archived
+review_state: reviewed
+confidence: medium
+created: 2026-06-13
+updated: 2026-06-13
+tags:
+  - noesis
+  - archive
+aliases: []
+---
+
+# Archived Context Note
+
+This archived note is provenance, not active guidance.
+""",
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            result = run_noesis("context", "explain", "--vault", str(vault_path), "--json")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = parse_json_stdout(result)
+            lifecycle_excluded = payload["selection"]["lifecycle_excluded"]
+            archived = [
+                note for note in lifecycle_excluded if note["noesis_id"] == "archived-context-note"
+            ]
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0]["selection_status"], "lifecycle_excluded")
+            self.assertIn("archived-history has status 'archived'", archived[0]["selection_reason"])
+
     def test_review_request_changes_keeps_note_in_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -1796,8 +1796,6 @@ def context_include_reason(scope: str | None, score: int) -> str:
 def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
     selections: list[ContextSelection] = []
     for note in vault.notes:
-        if note.type not in {"reviewed-knowledge", "stale-memory"}:
-            continue
         if not is_excluded(note):
             continue
         selections.append(
