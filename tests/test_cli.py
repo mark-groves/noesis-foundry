@@ -48,6 +48,10 @@ class NoesisCliTests(unittest.TestCase):
         self.assertGreater(payload["note_count"], 0)
         self.assertEqual(payload["issue_count"], 0)
         self.assertEqual(payload["issues"], [])
+        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["compatible"], True)
+        self.assertEqual(payload["complete"], True)
+        self.assertEqual(payload["ready_for_cli_mcp"], True)
 
         with tempfile.TemporaryDirectory() as tmp:
             missing_vault = Path(tmp) / "missing-vault"
@@ -58,6 +62,30 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(invalid_payload["vault_path"], str(missing_vault.resolve()))
             self.assertGreater(invalid_payload["issue_count"], 0)
             self.assertIn("vault path does not exist", invalid_payload["issues"][0]["message"])
+
+    def test_vault_doctor_reports_contract_readiness(self) -> None:
+        result = run_noesis("vault", "doctor", str(EXAMPLE_VAULT), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["compatible"], True)
+        self.assertEqual(payload["complete"], True)
+        self.assertEqual(payload["ready_for_cli_mcp"], True)
+        self.assertEqual(payload["contract"]["present"], True)
+        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["issue_count"], 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_vault = Path(tmp) / "legacy-vault"
+            shutil.copytree(EXAMPLE_VAULT, legacy_vault)
+            (legacy_vault / "noesis.vault.yaml").unlink()
+
+            legacy = run_noesis("vault", "doctor", str(legacy_vault), "--json")
+            self.assertNotEqual(legacy.returncode, 0)
+            legacy_payload = parse_json_stdout(legacy)
+            self.assertEqual(legacy_payload["compatible"], False)
+            self.assertEqual(legacy_payload["ready_for_cli_mcp"], False)
+            self.assertIn("missing Noesis V1 contract metadata", legacy_payload["issues"][0]["message"])
 
     def test_review_queue_json_matches_text_order(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT), "--json")
@@ -126,6 +154,7 @@ class NoesisCliTests(unittest.TestCase):
             self.assertTrue((vault_path / "_bases" / "review-queue.base").exists())
             self.assertTrue((vault_path / "_canvas" / "noesis-lifecycle.canvas").exists())
             self.assertTrue((vault_path / "_templates" / "source.md").exists())
+            self.assertTrue((vault_path / "noesis.vault.yaml").exists())
 
             evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
             self.assertIn('  - "[[<source-note>]]"', evidence_template)

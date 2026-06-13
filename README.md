@@ -167,7 +167,9 @@ The plugin and adapter decision is captured in
 
 A small example vault lives in [`examples/noesis-vault`](./examples/noesis-vault)
 and demonstrates the complete Noesis lifecycle from source to operational
-context.
+context. Initialized V1 vaults also include `noesis.vault.yaml`, a small
+root-level compatibility artifact that records the vault contract version
+without requiring every note to carry version metadata.
 
 ### First CLI Slice
 
@@ -175,10 +177,12 @@ The first working CLI is intentionally file-backed. It treats an Obsidian vault
 as ordinary Markdown files with flat YAML frontmatter, plus Obsidian Base and
 Canvas files as human-facing views.
 
-Run commands from the repository with `PYTHONPATH=src python -m noesis ...`, or
-install the package in editable mode to use the `noesis` console script.
+Run commands from the repository with `PYTHONPATH=src python -m noesis ...`.
+For local console-script use, install the package into a virtual environment
+and run `noesis ...` or `noesis-mcp ...` from that environment.
 
 ```bash
+PYTHONPATH=src python -m noesis vault doctor examples/noesis-vault
 PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
 PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
@@ -199,8 +203,9 @@ Supported commands:
 
 | Command | Purpose |
 | --- | --- |
+| `noesis vault doctor <path>` | Report contract compatibility, validation completeness, and CLI/MCP readiness. |
 | `noesis vault validate <path>` | Validate required frontmatter, lifecycle stage/status values, wikilinks, Base YAML, Canvas JSON, and active-context exclusions. |
-| `noesis vault init <path>` | Create the folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
+| `noesis vault init <path>` | Create the V1 contract metadata file, folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/` and create a linked source note in `sources/`. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
 | `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
@@ -220,6 +225,15 @@ builder, and lifecycle write functions. Portable Agent Skills remain a future
 adapter layer; when added, they should prefer the CLI or MCP tools and fall back
 to direct Markdown edits only as adapter behavior. Neither MCP nor skills should
 introduce a second schema or make Obsidian plugin APIs the source of truth.
+
+The supported local install smoke path is:
+
+```bash
+python -m venv --system-site-packages /tmp/noesis-smoke
+/tmp/noesis-smoke/bin/python -m pip install -e .
+/tmp/noesis-smoke/bin/noesis vault doctor examples/noesis-vault --json
+/tmp/noesis-smoke/bin/noesis-mcp --help
+```
 
 ### Portable Agent Skills
 

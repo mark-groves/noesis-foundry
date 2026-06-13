@@ -28,6 +28,18 @@ FOLDERS = [
     "_templates",
 ]
 
+CONTRACT_FILE = Path("noesis.vault.yaml")
+CONTRACT_VERSION = "1"
+CONTRACT_KIND = "vault"
+CONTRACT_SOURCE_OF_TRUTH = "markdown-flat-yaml"
+CONTRACT_REQUIRED_PROPERTIES = {
+    "noesis_contract",
+    "contract_version",
+    "source_of_truth",
+    "created",
+    "updated",
+}
+
 NOTE_FOLDERS = {
     "sources",
     "evidence",
@@ -177,6 +189,28 @@ class CreatedNote:
     path: Path
 
 
+@dataclass(frozen=True)
+class VaultDoctor:
+    root: Path
+    contract_path: Path
+    contract: dict[str, Any]
+    contract_issues: list[Issue]
+    validation_issues: list[Issue]
+    note_count: int
+
+    @property
+    def compatible(self) -> bool:
+        return not self.contract_issues
+
+    @property
+    def complete(self) -> bool:
+        return not self.validation_issues
+
+    @property
+    def ready_for_cli_mcp(self) -> bool:
+        return self.compatible and self.complete
+
+
 @dataclass
 class Vault:
     root: Path
@@ -227,12 +261,26 @@ class Vault:
 
     def validate(self) -> list[Issue]:
         issues = list(self.issues)
+        issues.extend(validate_contract(self.root))
         issues.extend(validate_folders(self.root))
         issues.extend(validate_notes(self))
         issues.extend(validate_wikilinks(self))
         issues.extend(validate_bases(self.root))
         issues.extend(validate_canvases(self.root))
         return sorted(issues, key=lambda issue: issue.path.as_posix())
+
+    def doctor(self) -> VaultDoctor:
+        contract = read_contract(self.root)
+        contract_issues = validate_contract(self.root)
+        validation_issues = self.validate()
+        return VaultDoctor(
+            root=self.root,
+            contract_path=self.root / CONTRACT_FILE,
+            contract=contract,
+            contract_issues=contract_issues,
+            validation_issues=validation_issues,
+            note_count=len(self.notes),
+        )
 
     def review_queue(self) -> list[Note]:
         return sorted(
@@ -369,6 +417,63 @@ def validate_folders(root: Path) -> list[Issue]:
         for folder in FOLDERS
         if not (root / folder).is_dir()
     ]
+
+
+def read_contract(root: Path) -> dict[str, Any]:
+    path = root / CONTRACT_FILE
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def validate_contract(root: Path) -> list[Issue]:
+    if not root.is_dir():
+        return []
+
+    path = root / CONTRACT_FILE
+    if not path.exists():
+        return [
+            Issue(
+                path,
+                f"missing Noesis V{CONTRACT_VERSION} contract metadata; run noesis vault init <path> to add it",
+            )
+        ]
+    if not path.is_file():
+        return [Issue(path, "Noesis contract metadata path is not a file")]
+
+    try:
+        metadata = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        return [Issue(path, f"invalid Noesis contract YAML: {exc}")]
+    if not isinstance(metadata, dict):
+        return [Issue(path, "Noesis contract metadata must be a YAML mapping")]
+
+    issues: list[Issue] = []
+    for key, value in metadata.items():
+        if isinstance(value, dict):
+            issues.append(Issue(path, f"Noesis contract property {key!r} must be flat, not a mapping"))
+
+    missing = sorted(CONTRACT_REQUIRED_PROPERTIES - metadata.keys())
+    if missing:
+        issues.append(Issue(path, f"missing Noesis contract properties: {', '.join(missing)}"))
+
+    if metadata.get("noesis_contract") != CONTRACT_KIND:
+        issues.append(Issue(path, f"noesis_contract must be {CONTRACT_KIND!r}"))
+    if str(metadata.get("contract_version", "")) != CONTRACT_VERSION:
+        issues.append(Issue(path, f"contract_version must be supported version {CONTRACT_VERSION!r}"))
+    if metadata.get("source_of_truth") != CONTRACT_SOURCE_OF_TRUTH:
+        issues.append(Issue(path, f"source_of_truth must be {CONTRACT_SOURCE_OF_TRUTH!r}"))
+    for date_key in ("created", "updated"):
+        if date_key in metadata and not is_date_like(metadata[date_key]):
+            issues.append(Issue(path, f"{date_key} must be a date or date-like string"))
+
+    return issues
 
 
 def validate_notes(vault: Vault) -> list[Issue]:
@@ -1277,6 +1382,13 @@ def ensure_valid_vault(vault_path: Path | str) -> Path:
 
 def default_vault_files(today: str) -> dict[Path, str]:
     return {
+        CONTRACT_FILE: f"""noesis_contract: {CONTRACT_KIND}
+contract_version: "{CONTRACT_VERSION}"
+source_of_truth: {CONTRACT_SOURCE_OF_TRUTH}
+requires_noesis: ">=0.1.0"
+created: {today}
+updated: {today}
+""",
         Path("_dashboards/noesis-review-dashboard.md"): f"""---
 title: Noesis Review Dashboard
 noesis_id: dashboard-review
