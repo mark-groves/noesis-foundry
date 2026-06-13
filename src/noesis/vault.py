@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 import json
 from pathlib import Path
 import re
@@ -1985,6 +1985,8 @@ def review_cutoff_date(value: str | date | None) -> date:
 
 
 def parse_review_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
     if isinstance(value, date):
         return value
     if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):

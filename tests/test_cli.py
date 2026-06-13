@@ -325,6 +325,68 @@ class NoesisCliTests(unittest.TestCase):
             show_payload = parse_json_stdout(show)
             self.assertEqual(show_payload["review_due"], False)
 
+    def test_review_workbench_normalizes_metadata_datetimes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "stale" / "stale-custom-plugin-first.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-06-05",
+                    "next_review: 2026-06-13 09:00:00",
+                ),
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            queue = run_noesis(
+                "review",
+                "queue",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            queue_payload = parse_json_stdout(queue)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in queue_payload["notes"]],
+            )
+
+            summary = run_noesis(
+                "review",
+                "summary",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(summary.returncode, 0, summary.stderr)
+            summary_payload = parse_json_stdout(summary)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in summary_payload["due_notes"]],
+            )
+
+            show = run_noesis(
+                "review",
+                "show",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            show_payload = parse_json_stdout(show)
+            self.assertEqual(show_payload["review_due"], True)
+
     def test_example_agent_memory_dogfood_context_uses_reviewed_knowledge(self) -> None:
         context = run_noesis(
             "context",
