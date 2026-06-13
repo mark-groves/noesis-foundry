@@ -1,12 +1,14 @@
 filters:
   and:
     - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
-    - review_state != "none"
-    - review_state != "reviewed"
-    - review_state != "approved"
 views:
   - type: table
-    name: Review queue
+    name: Open review queue
+    filters:
+      and:
+        - review_state != "none"
+        - review_state != "reviewed"
+        - review_state != "approved"
     groupBy:
       property: review_state
       direction: ASC
@@ -18,3 +20,21 @@ views:
       - review_state
       - confidence
       - next_review
+      - updated
+  - type: table
+    name: Due and scheduled reviews
+    filters:
+      and:
+        - next_review != null
+        - review_state != "none"
+        - type != "review"
+    groupBy:
+      property: next_review
+      direction: ASC
+    order:
+      - next_review
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state

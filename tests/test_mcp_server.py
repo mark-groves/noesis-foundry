@@ -76,12 +76,14 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 "noesis_create_synthesis_draft",
                 "noesis_get_note",
                 "noesis_get_review_queue",
+                "noesis_get_review_summary",
                 "noesis_ingest_source",
                 "noesis_lint_vault",
                 "noesis_mark_memory_stale",
                 "noesis_promote_synthesis",
                 "noesis_request_review_changes",
                 "noesis_search_notes",
+                "noesis_show_review",
                 "noesis_trace_lineage",
                 "noesis_write_context",
             ],
@@ -108,6 +110,48 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         expected_ids = [note.noesis_id for note in Vault.load(EXAMPLE_VAULT).review_queue()]
         self.assertEqual(queue_ids, expected_ids)
         self.assertIn("stale-custom-plugin-first", queue_ids)
+
+        due_queue = handlers.get_review_queue(note_type="stale-memory", due=True, due_on="2026-06-13")
+        self.assertTrue(due_queue["ok"], due_queue)
+        self.assertEqual([note["noesis_id"] for note in due_queue["notes"]], ["stale-custom-plugin-first"])
+        self.assertEqual(due_queue["filters"]["type"], "stale-memory")
+        scheduled_due_queue = handlers.get_review_queue(due_on="2026-06-29")
+        self.assertTrue(scheduled_due_queue["ok"], scheduled_due_queue)
+        scheduled_due_ids = [note["noesis_id"] for note in scheduled_due_queue["notes"]]
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", scheduled_due_ids)
+        self.assertIn("context-first-cli-mcp-workflow", scheduled_due_ids)
+        self.assertNotIn("review-local-first-lifecycle", scheduled_due_ids)
+        self.assertNotIn("review-queue", scheduled_due_ids)
+
+        summary = handlers.get_review_summary(due_on="2026-06-13")
+        self.assertTrue(summary["ok"], summary)
+        self.assertGreaterEqual(summary["pending_count"], 1)
+        self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["due_notes"]])
+
+        workbench = handlers.show_review("claim-useful-memory-requires-lifecycle", due_on="2026-06-13")
+        self.assertTrue(workbench["ok"], workbench)
+        self.assertTrue(workbench["audit_status"]["ok"], workbench["audit_status"])
+        self.assertIn("evidence", workbench["support"])
+        self.assertIn(
+            "reviewed-knowledge-noesis-lifecycle",
+            [note["noesis_id"] for note in workbench["impact"]["dependent_reviewed_knowledge"]],
+        )
+        self.assertIn(
+            "context-first-cli-mcp-workflow",
+            [note["noesis_id"] for note in workbench["impact"]["dependent_contexts"]],
+        )
+        stale_workbench = handlers.show_review("stale-custom-plugin-first")
+        self.assertTrue(stale_workbench["ok"], stale_workbench)
+        self.assertIn(
+            "context-first-cli-mcp-workflow",
+            [note["noesis_id"] for note in stale_workbench["impact"]["dependent_contexts"]],
+        )
+        for note_id in ("context-first-cli-mcp-workflow", "stale-agent-memory-global-summary"):
+            generated_workbench = handlers.show_review(note_id)
+            self.assertTrue(generated_workbench["ok"], generated_workbench)
+            self.assertEqual(generated_workbench["note"]["review_state"], "reviewed")
+            self.assertEqual(generated_workbench["audit_status"]["requires_audit"], False)
+            self.assertEqual(generated_workbench["audit_status"]["ok"], True)
 
         note = handlers.get_note("reviewed-knowledge-noesis-lifecycle")
         self.assertTrue(note["ok"], note)
@@ -139,6 +183,101 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual(result["notes"][0]["noesis_id"], "claim-useful-memory-requires-lifecycle")
+
+    def test_review_due_on_errors_are_structured(self) -> None:
+        handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
+
+        for invalid_due_on in ("not-a-date", "2026-02-31"):
+            queue = handlers.get_review_queue(due_on=invalid_due_on)
+            self.assertEqual(queue["ok"], False)
+            self.assertEqual(queue["error"], "due_on must be YYYY-MM-DD")
+
+        summary = handlers.get_review_summary(due_on="not-a-date")
+        self.assertEqual(summary["ok"], False)
+        self.assertEqual(summary["error"], "due_on must be YYYY-MM-DD")
+
+        show = handlers.show_review("source-noesis-readme", due_on="not-a-date")
+        self.assertEqual(show["ok"], False)
+        self.assertEqual(show["error"], "due_on must be YYYY-MM-DD")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init_vault(vault_path)
+            empty_handlers = NoesisMcpHandlers(vault_path)
+
+            empty_queue = empty_handlers.get_review_queue(due_on="not-a-date")
+            self.assertEqual(empty_queue["ok"], False)
+            self.assertEqual(empty_queue["error"], "due_on must be YYYY-MM-DD")
+
+    def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "stale" / "stale-custom-plugin-first.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-06-05",
+                    'next_review: "2026-02-31"',
+                ),
+                encoding="utf-8",
+            )
+            handlers = NoesisMcpHandlers(vault_path)
+
+            lint = handlers.lint_vault()
+            self.assertTrue(lint["ok"], lint)
+
+            queue = handlers.get_review_queue()
+            self.assertTrue(queue["ok"], queue)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in queue["notes"]],
+            )
+
+            summary = handlers.get_review_summary(due_on="2026-06-13")
+            self.assertTrue(summary["ok"], summary)
+            self.assertNotIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in summary["due_notes"]],
+            )
+
+            workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], False)
+
+    def test_review_handlers_normalize_metadata_datetimes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            note_path = vault_path / "stale" / "stale-custom-plugin-first.md"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-06-05",
+                    "next_review: 2026-06-13 09:00:00",
+                ),
+                encoding="utf-8",
+            )
+            handlers = NoesisMcpHandlers(vault_path)
+
+            lint = handlers.lint_vault()
+            self.assertTrue(lint["ok"], lint)
+
+            queue = handlers.get_review_queue(due_on="2026-06-13")
+            self.assertTrue(queue["ok"], queue)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in queue["notes"]],
+            )
+
+            summary = handlers.get_review_summary(due_on="2026-06-13")
+            self.assertTrue(summary["ok"], summary)
+            self.assertIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in summary["due_notes"]],
+            )
+
+            workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], True)
 
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()
