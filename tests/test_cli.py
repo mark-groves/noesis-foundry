@@ -78,6 +78,140 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(invalid_payload["error"], "vault validation failed")
             self.assertGreater(invalid_payload["issue_count"], 0)
 
+    def test_review_queue_filters_and_summary_due_dates(self) -> None:
+        due_queue = run_noesis(
+            "review",
+            "queue",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--type",
+            "stale-memory",
+            "--due",
+            "--due-on",
+            "2026-06-13",
+            "--json",
+        )
+        self.assertEqual(due_queue.returncode, 0, due_queue.stderr)
+        due_payload = parse_json_stdout(due_queue)
+        self.assertEqual(due_payload["filters"]["type"], "stale-memory")
+        self.assertEqual(due_payload["filters"]["due"], True)
+        self.assertEqual([note["noesis_id"] for note in due_payload["notes"]], ["stale-custom-plugin-first"])
+
+        claim_queue = run_noesis(
+            "review",
+            "queue",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--stage",
+            "claim",
+            "--json",
+        )
+        self.assertEqual(claim_queue.returncode, 0, claim_queue.stderr)
+        claim_payload = parse_json_stdout(claim_queue)
+        self.assertEqual([note["noesis_id"] for note in claim_payload["notes"]], ["claim-cli-authoring-loop"])
+
+        summary = run_noesis(
+            "review",
+            "summary",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "2026-06-13",
+            "--json",
+        )
+        self.assertEqual(summary.returncode, 0, summary.stderr)
+        summary_payload = parse_json_stdout(summary)
+        self.assertGreaterEqual(summary_payload["pending_count"], 1)
+        self.assertIn("ready-for-review", summary_payload["review_state_counts"])
+        self.assertIn(
+            "stale-custom-plugin-first",
+            [note["noesis_id"] for note in summary_payload["due_notes"]],
+        )
+
+    def test_review_show_json_reports_support_audit_impact_and_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            review = run_noesis(
+                "review",
+                "request-changes",
+                "claim-useful-memory-requires-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--changes-requested",
+                "Clarify the claim before it supports reviewed knowledge.",
+                "--slug",
+                "claim-workbench-change-request",
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+
+            show = run_noesis(
+                "review",
+                "show",
+                "claim-useful-memory-requires-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            payload = parse_json_stdout(show)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["note"]["noesis_id"], "claim-useful-memory-requires-lifecycle")
+            self.assertEqual(payload["note"]["review_state"], "changes-requested")
+            self.assertIn("sources", payload["support"])
+            self.assertIn("evidence", payload["support"])
+            self.assertTrue(payload["audit_status"]["ok"], payload["audit_status"])
+            self.assertIn(
+                "reviewed-knowledge-noesis-lifecycle",
+                [note["noesis_id"] for note in payload["impact"]["dependent_reviewed_knowledge"]],
+            )
+            self.assertIn("source-noesis-readme", [note["noesis_id"] for note in payload["lineage"]])
+            self.assertIn("Clarify the claim", payload["changes_requested"][0]["changes_requested"])
+
+    def test_review_due_on_rejects_invalid_values(self) -> None:
+        queue = run_noesis(
+            "review",
+            "queue",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "not-a-date",
+            "--json",
+        )
+        self.assertNotEqual(queue.returncode, 0)
+        queue_payload = parse_json_stdout(queue)
+        self.assertEqual(queue_payload["ok"], False)
+        self.assertEqual(queue_payload["error"], "due_on must be YYYY-MM-DD")
+
+        summary = run_noesis(
+            "review",
+            "summary",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "not-a-date",
+        )
+        self.assertNotEqual(summary.returncode, 0)
+        self.assertIn("ERROR due_on must be YYYY-MM-DD", summary.stderr)
+
+        show = run_noesis(
+            "review",
+            "show",
+            "reviewed-knowledge-noesis-lifecycle",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "not-a-date",
+            "--json",
+        )
+        self.assertNotEqual(show.returncode, 0)
+        show_payload = parse_json_stdout(show)
+        self.assertEqual(show_payload["ok"], False)
+        self.assertEqual(show_payload["error"], "due_on must be YYYY-MM-DD")
+
     def test_example_agent_memory_dogfood_context_uses_reviewed_knowledge(self) -> None:
         context = run_noesis(
             "context",

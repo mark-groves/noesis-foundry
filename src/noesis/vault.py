@@ -234,19 +234,110 @@ class Vault:
         issues.extend(validate_canvases(self.root))
         return sorted(issues, key=lambda issue: issue.path.as_posix())
 
-    def review_queue(self) -> list[Note]:
+    def review_queue(
+        self,
+        *,
+        review_state: str | None = None,
+        note_type: str | None = None,
+        lifecycle_stage: str | None = None,
+        due: bool = False,
+        due_on: str | date | None = None,
+    ) -> list[Note]:
+        notes: list[Note] = []
+        for note in self.notes:
+            if note.type == "dashboard":
+                continue
+            if review_state is None:
+                if note.review_state in REVIEW_DONE:
+                    continue
+            elif note.review_state != review_state:
+                continue
+            if note_type is not None and note.type != note_type:
+                continue
+            if lifecycle_stage is not None and note.lifecycle_stage != lifecycle_stage:
+                continue
+            if due and not note_review_due(note, due_on=due_on):
+                continue
+            notes.append(note)
+        return sort_review_notes(notes)
+
+    def review_summary(self, *, due_on: str | date | None = None) -> dict[str, Any]:
+        reviewable_notes = [note for note in self.notes if note.type != "dashboard"]
+        review_counts: dict[str, int] = {}
+        for note in reviewable_notes:
+            review_counts[note.review_state] = review_counts.get(note.review_state, 0) + 1
+        scheduled_candidates = [note for note in reviewable_notes if note.review_state != "none"]
+        due_notes = sort_review_notes(
+            [note for note in scheduled_candidates if note_review_due(note, due_on=due_on)]
+        )
+        scheduled_notes = sort_review_notes(
+            [note for note in scheduled_candidates if parse_review_date(note.metadata.get("next_review")) is not None]
+        )
+        return {
+            "review_state_counts": dict(sorted(review_counts.items())),
+            "pending_count": len(self.review_queue()),
+            "due_count": len(due_notes),
+            "due_notes": due_notes,
+            "next_review_notes": scheduled_notes[:10],
+        }
+
+    def review_audits_for(self, target: Note) -> list[Note]:
+        audits: list[Note] = []
+        for note in self.notes:
+            if note.type != "review":
+                continue
+            if relationship_contains(self, note.metadata, "reviewed_notes", target.noesis_id):
+                audits.append(note)
+                continue
+            if relationship_contains(self, target.metadata, "reviewed_by", note.noesis_id):
+                audits.append(note)
+        return sorted(
+            audits,
+            key=lambda note: (
+                str(note.metadata.get("reviewed_at", note.metadata.get("updated", ""))),
+                note.title.lower(),
+            ),
+        )
+
+    def support_notes_for(self, target: Note) -> dict[str, list[Note]]:
+        support: dict[str, list[Note]] = {}
+        for key in sorted(RELATIONSHIP_FIELDS & target.metadata.keys()):
+            notes: list[Note] = []
+            seen: set[str] = set()
+            for item in as_list(target.metadata.get(key)):
+                if not isinstance(item, str):
+                    continue
+                for link_target in extract_wikilinks(item):
+                    note = self.find_note(link_target)
+                    if note is None or note.noesis_id in seen:
+                        continue
+                    notes.append(note)
+                    seen.add(note.noesis_id)
+            if notes:
+                support[key] = sorted(notes, key=lambda note: (note.lifecycle_stage, note.rel_path.as_posix()))
+        return support
+
+    def dependent_reviewed_knowledge_for(self, target: Note) -> list[Note]:
         return sorted(
             (
                 note
                 for note in self.notes
-                if note.review_state not in REVIEW_DONE
-                and note.type != "dashboard"
+                if note.type == "reviewed-knowledge"
+                and note.noesis_id != target.noesis_id
+                and note_references_memory(self, note, target.noesis_id)
             ),
-            key=lambda note: (
-                str(note.metadata.get("next_review", "")),
-                note.lifecycle_stage,
-                note.title.lower(),
+            key=lambda note: note.rel_path.as_posix(),
+        )
+
+    def dependent_contexts_for(self, target: Note) -> list[Note]:
+        return sorted(
+            (
+                note
+                for note in self.notes
+                if note.type == "operational-context"
+                and context_references_memory(self, note, target.noesis_id)
             ),
+            key=lambda note: note.rel_path.as_posix(),
         )
 
     def find_note(self, ref: str) -> Note | None:
@@ -1298,6 +1389,20 @@ tags:
 
 ![[review-queue.base]]
 
+## CLI Review Workbench
+
+Use these read-only commands from the repo root when a row needs closer
+inspection:
+
+```bash
+PYTHONPATH=src python -m noesis review summary --vault <vault-path>
+PYTHONPATH=src python -m noesis review queue --vault <vault-path> --due --due-on {today}
+PYTHONPATH=src python -m noesis review show <note-id> --vault <vault-path>
+```
+
+`review show` reports the note state, linked support, audit records, requested
+changes, downstream reviewed-knowledge/context impact, and complete lineage.
+
 ## Lifecycle Dashboard
 
 ![[lifecycle-dashboard.base]]
@@ -1342,7 +1447,7 @@ The canonical sortable queue is [[review-queue.base]].
     - review_state != "approved"
 views:
   - type: table
-    name: Review queue
+    name: Open review queue
     groupBy:
       property: review_state
       direction: ASC
@@ -1354,6 +1459,19 @@ views:
       - review_state
       - confidence
       - next_review
+      - updated
+  - type: table
+    name: Due and scheduled reviews
+    groupBy:
+      property: next_review
+      direction: ASC
+    order:
+      - next_review
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
 """,
         Path("_bases/lifecycle-dashboard.base"): """filters:
   and:
@@ -1815,6 +1933,50 @@ def searchable_note_text(note: Note) -> str:
 
 def is_excluded(note: Note) -> bool:
     return note.lifecycle_stage in {"stale", "archive"} or note.status in EXCLUDED_STATUSES
+
+
+def sort_review_notes(notes: Iterable[Note]) -> list[Note]:
+    return sorted(
+        notes,
+        key=lambda note: (
+            review_date_sort_key(note.metadata.get("next_review")),
+            note.lifecycle_stage,
+            note.title.lower(),
+            note.rel_path.as_posix(),
+        ),
+    )
+
+
+def review_date_sort_key(value: Any) -> tuple[int, str]:
+    parsed = parse_review_date(value)
+    if parsed is None:
+        return (1, "")
+    return (0, parsed.isoformat())
+
+
+def note_review_due(note: Note, *, due_on: str | date | None = None) -> bool:
+    next_review = parse_review_date(note.metadata.get("next_review"))
+    if next_review is None:
+        return False
+    cutoff = review_cutoff_date(due_on)
+    return next_review <= cutoff
+
+
+def review_cutoff_date(value: str | date | None) -> date:
+    if value is None:
+        return date.today()
+    parsed = parse_review_date(value)
+    if parsed is None:
+        raise ValueError("due_on must be YYYY-MM-DD")
+    return parsed
+
+
+def parse_review_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return date.fromisoformat(value)
+    return None
 
 
 def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:

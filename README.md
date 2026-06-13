@@ -187,6 +187,9 @@ PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --ev
 PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer"
 PYTHONPATH=src python -m noesis synthesize --vault examples/noesis-vault --claim claim-id --title "Synthesis Title"
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --review-state ready-for-review --due --due-on 2026-06-13
+PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis review show claim-id --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review approve synthesis-id --vault examples/noesis-vault --reviewer "Reviewer"
 PYTHONPATH=src python -m noesis knowledge promote --vault examples/noesis-vault --synthesis synthesis-id --title "Reviewed Knowledge Title"
 PYTHONPATH=src python -m noesis memory stale reviewed-knowledge-id --vault examples/noesis-vault --reason "Superseded by newer evidence"
@@ -205,7 +208,9 @@ Supported commands:
 | `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
 | `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
 | `noesis synthesize --vault <path> --claim <claim-id>` | Create a review-ready synthesis draft grounded in claim, evidence, and source links. |
-| `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention. |
+| `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention, with optional `--review-state`, `--type`, `--stage`, `--due`, and `--due-on` filters. |
+| `noesis review summary --vault <path>` | Summarize review-state counts, pending items, due reviews, and upcoming `next_review` dates. |
+| `noesis review show <note-id> --vault <path>` | Inspect one note's current state, support links, audit records, requested changes, dependent reviewed knowledge/context impact, and lineage. |
 | `noesis review approve <note-id> --vault <path>` | Write an audit review note and mark the reviewed note approved. |
 | `noesis review request-changes <note-id> --vault <path>` | Write an audit review note and keep the reviewed note in the review queue. |
 | `noesis knowledge promote --vault <path> --synthesis <synthesis-id>` | Promote an approved synthesis with a review audit into active reviewed knowledge. |

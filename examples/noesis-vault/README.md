@@ -28,7 +28,8 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
 ## Important Files
 
 - `_dashboards/noesis-review-dashboard.md` - human review entry point.
-- `_bases/review-queue.base` - Base view for notes needing review.
+- `_bases/review-queue.base` - Base views for notes needing review and
+  scheduled `next_review` dates.
 - `_bases/lifecycle-dashboard.base` - Base view grouped by lifecycle stage.
 - `_canvas/noesis-lifecycle.canvas` - visual map of the example lifecycle.
 - `_templates/` - note templates for humans and agents.
@@ -36,6 +37,19 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
   package the next agent would read.
 - `context/operational-context-agent-memory-dogfood.md` - a scoped dogfood
   context package for agent-memory work.
+
+The CLI review workbench mirrors the Obsidian view without becoming canonical
+storage:
+
+```bash
+PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --due --due-on 2026-06-13
+PYTHONPATH=src python -m noesis review show stale-custom-plugin-first --vault examples/noesis-vault
+```
+
+Use `review show` before approving or requesting changes when you need the
+note's lineage, evidence support, audit trail, downstream context impact, and
+changes requested in one place.
 
 Template note: Obsidian core Templates will replace `{{title}}` and `{{date}}`.
 Placeholders in angle brackets, such as `<slug>`, are for humans, the future

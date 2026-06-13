@@ -6,7 +6,7 @@ filters:
     - review_state != "approved"
 views:
   - type: table
-    name: Review queue
+    name: Open review queue
     groupBy:
       property: review_state
       direction: ASC
@@ -18,3 +18,16 @@ views:
       - review_state
       - confidence
       - next_review
+      - updated
+  - type: table
+    name: Due and scheduled reviews
+    groupBy:
+      property: next_review
+      direction: ASC
+    order:
+      - next_review
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state

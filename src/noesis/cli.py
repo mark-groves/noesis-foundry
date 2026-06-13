@@ -6,8 +6,18 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from .mcp_server import issue_to_dict, json_safe, note_summary
+from .mcp_server import (
+    issue_to_dict,
+    json_safe,
+    note_summary,
+    review_filters,
+    review_summary_to_dict,
+    review_workbench_to_dict,
+)
 from .vault import (
+    LIFECYCLE_STAGES,
+    REVIEW_STATES,
+    TYPES,
     Vault,
     approve_review,
     build_context,
@@ -92,8 +102,26 @@ def build_parser() -> argparse.ArgumentParser:
     review_commands = review.add_subparsers(dest="review_command", required=True)
     queue = review_commands.add_parser("queue", help="List notes that need review")
     queue.add_argument("--vault", type=Path, required=True)
+    queue.add_argument("--review-state", choices=sorted(REVIEW_STATES), default=None)
+    queue.add_argument("--type", dest="note_type", choices=sorted(TYPES - {"dashboard"}), default=None)
+    queue.add_argument("--stage", dest="lifecycle_stage", choices=sorted(LIFECYCLE_STAGES), default=None)
+    queue.add_argument("--due", action="store_true", help="Only include notes with next_review on or before today")
+    queue.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for --due")
     queue.add_argument("--json", action="store_true", help="Write structured JSON")
     queue.set_defaults(func=cmd_review_queue)
+
+    summary = review_commands.add_parser("summary", help="Summarize review states and scheduled reviews")
+    summary.add_argument("--vault", type=Path, required=True)
+    summary.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for due review counts")
+    summary.add_argument("--json", action="store_true", help="Write structured JSON")
+    summary.set_defaults(func=cmd_review_summary)
+
+    show = review_commands.add_parser("show", help="Inspect one note's review state, support, audit, and impact")
+    show.add_argument("note")
+    show.add_argument("--vault", type=Path, required=True)
+    show.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for due status")
+    show.add_argument("--json", action="store_true", help="Write structured JSON")
+    show.set_defaults(func=cmd_review_show)
 
     approve = review_commands.add_parser("approve", help="Approve a reviewable note and write an audit review")
     approve.add_argument("note")
@@ -266,17 +294,35 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
 def cmd_review_queue(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
     issues = vault.validate()
+    due_filter = args.due or args.due_on is not None
     if args.json:
         if issues:
             write_json(validation_error_payload(vault, issues))
             return 1
-        queue = vault.review_queue()
+        try:
+            queue = vault.review_queue(
+                review_state=args.review_state,
+                note_type=args.note_type,
+                lifecycle_stage=args.lifecycle_stage,
+                due=due_filter,
+                due_on=args.due_on,
+            )
+        except ValueError as exc:
+            write_json(review_error_payload(vault, exc))
+            return 1
         write_json(
             {
                 "ok": True,
                 "vault_path": str(vault.root),
                 "count": len(queue),
                 "notes": [note_summary(note, vault.root) for note in queue],
+                "filters": review_filters(
+                    review_state=args.review_state,
+                    note_type=args.note_type,
+                    lifecycle_stage=args.lifecycle_stage,
+                    due=due_filter,
+                    due_on=args.due_on,
+                ),
             }
         )
         return 0
@@ -285,7 +331,17 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
             print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
         print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
         return 1
-    queue = vault.review_queue()
+    try:
+        queue = vault.review_queue(
+            review_state=args.review_state,
+            note_type=args.note_type,
+            lifecycle_stage=args.lifecycle_stage,
+            due=due_filter,
+            due_on=args.due_on,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
     if not queue:
         print("review queue empty")
         return 0
@@ -303,6 +359,99 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
                 ]
             )
         )
+    return 0
+
+
+def cmd_review_summary(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        try:
+            summary = vault.review_summary(due_on=args.due_on)
+        except ValueError as exc:
+            write_json(review_error_payload(vault, exc))
+            return 1
+        write_json(review_summary_to_dict(vault, summary, due_on=args.due_on))
+        return 0
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
+        return 1
+    try:
+        summary = vault.review_summary(due_on=args.due_on)
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print("review summary")
+    print(f"pending: {summary['pending_count']}")
+    print(f"due: {summary['due_count']}")
+    print("review states:")
+    for state, count in summary["review_state_counts"].items():
+        print(f"  {state}: {count}")
+    if summary["next_review_notes"]:
+        print("next review:")
+        for note in summary["next_review_notes"]:
+            print(
+                "\t".join(
+                    [
+                        str(note.metadata.get("next_review", "")),
+                        note.noesis_id,
+                        note.rel_path.as_posix(),
+                        note.review_state,
+                        note.title,
+                    ]
+                )
+            )
+    return 0
+
+
+def cmd_review_show(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    note = vault.find_note(args.note)
+    if note is None:
+        if args.json:
+            write_json({"ok": False, "error": f"note not found: {args.note}", "vault_path": str(vault.root)})
+        else:
+            print(f"note not found: {args.note}", file=sys.stderr)
+        return 1
+    try:
+        payload = review_workbench_to_dict(vault, note, note_ref=args.note, due_on=args.due_on)
+    except ValueError as exc:
+        if args.json:
+            write_json(review_error_payload(vault, exc))
+        else:
+            print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        write_json(payload)
+        return 0
+    print(f"review workbench: {note.title}")
+    print(f"id: {note.noesis_id}")
+    print(f"path: {note.rel_path.as_posix()}")
+    print(f"state: {note.status} / {note.review_state}")
+    print(f"confidence: {note.metadata.get('confidence', 'unknown')}")
+    print(f"next_review: {note.metadata.get('next_review', 'not scheduled')}")
+    print(f"review_due: {str(payload['review_due']).lower()}")
+    audit_status = payload["audit_status"]
+    print(
+        "audit: "
+        f"{len(payload['audit_records'])} record(s), "
+        f"required={str(audit_status['requires_audit']).lower()}, "
+        f"ok={str(audit_status['ok']).lower()}"
+    )
+    print_section_notes("support", payload["support"])
+    print_flat_notes("dependent reviewed knowledge", payload["impact"]["dependent_reviewed_knowledge"])
+    print_flat_notes("dependent contexts", payload["impact"]["dependent_contexts"])
+    if payload["changes_requested"]:
+        print("changes requested:")
+        for change in payload["changes_requested"]:
+            review = change["review"]
+            print(f"  {review['noesis_id']}: {change['changes_requested']}")
+    print_flat_notes("lineage", payload["lineage"])
     return 0
 
 
@@ -486,5 +635,33 @@ def validation_error_payload(vault: Vault, issues: list[Any]) -> dict[str, Any]:
     }
 
 
+def review_error_payload(vault: Vault, error: ValueError) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": str(error),
+        "vault_path": str(vault.root),
+    }
+
+
 def write_json(payload: dict[str, Any]) -> None:
     print(json.dumps(json_safe(payload), sort_keys=True))
+
+
+def print_section_notes(title: str, sections: dict[str, list[dict[str, Any]]]) -> None:
+    print(f"{title}:")
+    if not sections:
+        print("  none")
+        return
+    for key, notes in sections.items():
+        print(f"  {key}:")
+        for note in notes:
+            print(f"    {note['noesis_id']}\t{note['path']}\t{note['review_state']}\t{note['title']}")
+
+
+def print_flat_notes(title: str, notes: list[dict[str, Any]]) -> None:
+    print(f"{title}:")
+    if not notes:
+        print("  none")
+        return
+    for note in notes:
+        print(f"  {note['noesis_id']}\t{note['path']}\t{note['review_state']}\t{note['title']}")
