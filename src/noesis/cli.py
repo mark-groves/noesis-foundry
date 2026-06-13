@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--json", action="store_true", help="Write structured JSON")
     validate.set_defaults(func=cmd_vault_validate)
 
+    doctor = vault_commands.add_parser("doctor", help="Diagnose vault compatibility and readiness")
+    doctor.add_argument("path", type=Path)
+    doctor.add_argument("--json", action="store_true", help="Write structured JSON")
+    doctor.set_defaults(func=cmd_vault_doctor)
+
     ingest = subcommands.add_parser("ingest", help="Ingest source material")
     ingest_commands = ingest.add_subparsers(dest="ingest_command", required=True)
     source = ingest_commands.add_parser("source", help="Copy a raw source and create a source note")
@@ -175,11 +180,16 @@ def cmd_vault_init(args: argparse.Namespace) -> int:
 def cmd_vault_validate(args: argparse.Namespace) -> int:
     vault = Vault.load(args.path)
     issues = vault.validate()
+    doctor = vault.doctor()
     if args.json:
         write_json(
             {
                 "ok": not issues,
                 "vault_path": str(vault.root),
+                "contract": doctor_payload(doctor)["contract"],
+                "compatible": doctor.compatible,
+                "complete": doctor.complete,
+                "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
                 "note_count": len(vault.notes),
                 "issue_count": len(issues),
                 "issues": [issue_to_dict(issue, vault.root) for issue in issues],
@@ -192,7 +202,34 @@ def cmd_vault_validate(args: argparse.Namespace) -> int:
         print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
         return 1
     print(f"validation ok: {vault.root}")
+    print(f"contract: v{doctor.contract.get('contract_version')}")
     print(f"notes: {len(vault.notes)}")
+    return 0
+
+
+def cmd_vault_doctor(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.path)
+    doctor = vault.doctor()
+    payload = doctor_payload(doctor)
+    if args.json:
+        write_json(payload)
+        return 0 if doctor.ready_for_cli_mcp else 1
+
+    status = "ready" if doctor.ready_for_cli_mcp else "not ready"
+    print(f"vault: {doctor.root}")
+    print(f"status: {status}")
+    print(f"compatible: {format_bool(doctor.compatible)}")
+    print(f"complete: {format_bool(doctor.complete)}")
+    print(f"ready_for_cli_mcp: {format_bool(doctor.ready_for_cli_mcp)}")
+    contract_version = doctor.contract.get("contract_version", "unknown")
+    print(f"contract: v{contract_version}")
+    print(f"notes: {doctor.note_count}")
+    if doctor.validation_issues:
+        print(f"issues: {len(doctor.validation_issues)}", file=sys.stderr)
+        for issue in doctor.validation_issues:
+            print(f"ERROR {issue.format(doctor.root)}", file=sys.stderr)
+        return 1
+    print("issues: 0")
     return 0
 
 
@@ -477,13 +514,44 @@ def cmd_context_write(args: argparse.Namespace) -> int:
 
 
 def validation_error_payload(vault: Vault, issues: list[Any]) -> dict[str, Any]:
+    doctor = vault.doctor()
     return {
         "ok": False,
         "error": "vault validation failed",
         "vault_path": str(vault.root),
+        "contract": doctor_payload(doctor)["contract"],
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
     }
+
+
+def doctor_payload(doctor: Any) -> dict[str, Any]:
+    contract_version = doctor.contract.get("contract_version")
+    return {
+        "ok": doctor.ready_for_cli_mcp,
+        "vault_path": str(doctor.root),
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
+        "note_count": doctor.note_count,
+        "contract": {
+            "path": str(doctor.contract_path),
+            "present": doctor.contract_path.exists(),
+            "version": str(contract_version) if contract_version is not None else None,
+            "supported": doctor.compatible,
+            "metadata": json_safe(doctor.contract),
+            "issues": [issue_to_dict(issue, doctor.root) for issue in doctor.contract_issues],
+        },
+        "issue_count": len(doctor.validation_issues),
+        "issues": [issue_to_dict(issue, doctor.root) for issue in doctor.validation_issues],
+    }
+
+
+def format_bool(value: bool) -> str:
+    return "yes" if value else "no"
 
 
 def write_json(payload: dict[str, Any]) -> None:
