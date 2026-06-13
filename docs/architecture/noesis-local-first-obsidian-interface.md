@@ -1,8 +1,9 @@
 # Noesis Local-First Obsidian Interface
 
-Status: draft  
-Date: 2026-05-29  
-Scope: first slice for a local-first Noesis interface
+Status: implemented CLI/MCP baseline with future adapter notes
+Date: 2026-05-29
+Updated: 2026-06-13
+Scope: current local-first Noesis vault contract, CLI, MCP server, and deferred adapters
 
 ## Starting Point
 
@@ -12,13 +13,14 @@ Noesis is a human-agent memory system built around this lifecycle:
 sources -> evidence -> claims -> synthesis -> reviewed knowledge -> operational context
 ```
 
-The first interface should make that lifecycle inspectable by a human in
-Obsidian while leaving agents a stable file contract they can use without
-opening Obsidian.
+The current interface makes that lifecycle inspectable by a human in Obsidian
+while leaving agents a stable file contract they can use without opening
+Obsidian.
 
 The durable source of truth is the vault: ordinary Markdown files with YAML
-properties. Obsidian is the human workbench. The CLI, MCP server, and portable
-Agent Skills are agent-facing adapters over the same files.
+properties. Obsidian is the human workbench. The CLI and MCP server are
+implemented agent-facing adapters over the same files. Portable Agent Skills
+remain a future adapter layer unless implemented outside this repo.
 
 ## Research Snapshot
 
@@ -46,12 +48,12 @@ Security note: Obsidian's [plugin security guidance](https://obsidian.md/help/pl
 says community plugins run with Obsidian's access level and can access local
 files or the network. This reinforces the adapter decision.
 
-Agent integration paths worth preserving:
+Agent integration paths:
 
-- direct file access for local CLI commands;
-- an MCP server that exposes curated vault operations to agents;
-- portable Agent Skills that describe the lifecycle workflow and can fall back
-  to direct Markdown edits;
+- direct file access through the implemented local CLI commands;
+- the implemented MCP server that exposes curated vault operations to agents;
+- future portable Agent Skills that describe the lifecycle workflow and can
+  fall back to direct Markdown edits;
 - optional Obsidian app adapters, such as REST or active-note integrations,
   when the product needs the currently open note or interactive UI state.
 
@@ -76,7 +78,7 @@ Agent integration paths worth preserving:
 | Obsidian app API | [Local REST API with MCP](https://github.com/coddingtonbear/obsidian-local-rest-api) or similar plugins | Community plugin | Active-app adapter | Optional later | Useful for "current note" workflows and existing MCP bridges. Not needed for durable file operations. |
 | Custom Noesis plugin | New Obsidian plugin | Custom code | Product-specific UI | Deferred | Not justified yet. Build only if core Bases, Canvas, and external adapters cannot support review. |
 
-## Proposed Vault Schema
+## Vault Schema
 
 The example vault lives at `examples/noesis-vault`. A real vault can use the
 same schema at its root.
@@ -149,47 +151,51 @@ and agents can parse links mechanically.
 flowchart LR
   H["Human in Obsidian"] --> O["Obsidian core UI\nProperties, Bases, Canvas, backlinks"]
   O --> V["Noesis vault\nMarkdown + YAML + raw files"]
-  CLI["noesis CLI"] --> V
-  MCP["Noesis MCP server"] --> CLI
-  MCP --> V
-  Skills["Portable Agent Skills"] --> CLI
+  L["Vault workflow library\nparser, validator, lineage, lifecycle writes"] --> V
+  CLI["noesis CLI"] --> L
+  MCP["Noesis MCP server"] --> L
+  Skills["Future portable Agent Skills"] --> CLI
   Skills --> V
   Agents["Coding and research agents"] --> MCP
   Agents --> Skills
 ```
 
-The vault is the contract. Obsidian, CLI, MCP, and skills are replaceable
-interfaces over that contract.
+The vault is the contract. Obsidian, CLI, MCP, and future skills are
+replaceable interfaces over that contract.
 
 ### CLI Boundary
 
-The first CLI should provide small commands that create and validate vault
-files. It should not require Obsidian to be running.
+The implemented CLI provides small commands that create, validate, review, and
+trace vault files. It does not require Obsidian to be running.
 
-First useful commands:
+Current commands:
 
 | Command | Purpose |
 | --- | --- |
 | `noesis vault init <path>` | Create the folder schema, Bases, dashboard, and templates. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source and create a source note. |
-| `noesis extract evidence --source <source-id>` | Create draft evidence notes from a source note. |
-| `noesis propose claim --evidence <id...>` | Create a claim note grounded in evidence. |
-| `noesis synthesize --claims <id...>` | Create a synthesis note from claims. |
-| `noesis review queue` | List notes where `review_state` requires attention. |
-| `noesis review approve <note-id>` | Write a review note and update reviewed state. |
-| `noesis context build --scope <scope> --purpose <purpose>` | Generate focused operational context from reviewed knowledge only, with stale/superseded exclusions. |
-| `noesis trace <note-id>` | Print source -> evidence -> claim -> synthesis -> knowledge lineage. |
-| `noesis lint vault` | Validate frontmatter, broken links, lifecycle status, and stale review dates. |
+| `noesis extract evidence --vault <path> --source <source-id>` | Create draft evidence notes from a source note. |
+| `noesis propose claim --vault <path> --evidence <id...>` | Create a claim note grounded in evidence. |
+| `noesis synthesize --vault <path> --claim <id...>` | Create a synthesis note from claims. |
+| `noesis review queue --vault <path>` | List notes where `review_state` requires attention. |
+| `noesis review approve <note-id> --vault <path>` | Write a review note and update reviewed state. |
+| `noesis review request-changes <note-id> --vault <path>` | Write a review note and keep the reviewed note in the queue. |
+| `noesis knowledge promote --vault <path> --synthesis <id>` | Promote an approved synthesis to reviewed knowledge. |
+| `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded and update affected context exclusions. |
+| `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context from reviewed knowledge only, with stale/superseded exclusions. |
+| `noesis context write --vault <path> --purpose <purpose>` | Write an operational context note from reviewed knowledge. |
+| `noesis trace <note-id> --vault <path>` | Print source -> evidence -> claim -> synthesis -> knowledge lineage. |
+| `noesis vault validate <path>` | Validate frontmatter, links, lifecycle values, Base YAML, Canvas JSON, and context exclusions. |
 
 ### MCP Boundary
 
-The first MCP server exposes curated tools rather than raw filesystem access.
-Tools call the same parser, validator, lineage tracer, review queue, context
-builder, and lifecycle write functions as the CLI. MCP is an adapter over the
-vault contract; it is not a custom Obsidian plugin, a database, or a second
-schema.
+The implemented MCP server exposes curated tools rather than raw filesystem
+access. Tools call the same parser, validator, lineage tracer, review queue,
+context builder, and lifecycle write functions as the CLI. MCP is an adapter
+over the vault contract; it is not a custom Obsidian plugin, a database, or a
+second schema.
 
-First useful tools:
+Current tools:
 
 | Tool | Purpose |
 | --- | --- |
@@ -209,7 +215,7 @@ First useful tools:
 | `noesis_mark_memory_stale` | Mark memory stale or superseded and update context exclusions. |
 | `noesis_write_context` | Write an operational context note from current reviewed knowledge. |
 
-First useful resources:
+Current resources:
 
 | Resource | Purpose |
 | --- | --- |
@@ -222,15 +228,16 @@ tool responses are structured objects rather than CLI text.
 
 ### Portable Agent Skills
 
-Portable skills should teach agents how to use the vault contract. They should
-prefer the CLI when it exists, but remain useful by directly reading and
-editing Markdown if the CLI is unavailable.
+Portable skills are not part of the implemented repo surface yet. When added,
+they should teach agents how to use the vault contract. They should prefer the
+CLI or MCP tools when available, but remain useful by directly reading and
+editing Markdown if those adapters are unavailable.
 Use the Agent Skills pattern of a `SKILL.md` file with YAML frontmatter and
 progressively disclosed instructions, as described in
 [Microsoft's Agent Skills documentation](https://learn.microsoft.com/en-us/agent-framework/agents/skills)
 and compatible SKILL.md ecosystems.
 
-Initial skill set:
+Future skill set:
 
 | Skill | Trigger | Workflow |
 | --- | --- | --- |
@@ -244,7 +251,7 @@ schema. The schema belongs in the vault contract and CLI parser.
 
 ## First Slice Behavior
 
-The first prototype is done when a human can open the example vault and see:
+The implemented baseline lets a human open the example vault and see:
 
 1. A review dashboard showing notes that need attention.
 2. A Base view over lifecycle state.
@@ -254,5 +261,6 @@ The first prototype is done when a human can open the example vault and see:
    synthesis, review, reviewed knowledge, operational context, stale memory,
    and archived history.
 
-The next implementation goal should build the CLI around that exact example
-vault, then expose the same operations through MCP.
+The next implementation work should stay adapter-oriented: portable skills and
+optional Obsidian app integrations can build on the same vault contract without
+moving the schema out of Markdown and flat YAML.

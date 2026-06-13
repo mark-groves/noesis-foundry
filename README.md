@@ -214,12 +214,12 @@ Supported commands:
 | `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. |
 | `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge. |
 
-The CLI is the shared implementation foundation for future adapters. A future
-MCP server should expose curated tools that call the same parser, validator,
-lineage tracer, review queue, and context builder. Portable Agent Skills should
-prefer these commands when available and fall back to direct Markdown edits
-only as an adapter behavior. Neither MCP nor skills should introduce a second
-schema or make Obsidian plugin APIs the source of truth.
+The vault files are the source of truth. The CLI and MCP server are implemented
+adapters over the same parser, validator, lineage tracer, review queue, context
+builder, and lifecycle write functions. Portable Agent Skills remain a future
+adapter layer; when added, they should prefer the CLI or MCP tools and fall back
+to direct Markdown edits only as adapter behavior. Neither MCP nor skills should
+introduce a second schema or make Obsidian plugin APIs the source of truth.
 
 ### Portable Agent Skills
 
@@ -237,8 +237,8 @@ docs, and the CLI instead of duplicating the canonical schema.
 
 ### MCP MVP
 
-The MCP server is the next adapter layer over the same vault contract. It does
-not require Obsidian to be running, and it does not introduce a database,
+The MCP server is an implemented adapter layer over the same vault contract. It
+does not require Obsidian to be running, and it does not introduce a database,
 custom Obsidian plugin, or second schema.
 
 Run the stdio server from the repository with:
