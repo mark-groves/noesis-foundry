@@ -24,7 +24,10 @@ class NoesisMcpStdioSmokeTests(unittest.TestCase):
 
             env = os.environ.copy()
             env["NOESIS_MCP_SMOKE_RECORD"] = str(record_path)
-            env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), str(shim_root)])
+            pythonpath = [str(ROOT / "src"), str(shim_root)]
+            if env.get("PYTHONPATH"):
+                pythonpath.append(env["PYTHONPATH"])
+            env["PYTHONPATH"] = os.pathsep.join(pythonpath)
 
             result = subprocess.run(
                 [sys.executable, "-m", "noesis.mcp_server", str(EXAMPLE_VAULT)],
