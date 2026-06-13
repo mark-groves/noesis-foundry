@@ -13,7 +13,7 @@ from .vault import (
     build_context,
     extract_evidence,
     filter_knowledge_by_scope,
-    ingest_source,
+    ingest_sources,
     init_vault,
     mark_memory_stale,
     promote_synthesis,
@@ -51,13 +51,20 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_commands = ingest.add_subparsers(dest="ingest_command", required=True)
     source = ingest_commands.add_parser("source", help="Copy a raw source and create a source note")
     source.add_argument("--vault", type=Path, required=True)
-    source.add_argument("--file", type=Path, required=True)
-    source.add_argument("--title", required=True)
+    source_input = source.add_mutually_exclusive_group(required=True)
+    source_input.add_argument("--file", type=Path, nargs="+")
+    source_input.add_argument("--directory", type=Path)
+    source.add_argument("--recursive", action="store_true", help="Include files below subdirectories")
+    source.add_argument("--pattern", action="append", help="Glob pattern for --directory; may be repeated")
+    source.add_argument("--title", default=None)
     source.add_argument("--slug", default=None)
     source.add_argument("--source-type", default="file")
     source.add_argument("--original-url", default="unknown")
     source.add_argument("--author", default="unknown")
     source.add_argument("--source-date", default="unknown")
+    source.add_argument("--allow-duplicates", action="store_true")
+    source.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
+    source.add_argument("--json", action="store_true", help="Write structured JSON")
     source.set_defaults(func=cmd_ingest_source)
 
     extract = subcommands.add_parser("extract", help="Extract lifecycle drafts")
@@ -198,21 +205,106 @@ def cmd_vault_validate(args: argparse.Namespace) -> int:
 
 def cmd_ingest_source(args: argparse.Namespace) -> int:
     try:
-        created = ingest_source(
+        source_files = collect_ingest_source_files(args)
+        results = ingest_sources(
             args.vault,
-            args.file,
-            args.title,
+            source_files,
+            source_root=args.directory,
+            title=args.title,
             slug=args.slug,
             source_type=args.source_type,
             original_url=args.original_url,
             author=args.author,
             source_date=args.source_date,
+            allow_duplicates=args.allow_duplicates,
+            create_evidence=args.evidence_drafts,
         )
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-    print(f"created {created.note_id}\t{created.path}")
+
+    if args.json:
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(Path(args.vault).expanduser().resolve()),
+                "created_count": sum(1 for result in results if result.status == "created"),
+                "skipped_count": sum(1 for result in results if result.status == "skipped"),
+                "results": [source_capture_result_payload(result) for result in results],
+            }
+        )
+        return 0
+
+    if len(results) == 1:
+        result = results[0]
+        if result.note is not None:
+            print(f"created {result.note.note_id}\t{result.note.path}")
+            if result.evidence_note is not None:
+                print(f"created {result.evidence_note.note_id}\t{result.evidence_note.path}")
+        else:
+            print(f"skipped {result.existing_note_id}\t{result.reason}\t{result.source_file}")
+        return 0
+
+    created_count = sum(1 for result in results if result.status == "created")
+    skipped_count = sum(1 for result in results if result.status == "skipped")
+    print(f"ingest summary: created={created_count} skipped={skipped_count}")
+    for result in results:
+        if result.note is not None:
+            print(f"created {result.note.note_id}\t{result.note.path}\t{result.source_file}")
+            if result.evidence_note is not None:
+                print(f"created {result.evidence_note.note_id}\t{result.evidence_note.path}\tevidence")
+        else:
+            print(f"skipped {result.existing_note_id}\t{result.reason}\t{result.source_file}")
     return 0
+
+
+def collect_ingest_source_files(args: argparse.Namespace) -> list[Path]:
+    if args.file:
+        if args.recursive:
+            raise ValueError("--recursive can only be used with --directory")
+        if args.pattern:
+            raise ValueError("--pattern can only be used with --directory")
+        return list(args.file)
+
+    directory = Path(args.directory).expanduser().resolve()
+    if not directory.is_dir():
+        raise ValueError(f"source directory does not exist: {args.directory}")
+    patterns = args.pattern or ["*"]
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in patterns:
+        matches = directory.rglob(pattern) if args.recursive else directory.glob(pattern)
+        for path in matches:
+            resolved = path.resolve()
+            if resolved in seen or not resolved.is_file():
+                continue
+            files.append(resolved)
+            seen.add(resolved)
+    return sorted(files, key=lambda path: path.relative_to(directory).as_posix())
+
+
+def source_capture_result_payload(result: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "source_file": str(result.source_file),
+        "title": result.title,
+        "content_hash": result.content_hash,
+    }
+    if result.note is not None:
+        payload["note_id"] = result.note.note_id
+        payload["note_path"] = str(result.note.path)
+    if result.raw_path is not None:
+        payload["raw_path"] = str(result.raw_path)
+    if result.evidence_note is not None:
+        payload["evidence_note_id"] = result.evidence_note.note_id
+        payload["evidence_note_path"] = str(result.evidence_note.path)
+    if result.existing_note_id is not None:
+        payload["existing_note_id"] = result.existing_note_id
+    if result.existing_note_path is not None:
+        payload["existing_note_path"] = str(result.existing_note_path)
+    if result.reason is not None:
+        payload["reason"] = result.reason
+    return payload
 
 
 def cmd_extract_evidence(args: argparse.Namespace) -> int:
