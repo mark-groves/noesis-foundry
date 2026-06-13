@@ -243,6 +243,8 @@ class Vault:
         due: bool = False,
         due_on: str | date | None = None,
     ) -> list[Note]:
+        if due:
+            review_cutoff_date(due_on)
         notes: list[Note] = []
         for note in self.notes:
             if note.type == "dashboard":
@@ -262,11 +264,17 @@ class Vault:
         return sort_review_notes(notes)
 
     def review_summary(self, *, due_on: str | date | None = None) -> dict[str, Any]:
+        if due_on is not None:
+            review_cutoff_date(due_on)
         reviewable_notes = [note for note in self.notes if note.type != "dashboard"]
         review_counts: dict[str, int] = {}
         for note in reviewable_notes:
             review_counts[note.review_state] = review_counts.get(note.review_state, 0) + 1
-        scheduled_candidates = [note for note in reviewable_notes if note.review_state != "none"]
+        scheduled_candidates = [
+            note
+            for note in reviewable_notes
+            if note.type != "review" and note.review_state != "none"
+        ]
         due_notes = sort_review_notes(
             [note for note in scheduled_candidates if note_review_due(note, due_on=due_on)]
         )
@@ -1955,10 +1963,10 @@ def review_date_sort_key(value: Any) -> tuple[int, str]:
 
 
 def note_review_due(note: Note, *, due_on: str | date | None = None) -> bool:
+    cutoff = review_cutoff_date(due_on)
     next_review = parse_review_date(note.metadata.get("next_review"))
     if next_review is None:
         return False
-    cutoff = review_cutoff_date(due_on)
     return next_review <= cutoff
 
 

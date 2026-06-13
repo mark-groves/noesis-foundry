@@ -176,9 +176,18 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertEqual(summary["ok"], False)
         self.assertEqual(summary["error"], "due_on must be YYYY-MM-DD")
 
-        show = handlers.show_review("reviewed-knowledge-noesis-lifecycle", due_on="not-a-date")
+        show = handlers.show_review("source-noesis-readme", due_on="not-a-date")
         self.assertEqual(show["ok"], False)
         self.assertEqual(show["error"], "due_on must be YYYY-MM-DD")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init_vault(vault_path)
+            empty_handlers = NoesisMcpHandlers(vault_path)
+
+            empty_queue = empty_handlers.get_review_queue(due_on="not-a-date")
+            self.assertEqual(empty_queue["ok"], False)
+            self.assertEqual(empty_queue["error"], "due_on must be YYYY-MM-DD")
 
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()

@@ -200,7 +200,7 @@ class NoesisCliTests(unittest.TestCase):
         show = run_noesis(
             "review",
             "show",
-            "reviewed-knowledge-noesis-lifecycle",
+            "source-noesis-readme",
             "--vault",
             str(EXAMPLE_VAULT),
             "--due-on",
@@ -211,6 +211,25 @@ class NoesisCliTests(unittest.TestCase):
         show_payload = parse_json_stdout(show)
         self.assertEqual(show_payload["ok"], False)
         self.assertEqual(show_payload["error"], "due_on must be YYYY-MM-DD")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            empty_queue = run_noesis(
+                "review",
+                "queue",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "not-a-date",
+                "--json",
+            )
+            self.assertNotEqual(empty_queue.returncode, 0)
+            empty_payload = parse_json_stdout(empty_queue)
+            self.assertEqual(empty_payload["ok"], False)
+            self.assertEqual(empty_payload["error"], "due_on must be YYYY-MM-DD")
 
     def test_example_agent_memory_dogfood_context_uses_reviewed_knowledge(self) -> None:
         context = run_noesis(
