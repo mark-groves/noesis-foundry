@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,12 +25,58 @@ def run_noesis(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]
     )
 
 
+def parse_json_stdout(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"stdout is not valid JSON: {result.stdout!r}") from exc
+
+
 class NoesisCliTests(unittest.TestCase):
     def test_example_vault_validates(self) -> None:
         result = run_noesis("vault", "validate", str(EXAMPLE_VAULT))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("validation ok", result.stdout)
         self.assertIn("notes:", result.stdout)
+
+    def test_vault_validate_json_reports_success_and_errors(self) -> None:
+        result = run_noesis("vault", "validate", str(EXAMPLE_VAULT), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
+        self.assertGreater(payload["note_count"], 0)
+        self.assertEqual(payload["issue_count"], 0)
+        self.assertEqual(payload["issues"], [])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_vault = Path(tmp) / "missing-vault"
+            invalid = run_noesis("vault", "validate", str(missing_vault), "--json")
+            self.assertNotEqual(invalid.returncode, 0)
+            invalid_payload = parse_json_stdout(invalid)
+            self.assertEqual(invalid_payload["ok"], False)
+            self.assertEqual(invalid_payload["vault_path"], str(missing_vault.resolve()))
+            self.assertGreater(invalid_payload["issue_count"], 0)
+            self.assertIn("vault path does not exist", invalid_payload["issues"][0]["message"])
+
+    def test_review_queue_json_matches_text_order(self) -> None:
+        result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        expected_ids = [note.noesis_id for note in Vault.load(EXAMPLE_VAULT).review_queue()]
+        actual_ids = [note["noesis_id"] for note in payload["notes"]]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
+        self.assertEqual(payload["count"], len(expected_ids))
+        self.assertEqual(actual_ids, expected_ids)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid = run_noesis("review", "queue", "--vault", str(Path(tmp) / "missing"), "--json")
+            self.assertNotEqual(invalid.returncode, 0)
+            invalid_payload = parse_json_stdout(invalid)
+            self.assertEqual(invalid_payload["ok"], False)
+            self.assertEqual(invalid_payload["error"], "vault validation failed")
+            self.assertGreater(invalid_payload["issue_count"], 0)
 
     def test_example_agent_memory_dogfood_context_uses_reviewed_knowledge(self) -> None:
         context = run_noesis(
@@ -167,6 +214,73 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("source-research-note", trace.stdout)
             self.assertIn("evidence-lifecycle-review", trace.stdout)
             self.assertIn("claim-memory-needs-review", trace.stdout)
+
+    def test_trace_json_reports_lineage_and_missing_note_errors(self) -> None:
+        result = run_noesis(
+            "trace",
+            "reviewed-knowledge-noesis-lifecycle",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        lineage_ids = [note["noesis_id"] for note in payload["notes"]]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
+        self.assertEqual(payload["note"], "reviewed-knowledge-noesis-lifecycle")
+        self.assertIn("source-noesis-readme", lineage_ids)
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", lineage_ids)
+        self.assertEqual(payload["count"], len(lineage_ids))
+
+        missing = run_noesis("trace", "missing-note", "--vault", str(EXAMPLE_VAULT), "--json")
+        self.assertNotEqual(missing.returncode, 0)
+        missing_payload = parse_json_stdout(missing)
+        self.assertEqual(missing_payload["ok"], False)
+        self.assertEqual(missing_payload["note"], "missing-note")
+        self.assertIn("note not found or no lineage", missing_payload["error"])
+
+    def test_trace_json_returns_lineage_despite_unrelated_validation_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            (vault_path / "sources" / "source-unrelated-broken-link.md").write_text(
+                """---
+title: Unrelated Broken Link
+noesis_id: source-unrelated-broken-link
+type: source
+lifecycle_stage: source
+status: captured
+review_state: reviewed
+confidence: medium
+created: 2026-06-13
+updated: 2026-06-13
+sources:
+  - "[[missing-unrelated-note]]"
+---
+
+# Unrelated Broken Link
+""",
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertNotEqual(validate.returncode, 0)
+            self.assertIn("missing-unrelated-note", validate.stderr)
+
+            result = run_noesis(
+                "trace",
+                "reviewed-knowledge-noesis-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = parse_json_stdout(result)
+            lineage_ids = [note["noesis_id"] for note in payload["notes"]]
+            self.assertEqual(payload["ok"], True)
+            self.assertIn("source-noesis-readme", lineage_ids)
+            self.assertIn("reviewed-knowledge-noesis-lifecycle", lineage_ids)
 
     def test_full_cli_lifecycle_writes_context_from_fresh_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,6 +465,38 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("reviewed_knowledge:", context_note)
             self.assertIn("[[reviewed-knowledge-review-before-reuse]]", context_note)
             self.assertIn("Noesis operational context should use reviewed memory", context_note)
+
+    def test_context_build_json_returns_context_payload(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "lifecycle",
+            "--purpose",
+            "prepare an agent",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        knowledge_ids = [note["noesis_id"] for note in payload["reviewed_knowledge"]]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
+        self.assertEqual(payload["scope"], "lifecycle")
+        self.assertEqual(payload["purpose"], "prepare an agent")
+        self.assertEqual(payload["reviewed_knowledge_count"], len(knowledge_ids))
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
+        self.assertIn("Purpose: prepare an agent", payload["content"])
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", payload["content"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid = run_noesis("context", "build", "--vault", str(Path(tmp) / "missing"), "--json")
+            self.assertNotEqual(invalid.returncode, 0)
+            invalid_payload = parse_json_stdout(invalid)
+            self.assertEqual(invalid_payload["ok"], False)
+            self.assertEqual(invalid_payload["error"], "vault validation failed")
+            self.assertGreater(invalid_payload["issue_count"], 0)
 
     def test_review_request_changes_keeps_note_in_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
