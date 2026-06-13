@@ -379,10 +379,6 @@ def cmd_memory_stale(args: argparse.Namespace) -> int:
 def cmd_trace(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
     if args.json:
-        issues = vault.validate()
-        if issues:
-            write_json(validation_error_payload(vault, issues))
-            return 1
         notes = vault.lineage(args.note)
         if not notes:
             write_json(

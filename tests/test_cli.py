@@ -240,6 +240,48 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(missing_payload["note"], "missing-note")
         self.assertIn("note not found or no lineage", missing_payload["error"])
 
+    def test_trace_json_returns_lineage_despite_unrelated_validation_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            (vault_path / "sources" / "source-unrelated-broken-link.md").write_text(
+                """---
+title: Unrelated Broken Link
+noesis_id: source-unrelated-broken-link
+type: source
+lifecycle_stage: source
+status: captured
+review_state: reviewed
+confidence: medium
+created: 2026-06-13
+updated: 2026-06-13
+sources:
+  - "[[missing-unrelated-note]]"
+---
+
+# Unrelated Broken Link
+""",
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertNotEqual(validate.returncode, 0)
+            self.assertIn("missing-unrelated-note", validate.stderr)
+
+            result = run_noesis(
+                "trace",
+                "reviewed-knowledge-noesis-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = parse_json_stdout(result)
+            lineage_ids = [note["noesis_id"] for note in payload["notes"]]
+            self.assertEqual(payload["ok"], True)
+            self.assertIn("source-noesis-readme", lineage_ids)
+            self.assertIn("reviewed-knowledge-noesis-lifecycle", lineage_ids)
+
     def test_full_cli_lifecycle_writes_context_from_fresh_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
