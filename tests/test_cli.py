@@ -296,6 +296,74 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("evidence-lifecycle-review", trace.stdout)
             self.assertIn("claim-memory-needs-review", trace.stdout)
 
+    def test_directory_ingest_sorts_sources_skips_duplicates_and_creates_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            import_path = tmp_path / "imports"
+            nested_path = import_path / "nested"
+            nested_path.mkdir(parents=True)
+            alpha = import_path / "alpha-note.md"
+            beta = import_path / "beta-note.md"
+            beta_duplicate = nested_path / "beta-copy.txt"
+            alpha.write_text("# Alpha\n\nfirst source\n", encoding="utf-8")
+            beta.write_text("# Beta\n\nduplicate source\n", encoding="utf-8")
+            beta_duplicate.write_text("# Beta\n\nduplicate source\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--directory",
+                str(import_path),
+                "--recursive",
+                "--pattern",
+                "*.md",
+                "--pattern",
+                "*.txt",
+                "--source-type",
+                "project-document",
+                "--author",
+                "Noesis Test",
+                "--evidence-drafts",
+                "--json",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            payload = parse_json_stdout(ingest)
+            self.assertEqual(payload["created_count"], 2)
+            self.assertEqual(payload["skipped_count"], 1)
+            results = payload["results"]
+            self.assertEqual([result["source_file"] for result in results], [str(alpha), str(beta), str(beta_duplicate)])
+            self.assertEqual(results[0]["note_id"], "source-alpha-note")
+            self.assertEqual(results[1]["note_id"], "source-beta-note")
+            self.assertEqual(results[2]["status"], "skipped")
+            self.assertEqual(results[2]["reason"], "duplicate-content")
+            self.assertEqual(results[2]["existing_note_id"], "source-beta-note")
+            self.assertEqual(results[0]["evidence_note_id"], "evidence-evidence-from-alpha-note")
+            self.assertEqual(results[1]["evidence_note_id"], "evidence-evidence-from-beta-note")
+
+            vault = Vault.load(vault_path)
+            alpha_note = vault.find_note("source-alpha-note")
+            self.assertIsNotNone(alpha_note)
+            assert alpha_note is not None
+            self.assertEqual(alpha_note.metadata["source_type"], "project-document")
+            self.assertEqual(alpha_note.metadata["author"], "Noesis Test")
+            self.assertEqual(alpha_note.metadata["original_url"], "unknown")
+            self.assertEqual(alpha_note.metadata["source_date"], "unknown")
+            self.assertEqual(alpha_note.metadata["source_size_bytes"], alpha.stat().st_size)
+            self.assertEqual(alpha_note.metadata["original_path"], str(alpha))
+            self.assertTrue(str(alpha_note.metadata["content_hash"]).startswith("sha256:"))
+            self.assertTrue((vault_path / "raw" / "alpha-note.md").exists())
+            self.assertTrue((vault_path / "raw" / "beta-note.md").exists())
+            self.assertFalse((vault_path / "raw" / "beta-copy.txt").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
     def test_trace_json_reports_lineage_and_missing_note_errors(self) -> None:
         result = run_noesis(
             "trace",

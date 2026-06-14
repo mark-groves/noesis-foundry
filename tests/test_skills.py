@@ -37,6 +37,8 @@ class SkillPackageTests(unittest.TestCase):
                 self.assertIn("portable Agent Skill", body)
                 self.assertIn("Fallback", body)
                 self.assertIn("Reviewability", body)
+                self.assertIn("Concrete Example", body)
+                self.assertIn("MCP", body)
                 self.assertIn("README", body)
                 self.assertNotIn("## Required Properties", body)
 

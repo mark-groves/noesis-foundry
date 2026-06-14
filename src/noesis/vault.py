@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import yaml
 
@@ -211,6 +212,20 @@ class VaultDoctor:
     @property
     def ready_for_cli_mcp(self) -> bool:
         return self.compatible and self.complete
+
+
+@dataclass(frozen=True)
+class SourceCaptureResult:
+    status: str
+    source_file: Path
+    title: str
+    content_hash: str
+    note: CreatedNote | None = None
+    raw_path: Path | None = None
+    evidence_note: CreatedNote | None = None
+    existing_note_id: str | None = None
+    existing_note_path: Path | None = None
+    reason: str | None = None
 
 
 @dataclass
@@ -701,7 +716,99 @@ def ingest_source(
     author: str = "unknown",
     source_date: str = "unknown",
     today: str | None = None,
+    allow_duplicate: bool = False,
 ) -> CreatedNote:
+    result = capture_source(
+        vault_path,
+        source_file,
+        title,
+        slug=slug,
+        source_type=source_type,
+        original_url=original_url,
+        author=author,
+        source_date=source_date,
+        today=today,
+        allow_duplicate=allow_duplicate,
+    )
+    if result.note is None:
+        raise ValueError(f"source already captured: {result.existing_note_id}")
+    return result.note
+
+
+def ingest_sources(
+    vault_path: Path | str,
+    source_files: Sequence[Path | str],
+    *,
+    source_root: Path | str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    source_type: str = "file",
+    original_url: str = "unknown",
+    author: str = "unknown",
+    source_date: str = "unknown",
+    today: str | None = None,
+    allow_duplicates: bool = False,
+    create_evidence: bool = False,
+) -> list[SourceCaptureResult]:
+    root = ensure_valid_vault(vault_path)
+    source_paths = deterministic_source_paths(source_files)
+    if not source_paths:
+        raise ValueError("no source files found")
+    if title is not None and len(source_paths) > 1:
+        raise ValueError("--title can only be used with one source file")
+    if slug is not None and len(source_paths) > 1:
+        raise ValueError("--slug can only be used with one source file")
+    if not is_date_like(source_date):
+        raise ValueError("source_date must be YYYY-MM-DD or unknown")
+
+    results: list[SourceCaptureResult] = []
+    resolved_root = Path(source_root).expanduser().resolve() if source_root is not None else None
+    for source_path in source_paths:
+        source_title = title or title_from_source_path(source_path, source_root=resolved_root)
+        source_slug = slug or slug_from_source_path(source_path, source_root=resolved_root)
+        result = capture_source(
+            root,
+            source_path,
+            source_title,
+            slug=source_slug,
+            source_type=source_type,
+            original_url=original_url,
+            author=author,
+            source_date=source_date,
+            today=today,
+            allow_duplicate=allow_duplicates,
+        )
+        if create_evidence and result.note is not None:
+            evidence = extract_evidence(root, result.note.note_id, today=today)
+            result = SourceCaptureResult(
+                status=result.status,
+                source_file=result.source_file,
+                title=result.title,
+                content_hash=result.content_hash,
+                note=result.note,
+                raw_path=result.raw_path,
+                evidence_note=evidence,
+                existing_note_id=result.existing_note_id,
+                existing_note_path=result.existing_note_path,
+                reason=result.reason,
+            )
+        results.append(result)
+    return results
+
+
+def capture_source(
+    vault_path: Path | str,
+    source_file: Path | str,
+    title: str,
+    *,
+    slug: str | None = None,
+    source_type: str = "file",
+    original_url: str = "unknown",
+    author: str = "unknown",
+    source_date: str = "unknown",
+    today: str | None = None,
+    allow_duplicate: bool = False,
+) -> SourceCaptureResult:
     root = ensure_valid_vault(vault_path)
     source_path = Path(source_file).expanduser().resolve()
     if not source_path.is_file():
@@ -712,6 +819,20 @@ def ingest_source(
         raise ValueError("source_date must be YYYY-MM-DD or unknown")
 
     created_at = today or date.today().isoformat()
+    content_hash = file_content_hash(source_path)
+    if not allow_duplicate:
+        existing = find_existing_source_by_content_hash(root, content_hash)
+        if existing is not None:
+            return SourceCaptureResult(
+                status="skipped",
+                source_file=source_path,
+                title=title,
+                content_hash=content_hash,
+                existing_note_id=existing.noesis_id,
+                existing_note_path=existing.path,
+                reason="duplicate-content",
+            )
+
     note_slug = slugify(slug or title)
     raw_name = unique_filename(root / "raw", source_path.name)
     raw_target = root / "raw" / raw_name
@@ -735,6 +856,10 @@ def ingest_source(
         "author": author,
         "source_date": source_date,
         "captured": created_at,
+        "content_hash": content_hash,
+        "content_hash_algorithm": "sha256",
+        "source_size_bytes": source_path.stat().st_size,
+        "original_path": source_path.as_posix(),
         "tags": ["noesis", "source"],
         "aliases": [],
     }
@@ -751,7 +876,80 @@ Raw source: [{raw_name}](../raw/{raw_name})
 ## Open Questions
 """
     write_note_and_validate(root, note_path, metadata, body, cleanup_paths=[raw_target])
-    return CreatedNote(note_id=note_id, path=note_path)
+    return SourceCaptureResult(
+        status="created",
+        source_file=source_path,
+        title=title,
+        content_hash=content_hash,
+        note=CreatedNote(note_id=note_id, path=note_path),
+        raw_path=raw_target,
+    )
+
+
+def deterministic_source_paths(source_files: Sequence[Path | str]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for source_file in source_files:
+        path = Path(source_file).expanduser().resolve()
+        if path in seen:
+            continue
+        if not path.is_file():
+            raise ValueError(f"source file does not exist: {source_file}")
+        paths.append(path)
+        seen.add(path)
+    return sorted(paths, key=lambda path: path.as_posix())
+
+
+def title_from_source_path(source_path: Path, *, source_root: Path | None = None) -> str:
+    rel = relative_source_path(source_path, source_root)
+    stem = rel.with_suffix("").as_posix()
+    return re.sub(r"[-_/]+", " ", stem).strip().title() or source_path.stem
+
+
+def slug_from_source_path(source_path: Path, *, source_root: Path | None = None) -> str:
+    rel = relative_source_path(source_path, source_root)
+    return slugify(rel.with_suffix("").as_posix())
+
+
+def relative_source_path(source_path: Path, source_root: Path | None) -> Path:
+    if source_root is None:
+        return Path(source_path.name)
+    try:
+        return source_path.relative_to(source_root)
+    except ValueError:
+        return Path(source_path.name)
+
+
+def file_content_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def find_existing_source_by_content_hash(root: Path, content_hash: str) -> Note | None:
+    vault = Vault.load(root)
+    for note in sorted(vault.notes, key=lambda item: item.rel_path.as_posix()):
+        if note.type != "source":
+            continue
+        if source_note_content_hash(note) == content_hash:
+            return note
+    return None
+
+
+def source_note_content_hash(note: Note) -> str | None:
+    content_hash = note.metadata.get("content_hash")
+    if isinstance(content_hash, str) and content_hash.startswith("sha256:"):
+        return content_hash
+
+    raw_path = note.metadata.get("raw_path")
+    if not isinstance(raw_path, str) or is_blank(raw_path):
+        return None
+    candidate = (note.path.parent / raw_path).resolve()
+    if not candidate.is_file():
+        return None
+    return file_content_hash(candidate)
 
 
 def extract_evidence(
@@ -1586,6 +1784,10 @@ original_url: unknown
 author: unknown
 source_date: unknown
 captured: "{{date}}"
+content_hash: unknown
+content_hash_algorithm: sha256
+source_size_bytes: unknown
+original_path: unknown
 tags:
   - noesis
   - source

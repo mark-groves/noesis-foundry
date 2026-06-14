@@ -14,6 +14,10 @@ original_url: unknown
 author: unknown
 source_date: unknown
 captured: "{{date}}"
+content_hash: unknown
+content_hash_algorithm: sha256
+source_size_bytes: unknown
+original_path: unknown
 tags:
   - noesis
   - source

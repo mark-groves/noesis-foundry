@@ -193,7 +193,8 @@ Current commands:
 | --- | --- |
 | `noesis vault init <path>` | Create the folder schema, Bases, dashboard, and templates. |
 | `noesis vault doctor <path>` | Report V1 contract compatibility, validation completeness, and CLI/MCP readiness. |
-| `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source and create a source note. |
+| `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source, record provenance and content hash metadata, skip duplicate content by default, and create a source note. |
+| `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order and optionally create one evidence draft per new source. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create draft evidence notes from a source note. |
 | `noesis propose claim --vault <path> --evidence <id...>` | Create a claim note grounded in evidence. |
 | `noesis synthesize --vault <path> --claim <id...>` | Create a synthesis note from claims. |
