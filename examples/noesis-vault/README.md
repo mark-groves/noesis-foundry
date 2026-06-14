@@ -12,6 +12,12 @@ by the write-side CLI commands. That fixture starts at
 `sources/source-cli-authoring-loop.md` and proves the CLI can author new
 source-backed draft memory outside the original hand-written demo.
 
+The ingest command can also capture a directory of local source files in
+deterministic path order. New source notes record optional provenance fields
+such as `source_type`, `original_url`, `author`, `source_date`, `captured`,
+`content_hash`, `source_size_bytes`, and `original_path`; duplicate content is
+skipped by default and reported in the command summary.
+
 The `agent-memory` dogfood extension models a realistic project-session handoff:
 `source -> evidence -> claim -> review -> synthesis -> reviewed knowledge ->
 operational context`. It starts at `sources/source-agent-memory-session.md`,
@@ -31,6 +37,19 @@ PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --
 `context explain` shows why reviewed notes were included, scoped out, or
 budgeted out, and labels stale/superseded/archive notes as background
 provenance only.
+
+For a Codex or agent thread working on this repository, the fixture can be
+checked with:
+
+```bash
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+```
+
+An MCP client should follow the same lifecycle through `noesis_ingest_source`,
+`noesis_create_evidence_draft`, `noesis_create_claim_draft`, review tools, and
+`noesis_build_context`; the tools are adapters over these vault files, not a
+separate source of truth.
 
 Open this folder as a vault in Obsidian, then start at
 `_dashboards/noesis-review-dashboard.md`.

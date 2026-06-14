@@ -36,9 +36,14 @@ class NoesisMcpHandlers:
     def lint_vault(self, vault_path: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
+        doctor = vault.doctor()
         return {
             "ok": not issues,
             "vault_path": str(vault.root),
+            "contract": doctor_payload(doctor),
+            "compatible": doctor.compatible,
+            "complete": doctor.complete,
+            "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
             "note_count": len(vault.notes),
             "issue_count": len(issues),
             "issues": [issue_to_dict(issue, vault.root) for issue in issues],
@@ -667,12 +672,29 @@ def issue_to_dict(issue: Any, vault_root: Path) -> JsonObject:
 
 
 def validation_error(vault: Vault, issues: list[Any]) -> JsonObject:
+    doctor = vault.doctor()
     return {
         "ok": False,
         "error": "vault validation failed",
         "vault_path": str(vault.root),
+        "contract": doctor_payload(doctor),
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
+    }
+
+
+def doctor_payload(doctor: Any) -> JsonObject:
+    contract_version = doctor.contract.get("contract_version")
+    return {
+        "path": str(doctor.contract_path),
+        "present": doctor.contract_path.exists(),
+        "version": str(contract_version) if contract_version is not None else None,
+        "supported": doctor.compatible,
+        "metadata": json_safe(doctor.contract),
+        "issues": [issue_to_dict(issue, doctor.root) for issue in doctor.contract_issues],
     }
 
 
