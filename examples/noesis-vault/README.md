@@ -25,6 +25,19 @@ ends at `context/operational-context-agent-memory-dogfood.md`, and keeps
 `stale/stale-agent-memory-global-summary.md` traceable but excluded from
 generated context.
 
+For a Codex or agent thread working on this repository, the fixture can be
+checked with:
+
+```bash
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+```
+
+An MCP client should follow the same lifecycle through `noesis_ingest_source`,
+`noesis_create_evidence_draft`, `noesis_create_claim_draft`, review tools, and
+`noesis_build_context`; the tools are adapters over these vault files, not a
+separate source of truth.
+
 Open this folder as a vault in Obsidian, then start at
 `_dashboards/noesis-review-dashboard.md`.
 

@@ -57,6 +57,22 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    note links to preserved raw material and evidence drafts link back to the
    source.
 
+## Concrete Example
+
+For the checked-in Noesis Foundry dogfood fixture, inspect the source-backed
+path that begins with `source-agent-memory-session`:
+
+```bash
+PYTHONPATH=src python -m noesis trace source-agent-memory-session --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+```
+
+The equivalent MCP path is to call `noesis_lint_vault`, then
+`noesis_ingest_source` for a local source file, then
+`noesis_create_evidence_draft` for each atomic evidence item. Keep the source
+file local and immutable; do not copy CLI field names into this skill as a
+separate schema.
+
 ## Fallback
 
 Use direct Markdown/YAML only when the CLI or Python module cannot run. In that

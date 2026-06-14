@@ -216,12 +216,12 @@ Supported commands:
 | `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. |
 | `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge. |
 
-The vault files are the source of truth. The CLI and MCP server are implemented
-adapters over the same parser, validator, lineage tracer, review queue, context
-builder, and lifecycle write functions. Portable Agent Skills remain a future
-adapter layer; when added, they should prefer the CLI or MCP tools and fall back
-to direct Markdown edits only as adapter behavior. Neither MCP nor skills should
-introduce a second schema or make Obsidian plugin APIs the source of truth.
+The vault files are the source of truth. The CLI, MCP server, and repo-local
+portable Agent Skills are adapters over the same parser, validator, lineage
+tracer, review queue, context builder, and lifecycle write functions. Skills
+should prefer the CLI or MCP tools and fall back to direct Markdown edits only
+as adapter behavior. Neither MCP nor skills should introduce a second schema or
+make Obsidian plugin APIs the source of truth.
 
 ### Portable Agent Skills
 
@@ -236,6 +236,21 @@ Repo-local portable skills live in [`skills`](./skills):
 The skills are documentation adapters over the same file-backed contract as the
 CLI and MCP server. They point agents back to this README, the architecture
 docs, and the CLI instead of duplicating the canonical schema.
+
+For a concrete project-memory dogfood fixture, inspect the agent-memory chain in
+the example vault:
+
+```bash
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+```
+
+That fixture starts with local project-session source material in
+`examples/noesis-vault/raw/2026-06-13-agent-memory-session.md`, moves through
+source, evidence, claim, review, synthesis, and reviewed knowledge notes, and
+ends at `context/operational-context-agent-memory-dogfood.md`. It also keeps
+`stale/stale-agent-memory-global-summary.md` traceable but excluded from active
+context.
 
 ### MCP MVP
 
@@ -306,6 +321,26 @@ Example agent workflow:
 4. Call noesis_approve_review or noesis_request_review_changes to create an audit note.
 5. Call noesis_build_context to prepare current reviewed context for the next task.
 ```
+
+For an ingest-to-context project workflow, a Codex or agent thread should use
+MCP tools in the same order as the CLI lifecycle:
+
+```text
+1. noesis_lint_vault with the target vault path.
+2. noesis_ingest_source for the local source artifact.
+3. noesis_create_evidence_draft for atomic source-backed evidence.
+4. noesis_create_claim_draft for a narrow claim grounded in that evidence.
+5. noesis_create_synthesis_draft when the claim should become durable memory.
+6. noesis_get_note and noesis_trace_lineage before review.
+7. noesis_approve_review or noesis_request_review_changes to leave an audit trail.
+8. noesis_promote_synthesis only after review approval.
+9. noesis_build_context or noesis_write_context for the next project task.
+```
+
+Use the skill packages when an agent runtime supports portable skills and MCP is
+not wired into the thread. The skills should still drive the same CLI or MCP
+operations first, and only use direct Markdown fallback when those adapters are
+unavailable.
 
 ---
 
