@@ -10,7 +10,10 @@ from typing import Any
 
 from .vault import (
     CreatedNote,
+    LIFECYCLE_STAGES,
     Note,
+    REVIEW_STATES,
+    TYPES,
     Vault,
     approve_review,
     build_context,
@@ -109,6 +112,14 @@ class NoesisMcpHandlers:
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
+        filter_error = review_filter_error(
+            vault,
+            review_state=review_state,
+            note_type=note_type,
+            lifecycle_stage=lifecycle_stage,
+        )
+        if filter_error:
+            return filter_error
         due_filter = due or due_on is not None
         try:
             queue = vault.review_queue(
@@ -697,6 +708,33 @@ def review_filters(
         "due": due,
         "due_on": due_on,
     }
+
+
+def review_filter_error(
+    vault: Vault,
+    *,
+    review_state: str | None = None,
+    note_type: str | None = None,
+    lifecycle_stage: str | None = None,
+) -> JsonObject | None:
+    allowed_types = TYPES - {"dashboard"}
+    checks = (
+        ("review_state", review_state, REVIEW_STATES),
+        ("type", note_type, allowed_types),
+        ("lifecycle_stage", lifecycle_stage, LIFECYCLE_STAGES),
+    )
+    for field, value, allowed in checks:
+        if value is not None and value not in allowed:
+            expected = ", ".join(sorted(allowed))
+            return {
+                "ok": False,
+                "error": f"invalid {field}: {value}; expected one of: {expected}",
+                "vault_path": str(vault.root),
+                "field": field,
+                "value": value,
+                "expected": sorted(allowed),
+            }
+    return None
 
 
 def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str | None = None) -> JsonObject:

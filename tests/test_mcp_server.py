@@ -184,6 +184,23 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual(result["notes"][0]["noesis_id"], "claim-useful-memory-requires-lifecycle")
 
+    def test_review_queue_rejects_invalid_mcp_filters(self) -> None:
+        handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
+
+        cases = (
+            ("review_state", {"review_state": "ready_for_review"}),
+            ("type", {"note_type": "claimm"}),
+            ("lifecycle_stage", {"lifecycle_stage": "reviewing"}),
+        )
+        for field, kwargs in cases:
+            with self.subTest(field=field):
+                result = handlers.get_review_queue(**kwargs)
+                self.assertEqual(result["ok"], False)
+                self.assertEqual(result["field"], field)
+                self.assertIn(f"invalid {field}", result["error"])
+                self.assertIsInstance(result["expected"], list)
+                self.assertGreater(len(result["expected"]), 0)
+
     def test_review_due_on_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
