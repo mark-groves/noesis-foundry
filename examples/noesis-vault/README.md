@@ -12,6 +12,12 @@ by the write-side CLI commands. That fixture starts at
 `sources/source-cli-authoring-loop.md` and proves the CLI can author new
 source-backed draft memory outside the original hand-written demo.
 
+The ingest command can also capture a directory of local source files in
+deterministic path order. New source notes record optional provenance fields
+such as `source_type`, `original_url`, `author`, `source_date`, `captured`,
+`content_hash`, `source_size_bytes`, and `original_path`; duplicate content is
+skipped by default and reported in the command summary.
+
 The `agent-memory` dogfood extension models a realistic project-session handoff:
 `source -> evidence -> claim -> review -> synthesis -> reviewed knowledge ->
 operational context`. It starts at `sources/source-agent-memory-session.md`,
