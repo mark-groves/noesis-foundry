@@ -21,6 +21,8 @@ The durable source of truth is the vault: ordinary Markdown files with YAML
 properties. Obsidian is the human workbench. The CLI and MCP server are
 implemented agent-facing adapters over the same files. Portable Agent Skills
 remain a future adapter layer unless implemented outside this repo.
+The V1 contract spine is a root-level `noesis.vault.yaml` metadata file, so
+compatibility can be checked without rewriting every Markdown note.
 
 ## Research Snapshot
 
@@ -98,7 +100,24 @@ _bases/                 Obsidian Base views
 _canvas/                Obsidian Canvas maps
 _dashboards/            human-facing dashboard notes
 _templates/             copyable note templates
+noesis.vault.yaml       V1 contract/version metadata for the vault
 ```
+
+The contract metadata file is flat YAML:
+
+```yaml
+noesis_contract: vault
+contract_version: "1"
+source_of_truth: markdown-flat-yaml
+requires_noesis: ">=0.1.0"
+created: 2026-06-13
+updated: 2026-06-13
+```
+
+`noesis vault init <path>` creates this file for initialized vaults. Running it
+against an existing vault adds missing scaffold files without rewriting notes
+unless `--force` is passed. `noesis vault doctor <path>` reports whether the
+contract is present, supported, complete, and ready for CLI/MCP use.
 
 ### Required Properties
 
@@ -173,6 +192,7 @@ Current commands:
 | Command | Purpose |
 | --- | --- |
 | `noesis vault init <path>` | Create the folder schema, Bases, dashboard, and templates. |
+| `noesis vault doctor <path>` | Report V1 contract compatibility, validation completeness, and CLI/MCP readiness. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source, record provenance and content hash metadata, skip duplicate content by default, and create a source note. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order and optionally create one evidence draft per new source. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create draft evidence notes from a source note. |
@@ -186,7 +206,7 @@ Current commands:
 | `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context from reviewed knowledge only, with stale/superseded exclusions. |
 | `noesis context write --vault <path> --purpose <purpose>` | Write an operational context note from reviewed knowledge. |
 | `noesis trace <note-id> --vault <path>` | Print source -> evidence -> claim -> synthesis -> knowledge lineage. |
-| `noesis vault validate <path>` | Validate frontmatter, links, lifecycle values, Base YAML, Canvas JSON, and context exclusions. |
+| `noesis vault validate <path>` | Validate V1 contract metadata, frontmatter, links, lifecycle values, Base YAML, Canvas JSON, and context exclusions. |
 
 ### MCP Boundary
 
@@ -200,7 +220,7 @@ Current tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `noesis_lint_vault` | Validate required folders, flat YAML properties, lifecycle values, wikilinks, Base files, Canvas files, and context exclusions. |
+| `noesis_lint_vault` | Validate V1 contract metadata, required folders, flat YAML properties, lifecycle values, wikilinks, Base files, Canvas files, and context exclusions. |
 | `noesis_search_notes` | Search notes by text, type, lifecycle stage, status, and review state. |
 | `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
 | `noesis_get_review_queue` | Return notes that need human or agent review. |
