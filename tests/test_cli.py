@@ -547,6 +547,49 @@ class NoesisCliTests(unittest.TestCase):
         ):
             self.assertIn(expected, trace.stdout)
 
+    def test_example_noesis_roadmap_context_uses_reviewed_knowledge(self) -> None:
+        context = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "noesis-roadmap",
+            "--purpose",
+            "orchestrate next Noesis phases",
+        )
+        self.assertEqual(context.returncode, 0, context.stderr)
+        self.assertIn("reviewed-knowledge-noesis-roadmap-phase-orchestration", context.stdout)
+        self.assertIn("prioritize source-backed project memory", context.stdout)
+        self.assertIn("Markdown plus flat YAML as the source of truth", context.stdout)
+        self.assertNotIn("The next Noesis roadmap phase should prioritize a custom Obsidian plugin", context.stdout)
+        self.assertNotIn("stale-noesis-roadmap-plugin-first", context.stdout)
+
+        context_note = (
+            EXAMPLE_VAULT / "context" / "operational-context-noesis-roadmap-phase-orchestration.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("[[reviewed-knowledge-noesis-roadmap-phase-orchestration]]", context_note)
+        self.assertIn("[[stale-noesis-roadmap-plugin-first]]", context_note)
+
+        trace = run_noesis(
+            "trace",
+            "reviewed-knowledge-noesis-roadmap-phase-orchestration",
+            "--vault",
+            str(EXAMPLE_VAULT),
+        )
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        for expected in (
+            "source-noesis-roadmap-docs",
+            "evidence-noesis-roadmap-adapter-sequence",
+            "claim-noesis-roadmap-project-memory-first",
+            "review-noesis-roadmap-phase-orchestration",
+            "synthesis-noesis-roadmap-phase-orchestration",
+            "reviewed-knowledge-noesis-roadmap-phase-orchestration",
+            "context-noesis-roadmap-phase-orchestration",
+            "stale-noesis-roadmap-plugin-first",
+        ):
+            self.assertIn(expected, trace.stdout)
+
     def test_initialized_vault_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
@@ -990,7 +1033,7 @@ sources:
         self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
         self.assertIn("Purpose: prepare an agent", payload["content"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", payload["content"])
-        self.assertEqual(payload["available_reviewed_knowledge_count"], 2)
+        self.assertEqual(payload["available_reviewed_knowledge_count"], 3)
         self.assertEqual(payload["selection"]["included"][0]["selection_status"], "included")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1048,6 +1091,7 @@ sources:
         self.assertEqual(payload["selection"]["included"], [])
         self.assertIn("reviewed-knowledge-agent-memory-dogfood", excluded_ids)
         self.assertIn("reviewed-knowledge-noesis-lifecycle", excluded_ids)
+        self.assertIn("reviewed-knowledge-noesis-roadmap-phase-orchestration", excluded_ids)
         for note in payload["selection"]["excluded"]:
             self.assertEqual(note["selection_status"], "budgeted_out")
             self.assertIn("excluded by max_chars 1", note["selection_reason"])
@@ -1077,7 +1121,9 @@ sources:
         ]
         self.assertEqual(included_ids, ["reviewed-knowledge-agent-memory-dogfood"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", scoped_out_ids)
+        self.assertIn("reviewed-knowledge-noesis-roadmap-phase-orchestration", scoped_out_ids)
         self.assertIn("stale-agent-memory-global-summary", lifecycle_excluded_ids)
+        self.assertIn("stale-noesis-roadmap-plugin-first", lifecycle_excluded_ids)
 
         text = run_noesis(
             "context",
