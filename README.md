@@ -239,11 +239,22 @@ make Obsidian plugin APIs the source of truth.
 The supported local install smoke path is:
 
 ```bash
-python -m venv --system-site-packages /tmp/noesis-smoke
+python -m venv /tmp/noesis-smoke
 /tmp/noesis-smoke/bin/python -m pip install -e .
 /tmp/noesis-smoke/bin/noesis vault doctor examples/noesis-vault --json
+/tmp/noesis-smoke/bin/noesis vault validate examples/noesis-vault
 /tmp/noesis-smoke/bin/noesis-mcp --help
 ```
+
+For a fresh install path that does not rely on `PYTHONPATH=src`, see
+[`docs/install.md`](./docs/install.md) or run:
+
+```bash
+bash scripts/smoke-install.sh
+```
+
+The install guide also includes a generic MCP stdio client snippet at
+[`examples/mcp/noesis-mcp.example.json`](./examples/mcp/noesis-mcp.example.json).
 
 ### Portable Agent Skills
 
