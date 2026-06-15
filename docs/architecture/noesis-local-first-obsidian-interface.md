@@ -274,7 +274,8 @@ schema. The schema belongs in the vault contract and CLI parser.
 
 The implemented baseline lets a human open the example vault and see:
 
-1. A review dashboard showing notes that need attention.
+1. A review dashboard showing notes that need attention, plus CLI review
+   summary, queue filters, due-date filters, and per-note review inspection.
 2. A Base view over lifecycle state.
 3. A Canvas map showing one complete lineage.
 4. Templates for another agent to create compatible notes.

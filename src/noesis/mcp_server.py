@@ -5,19 +5,24 @@ from dataclasses import asdict
 from datetime import date, datetime
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from .vault import (
     ContextPackage,
     ContextSelection,
     CreatedNote,
+    LIFECYCLE_STAGES,
     Note,
+    REVIEW_STATES,
+    TYPES,
     Vault,
     approve_review,
     compose_context,
     extract_evidence,
     ingest_source,
     mark_memory_stale,
+    note_review_due,
     promote_synthesis,
     propose_claim,
     request_review_changes,
@@ -100,18 +105,72 @@ class NoesisMcpHandlers:
             return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
         return {"ok": True, "vault_path": str(vault.root), "note": note_to_dict(found, vault.root)}
 
-    def get_review_queue(self, vault_path: str | None = None) -> JsonObject:
+    def get_review_queue(
+        self,
+        vault_path: str | None = None,
+        review_state: str | None = None,
+        note_type: str | None = None,
+        lifecycle_stage: str | None = None,
+        due: bool = False,
+        due_on: str | None = None,
+    ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
-        queue = vault.review_queue()
+        filter_error = review_filter_error(
+            vault,
+            review_state=review_state,
+            note_type=note_type,
+            lifecycle_stage=lifecycle_stage,
+        )
+        if filter_error:
+            return filter_error
+        due_filter = due or due_on is not None
+        try:
+            queue = vault.review_queue(
+                review_state=review_state,
+                note_type=note_type,
+                lifecycle_stage=lifecycle_stage,
+                due=due_filter,
+                due_on=due_on,
+            )
+        except ValueError as exc:
+            return review_error(vault, exc)
         return {
             "ok": True,
             "vault_path": str(vault.root),
             "count": len(queue),
             "notes": [note_summary(note, vault.root) for note in queue],
+            "filters": review_filters(
+                review_state=review_state,
+                note_type=note_type,
+                lifecycle_stage=lifecycle_stage,
+                due=due_filter,
+                due_on=due_on,
+            ),
         }
+
+    def get_review_summary(self, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+        vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
+        try:
+            summary = vault.review_summary(due_on=due_on)
+        except ValueError as exc:
+            return review_error(vault, exc)
+        return review_summary_to_dict(vault, summary, due_on=due_on)
+
+    def show_review(self, note: str, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+        vault = Vault.load(self.resolve_vault(vault_path))
+        found = vault.find_note(note)
+        if found is None:
+            return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
+        try:
+            return review_workbench_to_dict(vault, found, note_ref=note, due_on=due_on)
+        except ValueError as exc:
+            return review_error(vault, exc)
 
     def trace_lineage(self, note: str, vault_path: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
@@ -404,9 +463,33 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         return handlers.get_note(note, vault_path)
 
     @server.tool()
-    def noesis_get_review_queue(vault_path: str | None = None) -> JsonObject:
-        """List notes that still need review."""
-        return handlers.get_review_queue(vault_path)
+    def noesis_get_review_queue(
+        vault_path: str | None = None,
+        review_state: str | None = None,
+        note_type: str | None = None,
+        lifecycle_stage: str | None = None,
+        due: bool = False,
+        due_on: str | None = None,
+    ) -> JsonObject:
+        """List notes that still need review, with optional metadata and due-date filters."""
+        return handlers.get_review_queue(
+            vault_path=vault_path,
+            review_state=review_state,
+            note_type=note_type,
+            lifecycle_stage=lifecycle_stage,
+            due=due,
+            due_on=due_on,
+        )
+
+    @server.tool()
+    def noesis_get_review_summary(vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+        """Summarize review states and scheduled next-review items."""
+        return handlers.get_review_summary(vault_path=vault_path, due_on=due_on)
+
+    @server.tool()
+    def noesis_show_review(note: str, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+        """Inspect review state, lineage, audit records, support, and downstream impact for one note."""
+        return handlers.show_review(note=note, vault_path=vault_path, due_on=due_on)
 
     @server.tool()
     def noesis_trace_lineage(note: str, vault_path: str | None = None) -> JsonObject:
@@ -663,6 +746,131 @@ def note_to_dict(note: Note, vault_root: Path) -> JsonObject:
     return data
 
 
+def review_filters(
+    *,
+    review_state: str | None = None,
+    note_type: str | None = None,
+    lifecycle_stage: str | None = None,
+    due: bool = False,
+    due_on: str | None = None,
+) -> JsonObject:
+    return {
+        "review_state": review_state,
+        "type": note_type,
+        "lifecycle_stage": lifecycle_stage,
+        "due": due,
+        "due_on": due_on,
+    }
+
+
+def review_filter_error(
+    vault: Vault,
+    *,
+    review_state: str | None = None,
+    note_type: str | None = None,
+    lifecycle_stage: str | None = None,
+) -> JsonObject | None:
+    allowed_types = TYPES - {"dashboard"}
+    checks = (
+        ("review_state", review_state, REVIEW_STATES),
+        ("type", note_type, allowed_types),
+        ("lifecycle_stage", lifecycle_stage, LIFECYCLE_STAGES),
+    )
+    for field, value, allowed in checks:
+        if value is not None and value not in allowed:
+            expected = ", ".join(sorted(allowed))
+            return {
+                "ok": False,
+                "error": f"invalid {field}: {value}; expected one of: {expected}",
+                "vault_path": str(vault.root),
+                "field": field,
+                "value": value,
+                "expected": sorted(allowed),
+            }
+    return None
+
+
+def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str | None = None) -> JsonObject:
+    return {
+        "ok": True,
+        "vault_path": str(vault.root),
+        "pending_count": summary["pending_count"],
+        "due_count": summary["due_count"],
+        "due_on": due_on,
+        "review_state_counts": json_safe(summary["review_state_counts"]),
+        "due_notes": [note_summary(note, vault.root) for note in summary["due_notes"]],
+        "next_review_notes": [note_summary(note, vault.root) for note in summary["next_review_notes"]],
+    }
+
+
+def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on: str | None = None) -> JsonObject:
+    audits = vault.review_audits_for(note)
+    support = vault.support_notes_for(note)
+    lineage = vault.lineage(note.noesis_id)
+    changes_requested = [
+        {
+            "review": note_summary(audit, vault.root),
+            "changes_requested": markdown_section(audit.body, "Changes Requested"),
+        }
+        for audit in audits
+        if audit.metadata.get("decision") == "changes-requested"
+    ]
+    requires_audit = note.type in {"evidence", "claim", "synthesis", "reviewed-knowledge"} and note.review_state in {
+        "approved",
+        "reviewed",
+    }
+    return {
+        "ok": True,
+        "vault_path": str(vault.root),
+        "note_ref": note_ref,
+        "note": note_to_dict(note, vault.root),
+        "review_due": note_review_due(note, due_on=due_on),
+        "audit_status": {
+            "requires_audit": requires_audit,
+            "has_audit": bool(audits),
+            "ok": (not requires_audit) or bool(audits),
+        },
+        "audit_records": [review_audit_to_dict(audit, vault.root) for audit in audits],
+        "support": {
+            key: [note_summary(support_note, vault.root) for support_note in notes]
+            for key, notes in support.items()
+        },
+        "changes_requested": changes_requested,
+        "impact": {
+            "dependent_reviewed_knowledge": [
+                note_summary(dependent, vault.root)
+                for dependent in vault.dependent_reviewed_knowledge_for(note)
+            ],
+            "dependent_contexts": [
+                note_summary(dependent, vault.root)
+                for dependent in vault.dependent_contexts_for(note)
+            ],
+        },
+        "lineage": [note_summary(lineage_note, vault.root) for lineage_note in lineage],
+    }
+
+
+def review_audit_to_dict(note: Note, vault_root: Path) -> JsonObject:
+    data = note_summary(note, vault_root)
+    data["reviewer"] = json_safe(note.metadata.get("reviewer"))
+    data["reviewed_at"] = json_safe(note.metadata.get("reviewed_at"))
+    data["decision"] = json_safe(note.metadata.get("decision"))
+    data["changes_requested"] = markdown_section(note.body, "Changes Requested")
+    data["basis"] = markdown_section(note.body, "Basis")
+    return data
+
+
+def markdown_section(body: str, heading: str) -> str:
+    pattern = re.compile(
+        rf"^##\s+{re.escape(heading)}\s*$\n(?P<section>.*?)(?=^##\s+|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(body)
+    if match is None:
+        return ""
+    return match.group("section").strip()
+
+
 def issue_to_dict(issue: Any, vault_root: Path) -> JsonObject:
     try:
         rel_path = issue.path.relative_to(vault_root).as_posix()
@@ -684,6 +892,10 @@ def validation_error(vault: Vault, issues: list[Any]) -> JsonObject:
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
     }
+
+
+def review_error(vault: Vault, error: ValueError) -> JsonObject:
+    return {"ok": False, "error": str(error), "vault_path": str(vault.root)}
 
 
 def doctor_payload(doctor: Any) -> JsonObject:
