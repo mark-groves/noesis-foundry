@@ -42,9 +42,13 @@ The example vault includes a Noesis Foundry project-memory fixture:
 ```bash
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-roadmap-phase-orchestration --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
 ```
 
 This fixture shows the intended adapter flow without creating a second schema:
 local project-session source material is captured, evidence and claims are
 reviewed, a synthesis is promoted, stale shortcut memory is preserved, and
-operational context is built from reviewed knowledge only.
+operational context is built from reviewed knowledge only. The roadmap slice
+uses the same lifecycle to turn checked-in project docs into source-backed
+phase-orchestration guidance for future Noesis work.

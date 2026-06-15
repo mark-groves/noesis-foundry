@@ -25,11 +25,20 @@ ends at `context/operational-context-agent-memory-dogfood.md`, and keeps
 `stale/stale-agent-memory-global-summary.md` traceable but excluded from
 generated context.
 
+The `noesis-roadmap` project-memory extension uses the checked-in README,
+architecture, and skill docs as source material for next-phase planning. It
+starts at `sources/source-noesis-roadmap-docs.md`, promotes
+`knowledge/reviewed-knowledge-noesis-roadmap-phase-orchestration.md`, ends at
+`context/operational-context-noesis-roadmap-phase-orchestration.md`, and keeps
+`stale/stale-noesis-roadmap-plugin-first.md` traceable but excluded from active
+roadmap guidance.
+
 The CLI context composer can scope and budget the active package without
 weakening lifecycle safety:
 
 ```bash
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
 PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
 ```
 
@@ -43,7 +52,9 @@ checked with:
 
 ```bash
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-roadmap-phase-orchestration --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
 ```
 
 An MCP client should follow the same lifecycle through `noesis_ingest_source`,
@@ -69,6 +80,8 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
   package the next agent would read.
 - `context/operational-context-agent-memory-dogfood.md` - a scoped dogfood
   context package for agent-memory work.
+- `context/operational-context-noesis-roadmap-phase-orchestration.md` - a
+  scoped context package for next-phase Noesis roadmap work.
 
 The CLI review workbench mirrors the Obsidian view without becoming canonical
 storage:
