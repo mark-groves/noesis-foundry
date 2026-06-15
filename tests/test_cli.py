@@ -15,6 +15,7 @@ from noesis.vault import Vault
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
+CODEX_SESSION_BUNDLE = ROOT / "tests" / "fixtures" / "codex-session-bundle"
 
 
 def run_noesis(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -980,6 +981,153 @@ class NoesisCliTests(unittest.TestCase):
             self.assertTrue((vault_path / "raw" / "alpha-note.md").exists())
             self.assertTrue((vault_path / "raw" / "beta-note.md").exists())
             self.assertFalse((vault_path / "raw" / "beta-copy.txt").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_bundle_ingest_imports_artifacts_with_provenance_evidence_and_duplicate_skips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(CODEX_SESSION_BUNDLE),
+                "--evidence-drafts",
+                "--json",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            payload = parse_json_stdout(ingest)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["bundle_id"], "codex-session-export-demo")
+            self.assertEqual(payload["artifact_count"], 3)
+            self.assertEqual(payload["created_count"], 2)
+            self.assertEqual(payload["skipped_count"], 1)
+            results = payload["results"]
+            self.assertEqual(
+                [result["source_file"] for result in results],
+                [
+                    str(CODEX_SESSION_BUNDLE / "exports" / "01-session.json"),
+                    str(CODEX_SESSION_BUNDLE / "exports" / "02-transcript.md"),
+                    str(CODEX_SESSION_BUNDLE / "exports" / "03-transcript-copy.md"),
+                ],
+            )
+            self.assertEqual(results[0]["note_id"], "source-codex-session-metadata")
+            self.assertEqual(results[0]["evidence_note_id"], "evidence-session-metadata")
+            self.assertEqual(results[1]["note_id"], "source-codex-session-transcript")
+            self.assertEqual(results[1]["evidence_note_id"], "evidence-session-transcript")
+            self.assertEqual(results[2]["status"], "skipped")
+            self.assertEqual(results[2]["reason"], "duplicate-content")
+            self.assertEqual(results[2]["existing_note_id"], "source-codex-session-transcript")
+
+            vault = Vault.load(vault_path)
+            metadata_note = vault.find_note("source-codex-session-metadata")
+            transcript_note = vault.find_note("source-codex-session-transcript")
+            self.assertIsNotNone(metadata_note)
+            self.assertIsNotNone(transcript_note)
+            assert metadata_note is not None
+            assert transcript_note is not None
+            self.assertEqual(metadata_note.metadata["import_pipeline"], "source-bundle")
+            self.assertEqual(metadata_note.metadata["bundle_id"], "codex-session-export-demo")
+            self.assertEqual(metadata_note.metadata["bundle_title"], "Codex Session Export Demo")
+            self.assertEqual(metadata_note.metadata["bundle_artifact_path"], "exports/01-session.json")
+            self.assertEqual(metadata_note.metadata["bundle_item_id"], "session-metadata")
+            self.assertEqual(metadata_note.metadata["bundle_item_index"], 1)
+            self.assertEqual(metadata_note.metadata["bundle_manifest_index"], 2)
+            self.assertEqual(metadata_note.metadata["source_type"], "codex-session-metadata")
+            self.assertEqual(metadata_note.metadata["author"], "Codex Test Fixture")
+            self.assertEqual(str(metadata_note.metadata["source_date"]), "2026-06-15")
+            self.assertTrue(str(metadata_note.metadata["bundle_manifest_hash"]).startswith("sha256:"))
+            self.assertEqual(transcript_note.metadata["bundle_item_index"], 2)
+            self.assertEqual(transcript_note.metadata["bundle_manifest_index"], 1)
+            self.assertEqual(transcript_note.metadata["source_type"], "codex-session-export")
+            self.assertTrue((vault_path / "raw" / "01-session.json").exists())
+            self.assertTrue((vault_path / "raw" / "02-transcript.md").exists())
+            self.assertFalse((vault_path / "raw" / "03-transcript-copy.md").exists())
+
+            evidence_note = vault.find_note("evidence-session-metadata")
+            self.assertIsNotNone(evidence_note)
+            assert evidence_note is not None
+            self.assertIn("delegated Codex session", evidence_note.body)
+            self.assertIn("[[source-codex-session-metadata]]", evidence_note.body)
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            duplicate_ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(CODEX_SESSION_BUNDLE),
+                "--evidence-drafts",
+                "--json",
+            )
+            self.assertEqual(duplicate_ingest.returncode, 0, duplicate_ingest.stderr)
+            duplicate_payload = parse_json_stdout(duplicate_ingest)
+            self.assertEqual(duplicate_payload["created_count"], 0)
+            self.assertEqual(duplicate_payload["skipped_count"], 3)
+            self.assertEqual(
+                [result["existing_note_id"] for result in duplicate_payload["results"]],
+                [
+                    "source-codex-session-metadata",
+                    "source-codex-session-transcript",
+                    "source-codex-session-transcript",
+                ],
+            )
+
+            validate_after_duplicate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate_after_duplicate.returncode, 0, validate_after_duplicate.stderr)
+
+    def test_bundle_ingest_rejects_invalid_item_metadata_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-valid.md").write_text("valid artifact\n", encoding="utf-8")
+            (exports / "02-invalid.md").write_text("invalid artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """bundle_id: invalid-metadata-demo
+title: Invalid Metadata Demo
+artifacts:
+  - path: exports/01-valid.md
+    title: Valid Artifact
+    slug: valid-artifact
+    source_date: 2026-06-15
+  - path: exports/02-invalid.md
+    title: Invalid Artifact
+    slug: invalid-artifact
+    source_date: not-a-date
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn(
+                "source_date for bundle artifact exports/02-invalid.md must be YYYY-MM-DD or unknown",
+                ingest.stderr,
+            )
+            self.assertFalse((vault_path / "raw" / "01-valid.md").exists())
+            self.assertFalse((vault_path / "sources" / "source-valid-artifact.md").exists())
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)

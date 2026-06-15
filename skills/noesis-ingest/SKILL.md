@@ -45,7 +45,18 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    ```
 
    Review the created/skipped summary before doing interpretive work.
-5. Extract one or more evidence drafts from a created source note when more
+5. For a packaged project artifact export with a `noesis-bundle.yaml` manifest,
+   prefer bundle ingest so artifact paths, bundle identity, manifest hash, and
+   item order are recorded as flat source metadata:
+
+   ```bash
+   PYTHONPATH=src python -m noesis ingest bundle --vault <vault> <bundle-dir> --evidence-drafts
+   ```
+
+   Use the checked-in `tests/fixtures/codex-session-bundle` shape for local
+   tests or examples. The CLI imports listed artifacts in deterministic
+   artifact-path order and skips duplicate content by default.
+6. Extract one or more evidence drafts from a created source note when more
    specific atomic evidence is needed:
 
    ```bash
@@ -53,7 +64,7 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    ```
 
    Keep each evidence note atomic enough for later claim review.
-6. Re-run vault validation and inspect the created notes. Confirm the source
+7. Re-run vault validation and inspect the created notes. Confirm the source
    note links to preserved raw material and evidence drafts link back to the
    source.
 
@@ -68,9 +79,10 @@ PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --sc
 ```
 
 The equivalent MCP path is to call `noesis_lint_vault`, then
-`noesis_ingest_source` for a local source file, then
+`noesis_ingest_source` for a local source file or
+`noesis_import_source_bundle` for a local manifest-driven bundle, then
 `noesis_create_evidence_draft` for each atomic evidence item. Keep the source
-file local and immutable; do not copy CLI field names into this skill as a
+files local and immutable; do not copy CLI field names into this skill as a
 separate schema.
 
 ## Fallback

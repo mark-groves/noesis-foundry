@@ -1,0 +1,26 @@
+bundle_id: codex-session-export-demo
+title: Codex Session Export Demo
+source_type: codex-session-export
+original_url: codex-session://019ec917-cf18-7033-92b8-02183947995e
+author: Codex Test Fixture
+source_date: 2026-06-15
+artifacts:
+  - path: exports/02-transcript.md
+    id: session-transcript
+    title: Codex Session Transcript
+    slug: codex-session-transcript
+    evidence_title: Session Transcript Evidence
+    evidence_slug: session-transcript
+    evidence: The transcript records a request to build a Noesis capture/import pipeline from local project artifacts.
+  - path: exports/01-session.json
+    id: session-metadata
+    title: Codex Session Metadata
+    slug: codex-session-metadata
+    source_type: codex-session-metadata
+    evidence_title: Session Metadata Evidence
+    evidence_slug: session-metadata
+    evidence: The metadata identifies the delegated Codex session and branch used for the import pipeline work.
+  - path: exports/03-transcript-copy.md
+    id: duplicate-session-transcript
+    title: Duplicate Codex Session Transcript
+    slug: duplicate-codex-session-transcript

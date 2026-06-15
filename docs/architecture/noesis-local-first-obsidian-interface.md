@@ -195,6 +195,7 @@ Current commands:
 | `noesis vault doctor <path>` | Report V1 contract compatibility, validation completeness, and CLI/MCP readiness. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source, record provenance and content hash metadata, skip duplicate content by default, and create a source note. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order and optionally create one evidence draft per new source. |
+| `noesis ingest bundle --vault <path> <bundle-path> --evidence-drafts` | Import a local manifest-driven artifact bundle in deterministic artifact-path order, preserve raw artifacts, record bundle provenance, and optionally create evidence drafts. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create draft evidence notes from a source note. |
 | `noesis propose claim --vault <path> --evidence <id...>` | Create a claim note grounded in evidence. |
 | `noesis synthesize --vault <path> --claim <id...>` | Create a synthesis note from claims. |
@@ -227,6 +228,7 @@ Current tools:
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
 | `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes. |
 | `noesis_ingest_source` | Copy immutable raw source material and create a linked source note. |
+| `noesis_import_source_bundle` | Import a local manifest-driven artifact bundle into source notes and optional evidence drafts. |
 | `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
 | `noesis_create_claim_draft` | Create a review-ready claim draft grounded in evidence notes. |
 | `noesis_create_synthesis_draft` | Create a review-ready synthesis draft grounded in claim lineage. |
