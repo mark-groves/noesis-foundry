@@ -328,6 +328,77 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 ],
             )
 
+    def test_review_workbench_keeps_newer_reverse_only_audit_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            linked = handlers.renew_review("context-first-cli-mcp-workflow", next_review="2026-07-01")
+            self.assertTrue(linked["ok"], linked)
+            (vault_path / "review" / "review-imported-later-audit.md").write_text(
+                """---
+title: Imported Later Audit
+noesis_id: review-imported-later-audit
+type: review
+lifecycle_stage: review
+status: complete
+review_state: approved
+confidence: medium
+created: 2026-08-01
+updated: 2026-08-01
+reviewer: imported
+reviewed_at: 2026-08-01
+reviewed_notes:
+  - "[[context-first-cli-mcp-workflow]]"
+decision: renewed
+next_review: 2026-09-01
+tags:
+  - noesis
+  - review
+aliases: []
+---
+
+# Imported Later Audit
+
+## Decision
+
+renewed
+
+## Reviewed Note
+
+- [[context-first-cli-mcp-workflow]]
+
+## Basis
+
+Imported audit record without a target-side backlink.
+
+## Changes Requested
+
+None.
+
+## Next Review
+
+2026-09-01
+""",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+            workbench = handlers.show_review("context-first-cli-mcp-workflow")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(
+                workbench["review_schedule"]["latest_audit"]["noesis_id"],
+                "review-imported-later-audit",
+            )
+            self.assertEqual(
+                [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
+                [
+                    "review-context-first-cli-mcp-workflow-renewed",
+                    "review-imported-later-audit",
+                ],
+            )
+
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()
 
