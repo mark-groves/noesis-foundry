@@ -400,8 +400,8 @@ class Vault:
             audits,
             key=lambda note: (
                 str(note.metadata.get("reviewed_at", note.metadata.get("updated", ""))),
-                note.title.lower(),
                 relationship_order.get(note.noesis_id, -1),
+                note.title.lower(),
                 note.rel_path.as_posix(),
             ),
         )
