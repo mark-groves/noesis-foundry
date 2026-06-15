@@ -973,7 +973,7 @@ def import_source_bundle(
         artifact_path = resolve_bundle_artifact(bundle_root, artifact_rel)
         parsed_items.append((artifact_rel.as_posix(), manifest_index, artifact_path, item))
 
-    results: list[SourceCaptureResult] = []
+    prepared_items: list[dict[str, Any]] = []
     for bundle_item_index, (artifact_rel, manifest_index, artifact_path, item) in enumerate(
         sorted(parsed_items, key=lambda parsed: (parsed[0], parsed[1])),
         start=1,
@@ -995,6 +995,27 @@ def import_source_bundle(
         if not is_date_like(source_date):
             raise ValueError(f"source_date for bundle artifact {artifact_rel} must be YYYY-MM-DD or unknown")
 
+        prepared_items.append(
+            {
+                "artifact_rel": artifact_rel,
+                "artifact_path": artifact_path,
+                "source_title": source_title,
+                "source_slug": source_slug,
+                "source_type": source_type,
+                "original_url": original_url,
+                "author": author,
+                "source_date": source_date,
+                "item_id": manifest_text(item, "id", default=source_slug),
+                "bundle_item_index": bundle_item_index,
+                "manifest_index": manifest_index,
+                "evidence_title": manifest_optional_text(item, "evidence_title"),
+                "evidence": manifest_optional_text(item, "evidence"),
+                "evidence_slug": manifest_optional_text(item, "evidence_slug"),
+            }
+        )
+
+    results: list[SourceCaptureResult] = []
+    for item in prepared_items:
         source_metadata = {
             "import_pipeline": "source-bundle",
             "bundle_id": bundle_id,
@@ -1002,20 +1023,20 @@ def import_source_bundle(
             "bundle_path": bundle_root.as_posix(),
             "bundle_manifest_path": manifest_path.as_posix(),
             "bundle_manifest_hash": manifest_hash,
-            "bundle_artifact_path": artifact_rel,
-            "bundle_item_id": manifest_text(item, "id", default=source_slug),
-            "bundle_item_index": bundle_item_index,
-            "bundle_manifest_index": manifest_index,
+            "bundle_artifact_path": item["artifact_rel"],
+            "bundle_item_id": item["item_id"],
+            "bundle_item_index": item["bundle_item_index"],
+            "bundle_manifest_index": item["manifest_index"],
         }
         result = capture_source(
             root,
-            artifact_path,
-            source_title,
-            slug=source_slug,
-            source_type=source_type,
-            original_url=original_url,
-            author=author,
-            source_date=source_date,
+            item["artifact_path"],
+            item["source_title"],
+            slug=item["source_slug"],
+            source_type=item["source_type"],
+            original_url=item["original_url"],
+            author=item["author"],
+            source_date=item["source_date"],
             today=today,
             allow_duplicate=allow_duplicates,
             source_metadata=source_metadata,
@@ -1024,9 +1045,9 @@ def import_source_bundle(
             evidence = extract_evidence(
                 root,
                 result.note.note_id,
-                title=manifest_optional_text(item, "evidence_title"),
-                evidence=manifest_optional_text(item, "evidence"),
-                slug=manifest_optional_text(item, "evidence_slug"),
+                title=item["evidence_title"],
+                evidence=item["evidence"],
+                slug=item["evidence_slug"],
                 today=today,
             )
             result = SourceCaptureResult(

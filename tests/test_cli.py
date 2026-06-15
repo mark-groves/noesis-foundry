@@ -816,6 +816,54 @@ class NoesisCliTests(unittest.TestCase):
             validate_after_duplicate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate_after_duplicate.returncode, 0, validate_after_duplicate.stderr)
 
+    def test_bundle_ingest_rejects_invalid_item_metadata_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-valid.md").write_text("valid artifact\n", encoding="utf-8")
+            (exports / "02-invalid.md").write_text("invalid artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """bundle_id: invalid-metadata-demo
+title: Invalid Metadata Demo
+artifacts:
+  - path: exports/01-valid.md
+    title: Valid Artifact
+    slug: valid-artifact
+    source_date: 2026-06-15
+  - path: exports/02-invalid.md
+    title: Invalid Artifact
+    slug: invalid-artifact
+    source_date: not-a-date
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn(
+                "source_date for bundle artifact exports/02-invalid.md must be YYYY-MM-DD or unknown",
+                ingest.stderr,
+            )
+            self.assertFalse((vault_path / "raw" / "01-valid.md").exists())
+            self.assertFalse((vault_path / "sources" / "source-valid-artifact.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
     def test_trace_json_reports_lineage_and_missing_note_errors(self) -> None:
         result = run_noesis(
             "trace",
