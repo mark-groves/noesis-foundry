@@ -638,6 +638,8 @@ sources:
         self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
         self.assertIn("Purpose: prepare an agent", payload["content"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", payload["content"])
+        self.assertEqual(payload["available_reviewed_knowledge_count"], 2)
+        self.assertEqual(payload["selection"]["included"][0]["selection_status"], "included")
 
         with tempfile.TemporaryDirectory() as tmp:
             invalid = run_noesis("context", "build", "--vault", str(Path(tmp) / "missing"), "--json")
@@ -646,6 +648,140 @@ sources:
             self.assertEqual(invalid_payload["ok"], False)
             self.assertEqual(invalid_payload["error"], "vault validation failed")
             self.assertGreater(invalid_payload["issue_count"], 0)
+
+    def test_context_build_limit_reports_budgeted_provenance(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--purpose",
+            "brief a constrained agent",
+            "--limit",
+            "1",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        included_ids = [note["noesis_id"] for note in payload["selection"]["included"]]
+        excluded = payload["selection"]["excluded"]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["limit"], 1)
+        self.assertEqual(payload["reviewed_knowledge_count"], 1)
+        self.assertEqual(included_ids, ["reviewed-knowledge-agent-memory-dogfood"])
+        self.assertEqual(excluded[0]["noesis_id"], "reviewed-knowledge-noesis-lifecycle")
+        self.assertEqual(excluded[0]["selection_status"], "budgeted_out")
+        self.assertIn("excluded by limit 1", excluded[0]["selection_reason"])
+        self.assertNotIn("Noesis should represent memory as a lifecycle", payload["content"])
+
+    def test_context_build_max_chars_excludes_first_over_budget_note(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "noesis",
+            "--limit",
+            "1",
+            "--max-chars",
+            "1",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        excluded_ids = [note["noesis_id"] for note in payload["selection"]["excluded"]]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["reviewed_knowledge_count"], 0)
+        self.assertEqual(payload["selection"]["included"], [])
+        self.assertIn("reviewed-knowledge-agent-memory-dogfood", excluded_ids)
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", excluded_ids)
+        for note in payload["selection"]["excluded"]:
+            self.assertEqual(note["selection_status"], "budgeted_out")
+            self.assertIn("excluded by max_chars 1", note["selection_reason"])
+            self.assertGreater(note["content_chars"], payload["max_chars"])
+        self.assertIn("No current reviewed knowledge found.", payload["content"])
+        self.assertNotIn("Agents should turn session artifacts", payload["content"])
+        self.assertNotIn("Noesis should represent memory as a lifecycle", payload["content"])
+
+    def test_context_explain_reports_scoped_and_lifecycle_exclusions(self) -> None:
+        result = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--purpose",
+            "prepare a future agent",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        included_ids = [note["noesis_id"] for note in payload["selection"]["included"]]
+        scoped_out_ids = [note["noesis_id"] for note in payload["selection"]["excluded"]]
+        lifecycle_excluded_ids = [
+            note["noesis_id"] for note in payload["selection"]["lifecycle_excluded"]
+        ]
+        self.assertEqual(included_ids, ["reviewed-knowledge-agent-memory-dogfood"])
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", scoped_out_ids)
+        self.assertIn("stale-agent-memory-global-summary", lifecycle_excluded_ids)
+
+        text = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+        )
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertIn("Lifecycle-excluded notes are background provenance only.", text.stdout)
+        self.assertIn("stale-agent-memory-global-summary", text.stdout)
+        self.assertNotIn("Agents can safely copy global summary snippets", text.stdout)
+
+    def test_context_explain_reports_archived_history_as_lifecycle_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            archived_note = vault_path / "archive" / "history" / "archived-context-note.md"
+            archived_note.write_text(
+                """---
+title: Archived Context Note
+noesis_id: archived-context-note
+type: archived-history
+lifecycle_stage: archive
+status: archived
+review_state: reviewed
+confidence: medium
+created: 2026-06-13
+updated: 2026-06-13
+tags:
+  - noesis
+  - archive
+aliases: []
+---
+
+# Archived Context Note
+
+This archived note is provenance, not active guidance.
+""",
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            result = run_noesis("context", "explain", "--vault", str(vault_path), "--json")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = parse_json_stdout(result)
+            lifecycle_excluded = payload["selection"]["lifecycle_excluded"]
+            archived = [
+                note for note in lifecycle_excluded if note["noesis_id"] == "archived-context-note"
+            ]
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0]["selection_status"], "lifecycle_excluded")
+            self.assertIn("archived-history has status 'archived'", archived[0]["selection_reason"])
 
     def test_review_request_changes_keeps_note_in_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
