@@ -15,15 +15,18 @@ from .mcp_server import (
     review_workbench_to_dict,
 )
 from .vault import (
+    ContextPackage,
+    ContextSelection,
     LIFECYCLE_STAGES,
     REVIEW_STATES,
     TYPES,
     Vault,
     approve_review,
     build_context,
+    compose_context,
     extract_evidence,
     filter_knowledge_by_scope,
-    ingest_source,
+    ingest_sources,
     init_vault,
     mark_memory_stale,
     promote_synthesis,
@@ -57,17 +60,29 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--json", action="store_true", help="Write structured JSON")
     validate.set_defaults(func=cmd_vault_validate)
 
+    doctor = vault_commands.add_parser("doctor", help="Diagnose vault compatibility and readiness")
+    doctor.add_argument("path", type=Path)
+    doctor.add_argument("--json", action="store_true", help="Write structured JSON")
+    doctor.set_defaults(func=cmd_vault_doctor)
+
     ingest = subcommands.add_parser("ingest", help="Ingest source material")
     ingest_commands = ingest.add_subparsers(dest="ingest_command", required=True)
     source = ingest_commands.add_parser("source", help="Copy a raw source and create a source note")
     source.add_argument("--vault", type=Path, required=True)
-    source.add_argument("--file", type=Path, required=True)
-    source.add_argument("--title", required=True)
+    source_input = source.add_mutually_exclusive_group(required=True)
+    source_input.add_argument("--file", type=Path, nargs="+")
+    source_input.add_argument("--directory", type=Path)
+    source.add_argument("--recursive", action="store_true", help="Include files below subdirectories")
+    source.add_argument("--pattern", action="append", help="Glob pattern for --directory; may be repeated")
+    source.add_argument("--title", default=None)
     source.add_argument("--slug", default=None)
     source.add_argument("--source-type", default="file")
     source.add_argument("--original-url", default="unknown")
     source.add_argument("--author", default="unknown")
     source.add_argument("--source-date", default="unknown")
+    source.add_argument("--allow-duplicates", action="store_true")
+    source.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
+    source.add_argument("--json", action="store_true", help="Write structured JSON")
     source.set_defaults(func=cmd_ingest_source)
 
     extract = subcommands.add_parser("extract", help="Extract lifecycle drafts")
@@ -177,14 +192,27 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--vault", type=Path, required=True)
     build.add_argument("--scope", default=None)
     build.add_argument("--purpose", default=None)
+    build.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
+    build.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
     build.add_argument("--output", type=Path, default=None)
     build.add_argument("--json", action="store_true", help="Write structured JSON")
     build.set_defaults(func=cmd_context_build)
+
+    explain = context_commands.add_parser("explain", help="Explain context selection and lifecycle exclusions")
+    explain.add_argument("--vault", type=Path, required=True)
+    explain.add_argument("--scope", default=None)
+    explain.add_argument("--purpose", default=None)
+    explain.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
+    explain.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    explain.add_argument("--json", action="store_true", help="Write structured JSON")
+    explain.set_defaults(func=cmd_context_explain)
 
     write = context_commands.add_parser("write", help="Write an operational context note")
     write.add_argument("--vault", type=Path, required=True)
     write.add_argument("--scope", default=None)
     write.add_argument("--purpose", default=None)
+    write.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
+    write.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
     write.add_argument("--title", default=None)
     write.add_argument("--slug", default=None)
     write.add_argument("--next-review", default=None)
@@ -203,11 +231,16 @@ def cmd_vault_init(args: argparse.Namespace) -> int:
 def cmd_vault_validate(args: argparse.Namespace) -> int:
     vault = Vault.load(args.path)
     issues = vault.validate()
+    doctor = vault.doctor()
     if args.json:
         write_json(
             {
                 "ok": not issues,
                 "vault_path": str(vault.root),
+                "contract": doctor_payload(doctor)["contract"],
+                "compatible": doctor.compatible,
+                "complete": doctor.complete,
+                "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
                 "note_count": len(vault.notes),
                 "issue_count": len(issues),
                 "issues": [issue_to_dict(issue, vault.root) for issue in issues],
@@ -220,27 +253,139 @@ def cmd_vault_validate(args: argparse.Namespace) -> int:
         print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
         return 1
     print(f"validation ok: {vault.root}")
+    print(f"contract: v{doctor.contract.get('contract_version')}")
     print(f"notes: {len(vault.notes)}")
+    return 0
+
+
+def cmd_vault_doctor(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.path)
+    doctor = vault.doctor()
+    payload = doctor_payload(doctor)
+    if args.json:
+        write_json(payload)
+        return 0 if doctor.ready_for_cli_mcp else 1
+
+    status = "ready" if doctor.ready_for_cli_mcp else "not ready"
+    print(f"vault: {doctor.root}")
+    print(f"status: {status}")
+    print(f"compatible: {format_bool(doctor.compatible)}")
+    print(f"complete: {format_bool(doctor.complete)}")
+    print(f"ready_for_cli_mcp: {format_bool(doctor.ready_for_cli_mcp)}")
+    contract_version = doctor.contract.get("contract_version", "unknown")
+    print(f"contract: v{contract_version}")
+    print(f"notes: {doctor.note_count}")
+    if doctor.validation_issues:
+        print(f"issues: {len(doctor.validation_issues)}", file=sys.stderr)
+        for issue in doctor.validation_issues:
+            print(f"ERROR {issue.format(doctor.root)}", file=sys.stderr)
+        return 1
+    print("issues: 0")
     return 0
 
 
 def cmd_ingest_source(args: argparse.Namespace) -> int:
     try:
-        created = ingest_source(
+        source_files = collect_ingest_source_files(args)
+        results = ingest_sources(
             args.vault,
-            args.file,
-            args.title,
+            source_files,
+            source_root=args.directory,
+            title=args.title,
             slug=args.slug,
             source_type=args.source_type,
             original_url=args.original_url,
             author=args.author,
             source_date=args.source_date,
+            allow_duplicates=args.allow_duplicates,
+            create_evidence=args.evidence_drafts,
         )
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-    print(f"created {created.note_id}\t{created.path}")
+
+    if args.json:
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(Path(args.vault).expanduser().resolve()),
+                "created_count": sum(1 for result in results if result.status == "created"),
+                "skipped_count": sum(1 for result in results if result.status == "skipped"),
+                "results": [source_capture_result_payload(result) for result in results],
+            }
+        )
+        return 0
+
+    if len(results) == 1:
+        result = results[0]
+        if result.note is not None:
+            print(f"created {result.note.note_id}\t{result.note.path}")
+            if result.evidence_note is not None:
+                print(f"created {result.evidence_note.note_id}\t{result.evidence_note.path}")
+        else:
+            print(f"skipped {result.existing_note_id}\t{result.reason}\t{result.source_file}")
+        return 0
+
+    created_count = sum(1 for result in results if result.status == "created")
+    skipped_count = sum(1 for result in results if result.status == "skipped")
+    print(f"ingest summary: created={created_count} skipped={skipped_count}")
+    for result in results:
+        if result.note is not None:
+            print(f"created {result.note.note_id}\t{result.note.path}\t{result.source_file}")
+            if result.evidence_note is not None:
+                print(f"created {result.evidence_note.note_id}\t{result.evidence_note.path}\tevidence")
+        else:
+            print(f"skipped {result.existing_note_id}\t{result.reason}\t{result.source_file}")
     return 0
+
+
+def collect_ingest_source_files(args: argparse.Namespace) -> list[Path]:
+    if args.file:
+        if args.recursive:
+            raise ValueError("--recursive can only be used with --directory")
+        if args.pattern:
+            raise ValueError("--pattern can only be used with --directory")
+        return list(args.file)
+
+    directory = Path(args.directory).expanduser().resolve()
+    if not directory.is_dir():
+        raise ValueError(f"source directory does not exist: {args.directory}")
+    patterns = args.pattern or ["*"]
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in patterns:
+        matches = directory.rglob(pattern) if args.recursive else directory.glob(pattern)
+        for path in matches:
+            resolved = path.resolve()
+            if resolved in seen or not resolved.is_file():
+                continue
+            files.append(resolved)
+            seen.add(resolved)
+    return sorted(files, key=lambda path: path.relative_to(directory).as_posix())
+
+
+def source_capture_result_payload(result: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "source_file": str(result.source_file),
+        "title": result.title,
+        "content_hash": result.content_hash,
+    }
+    if result.note is not None:
+        payload["note_id"] = result.note.note_id
+        payload["note_path"] = str(result.note.path)
+    if result.raw_path is not None:
+        payload["raw_path"] = str(result.raw_path)
+    if result.evidence_note is not None:
+        payload["evidence_note_id"] = result.evidence_note.note_id
+        payload["evidence_note_path"] = str(result.evidence_note.path)
+    if result.existing_note_id is not None:
+        payload["existing_note_id"] = result.existing_note_id
+    if result.existing_note_path is not None:
+        payload["existing_note_path"] = str(result.existing_note_path)
+    if result.reason is not None:
+        payload["reason"] = result.reason
+    return payload
 
 
 def cmd_extract_evidence(args: argparse.Namespace) -> int:
@@ -576,20 +721,34 @@ def cmd_context_build(args: argparse.Namespace) -> int:
         if issues:
             write_json(validation_error_payload(vault, issues))
             return 1
-        content = build_context(vault, scope=args.scope, purpose=args.purpose)
+        try:
+            package = compose_context(
+                vault,
+                scope=args.scope,
+                purpose=args.purpose,
+                limit=args.limit,
+                max_chars=args.max_chars,
+            )
+        except ValueError as exc:
+            write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
+            return 1
+        content = package.content
         output_path = None
         if args.output:
             args.output.write_text(content, encoding="utf-8")
             output_path = str(args.output)
-        knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), args.scope)
         write_json(
             {
                 "ok": True,
                 "vault_path": str(vault.root),
                 "scope": args.scope,
                 "purpose": args.purpose,
-                "reviewed_knowledge_count": len(knowledge),
-                "reviewed_knowledge": [note_summary(note, vault.root) for note in knowledge],
+                "limit": args.limit,
+                "max_chars": args.max_chars,
+                "available_reviewed_knowledge_count": package.available_count,
+                "reviewed_knowledge_count": len(package.reviewed_knowledge),
+                "reviewed_knowledge": [note_summary(note, vault.root) for note in package.reviewed_knowledge],
+                "selection": context_package_selection_payload(package, vault.root),
                 "content": content,
                 "output_path": output_path,
             }
@@ -599,12 +758,73 @@ def cmd_context_build(args: argparse.Namespace) -> int:
         for issue in issues:
             print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
         return 1
-    content = build_context(vault, scope=args.scope, purpose=args.purpose)
+    try:
+        content = build_context(
+            vault,
+            scope=args.scope,
+            purpose=args.purpose,
+            limit=args.limit,
+            max_chars=args.max_chars,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
     if args.output:
         args.output.write_text(content, encoding="utf-8")
         print(f"wrote {args.output}")
     else:
         print(content, end="")
+    return 0
+
+
+def cmd_context_explain(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        try:
+            package = compose_context(
+                vault,
+                scope=args.scope,
+                purpose=args.purpose,
+                limit=args.limit,
+                max_chars=args.max_chars,
+            )
+        except ValueError as exc:
+            write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
+            return 1
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "scope": args.scope,
+                "purpose": args.purpose,
+                "limit": args.limit,
+                "max_chars": args.max_chars,
+                "available_reviewed_knowledge_count": package.available_count,
+                "reviewed_knowledge_count": len(package.reviewed_knowledge),
+                "selection": context_package_selection_payload(package, vault.root),
+            }
+        )
+        return 0
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        return 1
+    try:
+        package = compose_context(
+            vault,
+            scope=args.scope,
+            purpose=args.purpose,
+            limit=args.limit,
+            max_chars=args.max_chars,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print(render_context_explanation(package, vault.root), end="")
     return 0
 
 
@@ -614,6 +834,8 @@ def cmd_context_write(args: argparse.Namespace) -> int:
             args.vault,
             scope=args.scope,
             purpose=args.purpose,
+            limit=args.limit,
+            max_chars=args.max_chars,
             title=args.title,
             slug=args.slug,
             next_review=args.next_review,
@@ -625,11 +847,102 @@ def cmd_context_write(args: argparse.Namespace) -> int:
     return 0
 
 
+def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> dict[str, Any]:
+    return {
+        "included": [context_selection_payload(selection, vault_root) for selection in package.included],
+        "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
+        "lifecycle_excluded": [
+            context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
+        ],
+    }
+
+
+def context_selection_payload(selection: ContextSelection, vault_root: Path) -> dict[str, Any]:
+    payload = note_summary(selection.note, vault_root)
+    payload.update(
+        {
+            "selection_status": selection.status,
+            "selection_reason": selection.reason,
+            "scope_score": selection.score,
+            "content_chars": selection.content_chars,
+        }
+    )
+    return payload
+
+
+def render_context_explanation(package: ContextPackage, vault_root: Path) -> str:
+    lines = ["# Noesis Context Explanation", ""]
+    if package.scope:
+        lines.extend([f"Scope: {package.scope}", ""])
+    if package.purpose:
+        lines.extend([f"Purpose: {package.purpose}", ""])
+    if package.limit is not None or package.max_chars is not None:
+        budget = []
+        if package.limit is not None:
+            budget.append(f"limit {package.limit}")
+        if package.max_chars is not None:
+            budget.append(f"max_chars {package.max_chars}")
+        lines.extend([f"Budget: {', '.join(budget)}", ""])
+    lines.extend(
+        [
+            "Active guidance is built only from current reviewed knowledge.",
+            "Lifecycle-excluded notes are background provenance only.",
+            "",
+            "## Summary",
+            "",
+            f"- Current reviewed knowledge available: {package.available_count}",
+            f"- Included in active context: {len(package.included)}",
+            f"- Excluded by scope or budget: {len(package.excluded)}",
+            f"- Lifecycle-excluded background notes: {len(package.lifecycle_excluded)}",
+            "",
+            "## Included Active Guidance",
+            "",
+        ]
+    )
+    if package.included:
+        for selection in package.included:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No current reviewed knowledge selected.")
+
+    lines.extend(["", "## Excluded By Scope Or Budget", ""])
+    if package.excluded:
+        for selection in package.excluded:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No current reviewed knowledge was excluded by scope or budget.")
+
+    lines.extend(["", "## Lifecycle-Excluded Background", ""])
+    if package.lifecycle_excluded:
+        for selection in package.lifecycle_excluded:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No stale, superseded, or archived reviewed memory found.")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def format_selection_line(selection: ContextSelection, vault_root: Path) -> str:
+    try:
+        rel_path = selection.note.path.relative_to(vault_root).as_posix()
+    except ValueError:
+        rel_path = selection.note.rel_path.as_posix()
+    return (
+        f"- {selection.note.noesis_id} ({selection.status}, score={selection.score}, "
+        f"chars={selection.content_chars}) - {selection.reason}; path: {rel_path}"
+    )
+
+
 def validation_error_payload(vault: Vault, issues: list[Any]) -> dict[str, Any]:
+    doctor = vault.doctor()
     return {
         "ok": False,
         "error": "vault validation failed",
         "vault_path": str(vault.root),
+        "contract": doctor_payload(doctor)["contract"],
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
     }
@@ -641,6 +954,32 @@ def review_error_payload(vault: Vault, error: ValueError) -> dict[str, Any]:
         "error": str(error),
         "vault_path": str(vault.root),
     }
+
+
+def doctor_payload(doctor: Any) -> dict[str, Any]:
+    contract_version = doctor.contract.get("contract_version")
+    return {
+        "ok": doctor.ready_for_cli_mcp,
+        "vault_path": str(doctor.root),
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
+        "note_count": doctor.note_count,
+        "contract": {
+            "path": str(doctor.contract_path),
+            "present": doctor.contract_path.exists(),
+            "version": str(contract_version) if contract_version is not None else None,
+            "supported": doctor.compatible,
+            "metadata": json_safe(doctor.contract),
+            "issues": [issue_to_dict(issue, doctor.root) for issue in doctor.contract_issues],
+        },
+        "issue_count": len(doctor.validation_issues),
+        "issues": [issue_to_dict(issue, doctor.root) for issue in doctor.validation_issues],
+    }
+
+
+def format_bool(value: bool) -> str:
+    return "yes" if value else "no"
 
 
 def write_json(payload: dict[str, Any]) -> None:

@@ -50,6 +50,10 @@ class NoesisCliTests(unittest.TestCase):
         self.assertGreater(payload["note_count"], 0)
         self.assertEqual(payload["issue_count"], 0)
         self.assertEqual(payload["issues"], [])
+        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["compatible"], True)
+        self.assertEqual(payload["complete"], True)
+        self.assertEqual(payload["ready_for_cli_mcp"], True)
 
         with tempfile.TemporaryDirectory() as tmp:
             missing_vault = Path(tmp) / "missing-vault"
@@ -58,8 +62,84 @@ class NoesisCliTests(unittest.TestCase):
             invalid_payload = parse_json_stdout(invalid)
             self.assertEqual(invalid_payload["ok"], False)
             self.assertEqual(invalid_payload["vault_path"], str(missing_vault.resolve()))
+            self.assertEqual(invalid_payload["compatible"], False)
+            self.assertEqual(invalid_payload["ready_for_cli_mcp"], False)
+            self.assertEqual(invalid_payload["contract"]["supported"], False)
             self.assertGreater(invalid_payload["issue_count"], 0)
             self.assertIn("vault path does not exist", invalid_payload["issues"][0]["message"])
+
+    def test_vault_doctor_reports_contract_readiness(self) -> None:
+        result = run_noesis("vault", "doctor", str(EXAMPLE_VAULT), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["compatible"], True)
+        self.assertEqual(payload["complete"], True)
+        self.assertEqual(payload["ready_for_cli_mcp"], True)
+        self.assertEqual(payload["contract"]["present"], True)
+        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["issue_count"], 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_vault = Path(tmp) / "legacy-vault"
+            shutil.copytree(EXAMPLE_VAULT, legacy_vault)
+            (legacy_vault / "noesis.vault.yaml").unlink()
+
+            legacy = run_noesis("vault", "doctor", str(legacy_vault), "--json")
+            self.assertNotEqual(legacy.returncode, 0)
+            legacy_payload = parse_json_stdout(legacy)
+            self.assertEqual(legacy_payload["compatible"], False)
+            self.assertEqual(legacy_payload["ready_for_cli_mcp"], False)
+            self.assertIn("missing Noesis V1 contract metadata", legacy_payload["issues"][0]["message"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            file_vault = Path(tmp) / "not-a-vault.md"
+            file_vault.write_text("not a vault", encoding="utf-8")
+
+            invalid_file = run_noesis("vault", "doctor", str(file_vault), "--json")
+            self.assertNotEqual(invalid_file.returncode, 0)
+            invalid_file_payload = parse_json_stdout(invalid_file)
+            self.assertEqual(invalid_file_payload["compatible"], False)
+            self.assertEqual(invalid_file_payload["ready_for_cli_mcp"], False)
+            self.assertIn("vault path is not a directory", invalid_file_payload["issues"][0]["message"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            future_vault = Path(tmp) / "future-vault"
+            shutil.copytree(EXAMPLE_VAULT, future_vault)
+            contract_path = future_vault / "noesis.vault.yaml"
+            contract_path.write_text(
+                contract_path.read_text(encoding="utf-8").replace(
+                    'requires_noesis: ">=0.1.0"',
+                    'requires_noesis: ">=0.2.0"',
+                ),
+                encoding="utf-8",
+            )
+
+            future = run_noesis("vault", "doctor", str(future_vault), "--json")
+            self.assertNotEqual(future.returncode, 0)
+            future_payload = parse_json_stdout(future)
+            self.assertEqual(future_payload["compatible"], False)
+            self.assertEqual(future_payload["ready_for_cli_mcp"], False)
+            self.assertIn("requires_noesis", future_payload["issues"][0]["message"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            incomplete_vault = Path(tmp) / "incomplete-vault"
+            shutil.copytree(EXAMPLE_VAULT, incomplete_vault)
+            contract_path = incomplete_vault / "noesis.vault.yaml"
+            contract_path.write_text(
+                contract_path.read_text(encoding="utf-8").replace(
+                    'requires_noesis: ">=0.1.0"\n',
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            incomplete = run_noesis("vault", "doctor", str(incomplete_vault), "--json")
+            self.assertNotEqual(incomplete.returncode, 0)
+            incomplete_payload = parse_json_stdout(incomplete)
+            self.assertEqual(incomplete_payload["compatible"], False)
+            self.assertEqual(incomplete_payload["ready_for_cli_mcp"], False)
+            self.assertIn("requires_noesis", incomplete_payload["issues"][0]["message"])
 
     def test_review_queue_json_matches_text_order(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT), "--json")
@@ -478,6 +558,7 @@ class NoesisCliTests(unittest.TestCase):
             self.assertTrue((vault_path / "_bases" / "review-queue.base").exists())
             self.assertTrue((vault_path / "_canvas" / "noesis-lifecycle.canvas").exists())
             self.assertTrue((vault_path / "_templates" / "source.md").exists())
+            self.assertTrue((vault_path / "noesis.vault.yaml").exists())
 
             evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
             self.assertIn('  - "[[<source-note>]]"', evidence_template)
@@ -566,6 +647,74 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("source-research-note", trace.stdout)
             self.assertIn("evidence-lifecycle-review", trace.stdout)
             self.assertIn("claim-memory-needs-review", trace.stdout)
+
+    def test_directory_ingest_sorts_sources_skips_duplicates_and_creates_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            import_path = tmp_path / "imports"
+            nested_path = import_path / "nested"
+            nested_path.mkdir(parents=True)
+            alpha = import_path / "alpha-note.md"
+            beta = import_path / "beta-note.md"
+            beta_duplicate = nested_path / "beta-copy.txt"
+            alpha.write_text("# Alpha\n\nfirst source\n", encoding="utf-8")
+            beta.write_text("# Beta\n\nduplicate source\n", encoding="utf-8")
+            beta_duplicate.write_text("# Beta\n\nduplicate source\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "source",
+                "--vault",
+                str(vault_path),
+                "--directory",
+                str(import_path),
+                "--recursive",
+                "--pattern",
+                "*.md",
+                "--pattern",
+                "*.txt",
+                "--source-type",
+                "project-document",
+                "--author",
+                "Noesis Test",
+                "--evidence-drafts",
+                "--json",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            payload = parse_json_stdout(ingest)
+            self.assertEqual(payload["created_count"], 2)
+            self.assertEqual(payload["skipped_count"], 1)
+            results = payload["results"]
+            self.assertEqual([result["source_file"] for result in results], [str(alpha), str(beta), str(beta_duplicate)])
+            self.assertEqual(results[0]["note_id"], "source-alpha-note")
+            self.assertEqual(results[1]["note_id"], "source-beta-note")
+            self.assertEqual(results[2]["status"], "skipped")
+            self.assertEqual(results[2]["reason"], "duplicate-content")
+            self.assertEqual(results[2]["existing_note_id"], "source-beta-note")
+            self.assertEqual(results[0]["evidence_note_id"], "evidence-evidence-from-alpha-note")
+            self.assertEqual(results[1]["evidence_note_id"], "evidence-evidence-from-beta-note")
+
+            vault = Vault.load(vault_path)
+            alpha_note = vault.find_note("source-alpha-note")
+            self.assertIsNotNone(alpha_note)
+            assert alpha_note is not None
+            self.assertEqual(alpha_note.metadata["source_type"], "project-document")
+            self.assertEqual(alpha_note.metadata["author"], "Noesis Test")
+            self.assertEqual(alpha_note.metadata["original_url"], "unknown")
+            self.assertEqual(alpha_note.metadata["source_date"], "unknown")
+            self.assertEqual(alpha_note.metadata["source_size_bytes"], alpha.stat().st_size)
+            self.assertEqual(alpha_note.metadata["original_path"], str(alpha))
+            self.assertTrue(str(alpha_note.metadata["content_hash"]).startswith("sha256:"))
+            self.assertTrue((vault_path / "raw" / "alpha-note.md").exists())
+            self.assertTrue((vault_path / "raw" / "beta-note.md").exists())
+            self.assertFalse((vault_path / "raw" / "beta-copy.txt").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
 
     def test_trace_json_reports_lineage_and_missing_note_errors(self) -> None:
         result = run_noesis(
@@ -841,6 +990,8 @@ sources:
         self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
         self.assertIn("Purpose: prepare an agent", payload["content"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", payload["content"])
+        self.assertEqual(payload["available_reviewed_knowledge_count"], 2)
+        self.assertEqual(payload["selection"]["included"][0]["selection_status"], "included")
 
         with tempfile.TemporaryDirectory() as tmp:
             invalid = run_noesis("context", "build", "--vault", str(Path(tmp) / "missing"), "--json")
@@ -849,6 +1000,140 @@ sources:
             self.assertEqual(invalid_payload["ok"], False)
             self.assertEqual(invalid_payload["error"], "vault validation failed")
             self.assertGreater(invalid_payload["issue_count"], 0)
+
+    def test_context_build_limit_reports_budgeted_provenance(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--purpose",
+            "brief a constrained agent",
+            "--limit",
+            "1",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        included_ids = [note["noesis_id"] for note in payload["selection"]["included"]]
+        excluded = payload["selection"]["excluded"]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["limit"], 1)
+        self.assertEqual(payload["reviewed_knowledge_count"], 1)
+        self.assertEqual(included_ids, ["reviewed-knowledge-agent-memory-dogfood"])
+        self.assertEqual(excluded[0]["noesis_id"], "reviewed-knowledge-noesis-lifecycle")
+        self.assertEqual(excluded[0]["selection_status"], "budgeted_out")
+        self.assertIn("excluded by limit 1", excluded[0]["selection_reason"])
+        self.assertNotIn("Noesis should represent memory as a lifecycle", payload["content"])
+
+    def test_context_build_max_chars_excludes_first_over_budget_note(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "noesis",
+            "--limit",
+            "1",
+            "--max-chars",
+            "1",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        excluded_ids = [note["noesis_id"] for note in payload["selection"]["excluded"]]
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["reviewed_knowledge_count"], 0)
+        self.assertEqual(payload["selection"]["included"], [])
+        self.assertIn("reviewed-knowledge-agent-memory-dogfood", excluded_ids)
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", excluded_ids)
+        for note in payload["selection"]["excluded"]:
+            self.assertEqual(note["selection_status"], "budgeted_out")
+            self.assertIn("excluded by max_chars 1", note["selection_reason"])
+            self.assertGreater(note["content_chars"], payload["max_chars"])
+        self.assertIn("No current reviewed knowledge found.", payload["content"])
+        self.assertNotIn("Agents should turn session artifacts", payload["content"])
+        self.assertNotIn("Noesis should represent memory as a lifecycle", payload["content"])
+
+    def test_context_explain_reports_scoped_and_lifecycle_exclusions(self) -> None:
+        result = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--purpose",
+            "prepare a future agent",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        included_ids = [note["noesis_id"] for note in payload["selection"]["included"]]
+        scoped_out_ids = [note["noesis_id"] for note in payload["selection"]["excluded"]]
+        lifecycle_excluded_ids = [
+            note["noesis_id"] for note in payload["selection"]["lifecycle_excluded"]
+        ]
+        self.assertEqual(included_ids, ["reviewed-knowledge-agent-memory-dogfood"])
+        self.assertIn("reviewed-knowledge-noesis-lifecycle", scoped_out_ids)
+        self.assertIn("stale-agent-memory-global-summary", lifecycle_excluded_ids)
+
+        text = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+        )
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertIn("Lifecycle-excluded notes are background provenance only.", text.stdout)
+        self.assertIn("stale-agent-memory-global-summary", text.stdout)
+        self.assertNotIn("Agents can safely copy global summary snippets", text.stdout)
+
+    def test_context_explain_reports_archived_history_as_lifecycle_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            archived_note = vault_path / "archive" / "history" / "archived-context-note.md"
+            archived_note.write_text(
+                """---
+title: Archived Context Note
+noesis_id: archived-context-note
+type: archived-history
+lifecycle_stage: archive
+status: archived
+review_state: reviewed
+confidence: medium
+created: 2026-06-13
+updated: 2026-06-13
+tags:
+  - noesis
+  - archive
+aliases: []
+---
+
+# Archived Context Note
+
+This archived note is provenance, not active guidance.
+""",
+                encoding="utf-8",
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+            result = run_noesis("context", "explain", "--vault", str(vault_path), "--json")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = parse_json_stdout(result)
+            lifecycle_excluded = payload["selection"]["lifecycle_excluded"]
+            archived = [
+                note for note in lifecycle_excluded if note["noesis_id"] == "archived-context-note"
+            ]
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0]["selection_status"], "lifecycle_excluded")
+            self.assertIn("archived-history has status 'archived'", archived[0]["selection_reason"])
 
     def test_review_request_changes_keeps_note_in_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

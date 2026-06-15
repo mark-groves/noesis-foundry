@@ -61,6 +61,21 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
 7. Re-run validation and the review queue. Report the review note created, the
    reviewed note's final state, and remaining queue items.
 
+## Concrete Example
+
+The example vault has an approved Noesis Foundry project-memory chain. Use it
+as the review shape before approving new memory:
+
+```bash
+PYTHONPATH=src python -m noesis trace claim-agent-memory-dogfood --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
+```
+
+The equivalent MCP path is `noesis_get_note`, `noesis_trace_lineage`, and then
+either `noesis_approve_review` or `noesis_request_review_changes`. After an
+approval, use `noesis_promote_synthesis` only for an approved synthesis with a
+review audit.
+
 ## Fallback
 
 Use direct Markdown/YAML only when the CLI or Python module cannot run. In that

@@ -9,6 +9,8 @@ import re
 from typing import Any
 
 from .vault import (
+    ContextPackage,
+    ContextSelection,
     CreatedNote,
     LIFECYCLE_STAGES,
     Note,
@@ -16,9 +18,8 @@ from .vault import (
     TYPES,
     Vault,
     approve_review,
-    build_context,
+    compose_context,
     extract_evidence,
-    filter_knowledge_by_scope,
     ingest_source,
     mark_memory_stale,
     note_review_due,
@@ -40,9 +41,14 @@ class NoesisMcpHandlers:
     def lint_vault(self, vault_path: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
+        doctor = vault.doctor()
         return {
             "ok": not issues,
             "vault_path": str(vault.root),
+            "contract": doctor_payload(doctor),
+            "compatible": doctor.compatible,
+            "complete": doctor.complete,
+            "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
             "note_count": len(vault.notes),
             "issue_count": len(issues),
             "issues": [issue_to_dict(issue, vault.root) for issue in issues],
@@ -183,21 +189,29 @@ class NoesisMcpHandlers:
         vault_path: str | None = None,
         scope: str | None = None,
         purpose: str | None = None,
+        limit: int | None = None,
+        max_chars: int | None = None,
     ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
-        knowledge = filter_knowledge_by_scope(vault.current_reviewed_knowledge(), scope)
-        content = build_context(vault, scope=scope, purpose=purpose)
+        try:
+            package = compose_context(vault, scope=scope, purpose=purpose, limit=limit, max_chars=max_chars)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "vault_path": str(vault.root)}
         return {
             "ok": True,
             "vault_path": str(vault.root),
             "scope": scope,
             "purpose": purpose,
-            "reviewed_knowledge_count": len(knowledge),
-            "reviewed_knowledge": [note_summary(note, vault.root) for note in knowledge],
-            "content": content,
+            "limit": limit,
+            "max_chars": max_chars,
+            "available_reviewed_knowledge_count": package.available_count,
+            "reviewed_knowledge_count": len(package.reviewed_knowledge),
+            "reviewed_knowledge": [note_summary(note, vault.root) for note in package.reviewed_knowledge],
+            "selection": context_package_selection_payload(package, vault.root),
+            "content": package.content,
         }
 
     def ingest_source(
@@ -359,6 +373,8 @@ class NoesisMcpHandlers:
         vault_path: str | None = None,
         scope: str | None = None,
         purpose: str | None = None,
+        limit: int | None = None,
+        max_chars: int | None = None,
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -368,6 +384,8 @@ class NoesisMcpHandlers:
             self.resolve_vault(vault_path),
             scope=scope,
             purpose=purpose,
+            limit=limit,
+            max_chars=max_chars,
             title=title,
             slug=slug,
             next_review=next_review,
@@ -483,9 +501,17 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         vault_path: str | None = None,
         scope: str | None = None,
         purpose: str | None = None,
+        limit: int | None = None,
+        max_chars: int | None = None,
     ) -> JsonObject:
         """Build operational context from current reviewed knowledge only."""
-        return handlers.build_context(vault_path=vault_path, scope=scope, purpose=purpose)
+        return handlers.build_context(
+            vault_path=vault_path,
+            scope=scope,
+            purpose=purpose,
+            limit=limit,
+            max_chars=max_chars,
+        )
 
     @server.tool()
     def noesis_ingest_source(
@@ -628,6 +654,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         vault_path: str | None = None,
         scope: str | None = None,
         purpose: str | None = None,
+        limit: int | None = None,
+        max_chars: int | None = None,
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -637,6 +665,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             vault_path=vault_path,
             scope=scope,
             purpose=purpose,
+            limit=limit,
+            max_chars=max_chars,
             title=title,
             slug=slug,
             next_review=next_review,
@@ -684,6 +714,29 @@ def note_summary(note: Note, vault_root: Path) -> JsonObject:
         "updated": json_safe(note.metadata.get("updated")),
         "next_review": json_safe(note.metadata.get("next_review")),
     }
+
+
+def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> JsonObject:
+    return {
+        "included": [context_selection_payload(selection, vault_root) for selection in package.included],
+        "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
+        "lifecycle_excluded": [
+            context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
+        ],
+    }
+
+
+def context_selection_payload(selection: ContextSelection, vault_root: Path) -> JsonObject:
+    payload = note_summary(selection.note, vault_root)
+    payload.update(
+        {
+            "selection_status": selection.status,
+            "selection_reason": selection.reason,
+            "scope_score": selection.score,
+            "content_chars": selection.content_chars,
+        }
+    )
+    return payload
 
 
 def note_to_dict(note: Note, vault_root: Path) -> JsonObject:
@@ -827,10 +880,15 @@ def issue_to_dict(issue: Any, vault_root: Path) -> JsonObject:
 
 
 def validation_error(vault: Vault, issues: list[Any]) -> JsonObject:
+    doctor = vault.doctor()
     return {
         "ok": False,
         "error": "vault validation failed",
         "vault_path": str(vault.root),
+        "contract": doctor_payload(doctor),
+        "compatible": doctor.compatible,
+        "complete": doctor.complete,
+        "ready_for_cli_mcp": doctor.ready_for_cli_mcp,
         "issue_count": len(issues),
         "issues": [issue_to_dict(issue, vault.root) for issue in issues],
     }
@@ -838,6 +896,18 @@ def validation_error(vault: Vault, issues: list[Any]) -> JsonObject:
 
 def review_error(vault: Vault, error: ValueError) -> JsonObject:
     return {"ok": False, "error": str(error), "vault_path": str(vault.root)}
+
+
+def doctor_payload(doctor: Any) -> JsonObject:
+    contract_version = doctor.contract.get("contract_version")
+    return {
+        "path": str(doctor.contract_path),
+        "present": doctor.contract_path.exists(),
+        "version": str(contract_version) if contract_version is not None else None,
+        "supported": doctor.compatible,
+        "metadata": json_safe(doctor.contract),
+        "issues": [issue_to_dict(issue, doctor.root) for issue in doctor.contract_issues],
+    }
 
 
 def created_note_to_dict(created: CreatedNote, vault_root: Path | None) -> JsonObject:
