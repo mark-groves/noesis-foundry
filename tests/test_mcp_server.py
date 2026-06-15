@@ -174,6 +174,31 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertIn("reviewed-knowledge-noesis-lifecycle", context["content"])
         self.assertNotIn("stale-custom-plugin-first", context["content"])
 
+        profiled_context = handlers.build_context(scope="agent-memory", profile="review")
+        self.assertTrue(profiled_context["ok"], profiled_context)
+        self.assertEqual(profiled_context["profile"], "review")
+        self.assertEqual(profiled_context["limit"], 6)
+        self.assertEqual(profiled_context["max_chars"], 12000)
+        self.assertEqual(profiled_context["applied_profile_defaults"], ["limit", "max_chars"])
+        self.assertEqual(
+            [note["noesis_id"] for note in profiled_context["selection"]["included"]],
+            ["reviewed-knowledge-agent-memory-dogfood"],
+        )
+        self.assertIn(
+            "reviewed-knowledge-noesis-lifecycle",
+            [note["noesis_id"] for note in profiled_context["selection"]["scoped_out"]],
+        )
+        self.assertEqual(profiled_context["selection"]["budgeted_out"], [])
+        self.assertGreaterEqual(profiled_context["selection"]["lifecycle_exclusion_summary"]["superseded"], 2)
+        self.assertEqual(
+            profiled_context["lineage_summaries"][0]["sources"][0]["noesis_id"],
+            "source-agent-memory-session",
+        )
+
+        invalid_profile = handlers.build_context(profile="missing-profile")
+        self.assertFalse(invalid_profile["ok"])
+        self.assertIn("profile must be one of", invalid_profile["error"])
+
     def test_search_notes_filters_by_text_and_metadata(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
@@ -389,6 +414,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             context = handlers.write_context(
                 purpose="prepare a future agent",
+                profile="project-continuation",
                 title="Review Before Reuse Context",
                 slug="review-before-reuse",
                 next_review="2026-08-06",
@@ -396,7 +422,14 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertTrue(context["ok"], context)
             self.assertEqual(context["created"]["note_id"], "context-review-before-reuse")
 
-            self.assertEqual(Vault.load(vault_path).validate(), [])
+            vault = Vault.load(vault_path)
+            written_context = vault.find_note("context-review-before-reuse")
+            self.assertIsNotNone(written_context)
+            assert written_context is not None
+            self.assertEqual(written_context.metadata["context_profile"], "project-continuation")
+            self.assertEqual(written_context.metadata["context_limit"], 8)
+            self.assertEqual(written_context.metadata["context_max_chars"], 16000)
+            self.assertEqual(vault.validate(), [])
             queue = handlers.get_review_queue()
             self.assertTrue(queue["ok"], queue)
             self.assertEqual(queue["notes"], [])
