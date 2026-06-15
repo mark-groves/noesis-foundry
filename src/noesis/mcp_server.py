@@ -25,6 +25,7 @@ from .vault import (
     note_review_due,
     promote_synthesis,
     propose_claim,
+    renew_review,
     request_review_changes,
     synthesize_claims,
     write_context_note,
@@ -330,6 +331,27 @@ class NoesisMcpHandlers:
             slug=slug,
         )
 
+    def renew_review(
+        self,
+        note: str,
+        next_review: str,
+        vault_path: str | None = None,
+        reviewer: str = "unknown",
+        basis: str | None = None,
+        title: str | None = None,
+        slug: str | None = None,
+    ) -> JsonObject:
+        return self.write_result(
+            renew_review,
+            self.resolve_vault(vault_path),
+            note,
+            next_review=next_review,
+            reviewer=reviewer,
+            basis=basis,
+            title=title,
+            slug=slug,
+        )
+
     def promote_synthesis(
         self,
         synthesis: str,
@@ -612,6 +634,27 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         )
 
     @server.tool()
+    def noesis_renew_review(
+        note: str,
+        next_review: str,
+        vault_path: str | None = None,
+        reviewer: str = "unknown",
+        basis: str | None = None,
+        title: str | None = None,
+        slug: str | None = None,
+    ) -> JsonObject:
+        """Record a scheduled review audit and move the note's next_review date."""
+        return handlers.renew_review(
+            note=note,
+            next_review=next_review,
+            vault_path=vault_path,
+            reviewer=reviewer,
+            basis=basis,
+            title=title,
+            slug=slug,
+        )
+
+    @server.tool()
     def noesis_promote_synthesis(
         synthesis: str,
         vault_path: str | None = None,
@@ -807,6 +850,7 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
     audits = vault.review_audits_for(note)
     support = vault.support_notes_for(note)
     lineage = vault.lineage(note.noesis_id)
+    review_due = note_review_due(note, due_on=due_on)
     changes_requested = [
         {
             "review": note_summary(audit, vault.root),
@@ -824,7 +868,8 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
         "vault_path": str(vault.root),
         "note_ref": note_ref,
         "note": note_to_dict(note, vault.root),
-        "review_due": note_review_due(note, due_on=due_on),
+        "review_due": review_due,
+        "review_schedule": review_schedule_to_dict(vault, note, audits, due_on=due_on, review_due=review_due),
         "audit_status": {
             "requires_audit": requires_audit,
             "has_audit": bool(audits),
@@ -847,6 +892,24 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
             ],
         },
         "lineage": [note_summary(lineage_note, vault.root) for lineage_note in lineage],
+    }
+
+
+def review_schedule_to_dict(
+    vault: Vault,
+    note: Note,
+    audits: list[Note],
+    *,
+    due_on: str | None,
+    review_due: bool,
+) -> JsonObject:
+    latest_audit = audits[-1] if audits else None
+    return {
+        "next_review": json_safe(note.metadata.get("next_review")),
+        "due_on": due_on,
+        "due": review_due,
+        "audit_count": len(audits),
+        "latest_audit": review_audit_to_dict(latest_audit, vault.root) if latest_audit else None,
     }
 
 

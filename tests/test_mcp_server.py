@@ -81,6 +81,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 "noesis_lint_vault",
                 "noesis_mark_memory_stale",
                 "noesis_promote_synthesis",
+                "noesis_renew_review",
                 "noesis_request_review_changes",
                 "noesis_search_notes",
                 "noesis_show_review",
@@ -395,6 +396,26 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             )
             self.assertTrue(context["ok"], context)
             self.assertEqual(context["created"]["note_id"], "context-review-before-reuse")
+
+            renewal = handlers.renew_review(
+                "context-review-before-reuse",
+                next_review="2026-09-06",
+                reviewer="test-human",
+                basis="Scheduled review confirms the operational context still matches current reviewed knowledge.",
+                slug="context-review-before-reuse-renewal",
+            )
+            self.assertTrue(renewal["ok"], renewal)
+            self.assertEqual(renewal["created"]["note_id"], "review-context-review-before-reuse-renewal")
+            renewed_context = Vault.load(vault_path).find_note("context-review-before-reuse")
+            self.assertIsNotNone(renewed_context)
+            assert renewed_context is not None
+            self.assertEqual(str(renewed_context.metadata["next_review"]), "2026-09-06")
+            self.assertIn("[[review-context-review-before-reuse-renewal]]", renewed_context.metadata["reviewed_by"])
+            workbench = handlers.show_review("context-review-before-reuse", due_on="2026-08-06")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], False)
+            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-09-06")
+            self.assertEqual(workbench["review_schedule"]["latest_audit"]["decision"], "renewed")
 
             self.assertEqual(Vault.load(vault_path).validate(), [])
             queue = handlers.get_review_queue()
