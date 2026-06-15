@@ -687,6 +687,35 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(lineage["counts"]["reviews"], 1)
         self.assertEqual(lineage["sources"][0]["noesis_id"], "source-agent-memory-session")
 
+        overridden = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--profile",
+            "review",
+            "--limit",
+            "2",
+            "--max-chars",
+            "5000",
+            "--json",
+        )
+        self.assertEqual(overridden.returncode, 0, overridden.stderr)
+        overridden_payload = parse_json_stdout(overridden)
+        self.assertEqual(overridden_payload["profile"], "review")
+        self.assertEqual(overridden_payload["limit"], 2)
+        self.assertEqual(overridden_payload["max_chars"], 5000)
+        self.assertEqual(overridden_payload["requested_limit"], 2)
+        self.assertEqual(overridden_payload["requested_max_chars"], 5000)
+        self.assertEqual(overridden_payload["applied_profile_defaults"], [])
+        overridden_selection = overridden_payload["selection"]
+        for selection_group in ("included", "scoped_out"):
+            reason = overridden_selection[selection_group][0]["selection_reason"]
+            self.assertIn("profile 'review' selected with explicit context budgets", reason)
+            self.assertNotIn("supplied context defaults", reason)
+
         budgeted = run_noesis(
             "context",
             "explain",

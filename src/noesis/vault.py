@@ -2352,7 +2352,12 @@ def compose_context(
     )
     validate_context_budget(limit=effective_limit, max_chars=effective_max_chars)
     available = vault.current_reviewed_knowledge()
-    selected, scoped_out = select_knowledge_for_context(available, scope, profile=profile_definition)
+    selected, scoped_out = select_knowledge_for_context(
+        available,
+        scope,
+        profile=profile_definition,
+        applied_profile_defaults=applied_profile_defaults,
+    )
     included, budgeted_out = apply_context_budget(
         selected,
         limit=effective_limit,
@@ -2435,6 +2440,7 @@ def select_knowledge_for_context(
     scope: str | None,
     *,
     profile: ContextProfile | None = None,
+    applied_profile_defaults: tuple[str, ...] = (),
 ) -> tuple[list[ContextSelection], list[ContextSelection]]:
     scope_terms = context_scope_terms(scope)
     selected: list[ContextSelection] = []
@@ -2444,7 +2450,7 @@ def select_knowledge_for_context(
         selection = ContextSelection(
             note=note,
             status="included",
-            reason=context_include_reason(scope, score, profile),
+            reason=context_include_reason(scope, score, profile, applied_profile_defaults),
             score=score,
             content_chars=len(note.body.strip()),
         )
@@ -2453,7 +2459,7 @@ def select_knowledge_for_context(
                 ContextSelection(
                     note=note,
                     status="scoped_out",
-                    reason=context_scoped_out_reason(scope, profile),
+                    reason=context_scoped_out_reason(scope, profile, applied_profile_defaults),
                     score=score,
                     content_chars=selection.content_chars,
                 )
@@ -2519,21 +2525,40 @@ def context_scope_score(note: Note, scope_terms: list[str]) -> int:
     return sum(1 for term in scope_terms if term in searchable)
 
 
-def context_include_reason(scope: str | None, score: int, profile: ContextProfile | None = None) -> str:
+def context_include_reason(
+    scope: str | None,
+    score: int,
+    profile: ContextProfile | None = None,
+    applied_profile_defaults: tuple[str, ...] = (),
+) -> str:
     if scope is None or not scope.strip():
         reason = "included because no scope filter was requested"
     else:
         reason = f"matches scope {scope!r} with score {score}"
-    if profile is not None:
-        reason += f"; profile {profile.name!r} supplied context defaults"
+    reason += context_profile_reason_suffix(profile, applied_profile_defaults)
     return reason
 
 
-def context_scoped_out_reason(scope: str | None, profile: ContextProfile | None = None) -> str:
+def context_scoped_out_reason(
+    scope: str | None,
+    profile: ContextProfile | None = None,
+    applied_profile_defaults: tuple[str, ...] = (),
+) -> str:
     reason = f"does not match scope {scope!r}"
-    if profile is not None:
-        reason += f"; profile {profile.name!r} supplied context defaults"
+    reason += context_profile_reason_suffix(profile, applied_profile_defaults)
     return reason
+
+
+def context_profile_reason_suffix(
+    profile: ContextProfile | None,
+    applied_profile_defaults: tuple[str, ...] = (),
+) -> str:
+    if profile is None:
+        return ""
+    if applied_profile_defaults:
+        defaults = ", ".join(applied_profile_defaults)
+        return f"; profile {profile.name!r} supplied context defaults: {defaults}"
+    return f"; profile {profile.name!r} selected with explicit context budgets"
 
 
 def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
