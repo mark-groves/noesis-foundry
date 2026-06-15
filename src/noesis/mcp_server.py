@@ -20,6 +20,7 @@ from .vault import (
     approve_review,
     compose_context,
     extract_evidence,
+    import_source_bundle,
     ingest_source,
     mark_memory_stale,
     note_review_due,
@@ -236,6 +237,27 @@ class NoesisMcpHandlers:
             author=author,
             source_date=source_date,
         )
+
+    def import_source_bundle(
+        self,
+        bundle_path: str,
+        vault_path: str | None = None,
+        manifest: str = "noesis-bundle.yaml",
+        create_evidence: bool = False,
+        allow_duplicates: bool = False,
+    ) -> JsonObject:
+        vault_root = self.resolve_vault(vault_path)
+        try:
+            imported = import_source_bundle(
+                vault_root,
+                bundle_path,
+                manifest_name=manifest,
+                create_evidence=create_evidence,
+                allow_duplicates=allow_duplicates,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "vault_path": str(vault_root)}
+        return source_bundle_import_to_dict(imported, vault_root)
 
     def create_evidence_draft(
         self,
@@ -534,6 +556,23 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             original_url=original_url,
             author=author,
             source_date=source_date,
+        )
+
+    @server.tool()
+    def noesis_import_source_bundle(
+        bundle_path: str,
+        vault_path: str | None = None,
+        manifest: str = "noesis-bundle.yaml",
+        create_evidence: bool = False,
+        allow_duplicates: bool = False,
+    ) -> JsonObject:
+        """Import a local manifest-driven artifact bundle into source notes and optional evidence drafts."""
+        return handlers.import_source_bundle(
+            bundle_path=bundle_path,
+            vault_path=vault_path,
+            manifest=manifest,
+            create_evidence=create_evidence,
+            allow_duplicates=allow_duplicates,
         )
 
     @server.tool()
@@ -918,6 +957,50 @@ def created_note_to_dict(created: CreatedNote, vault_root: Path | None) -> JsonO
         except ValueError:
             data["path"] = str(created.path)
     return data
+
+
+def source_capture_result_to_dict(result: Any, vault_root: Path) -> JsonObject:
+    payload: JsonObject = {
+        "status": result.status,
+        "source_file": str(result.source_file),
+        "title": result.title,
+        "content_hash": result.content_hash,
+    }
+    if result.note is not None:
+        payload["note"] = created_note_to_dict(result.note, vault_root)
+    if result.raw_path is not None:
+        try:
+            payload["raw_path"] = result.raw_path.relative_to(vault_root).as_posix()
+        except ValueError:
+            payload["raw_path"] = str(result.raw_path)
+    if result.evidence_note is not None:
+        payload["evidence_note"] = created_note_to_dict(result.evidence_note, vault_root)
+    if result.existing_note_id is not None:
+        payload["existing_note_id"] = result.existing_note_id
+    if result.existing_note_path is not None:
+        try:
+            payload["existing_note_path"] = result.existing_note_path.relative_to(vault_root).as_posix()
+        except ValueError:
+            payload["existing_note_path"] = str(result.existing_note_path)
+    if result.reason is not None:
+        payload["reason"] = result.reason
+    return payload
+
+
+def source_bundle_import_to_dict(imported: Any, vault_root: Path) -> JsonObject:
+    return {
+        "ok": True,
+        "vault_path": str(vault_root),
+        "bundle_id": imported.bundle_id,
+        "title": imported.title,
+        "bundle_path": str(imported.bundle_path),
+        "manifest_path": str(imported.manifest_path),
+        "manifest_hash": imported.manifest_hash,
+        "artifact_count": len(imported.results),
+        "created_count": sum(1 for result in imported.results if result.status == "created"),
+        "skipped_count": sum(1 for result in imported.results if result.status == "skipped"),
+        "results": [source_capture_result_to_dict(result, vault_root) for result in imported.results],
+    }
 
 
 def json_safe(value: Any) -> Any:

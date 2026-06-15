@@ -14,6 +14,7 @@ from noesis.vault import Vault, build_context, init_vault
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
+CODEX_SESSION_BUNDLE = ROOT / "tests" / "fixtures" / "codex-session-bundle"
 
 
 class RecordingFastMCP:
@@ -77,6 +78,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 "noesis_get_note",
                 "noesis_get_review_queue",
                 "noesis_get_review_summary",
+                "noesis_import_source_bundle",
                 "noesis_ingest_source",
                 "noesis_lint_vault",
                 "noesis_mark_memory_stale",
@@ -312,6 +314,41 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertEqual(result["ready_for_cli_mcp"], False)
         self.assertEqual(result["contract"]["supported"], False)
         self.assertIn("vault path does not exist", result["issues"][0]["message"])
+
+    def test_import_source_bundle_handler_creates_evidence_and_preserves_valid_vault(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init_vault(vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            imported = handlers.import_source_bundle(
+                str(CODEX_SESSION_BUNDLE),
+                create_evidence=True,
+            )
+
+            self.assertTrue(imported["ok"], imported)
+            self.assertEqual(imported["bundle_id"], "codex-session-export-demo")
+            self.assertEqual(imported["artifact_count"], 3)
+            self.assertEqual(imported["created_count"], 2)
+            self.assertEqual(imported["skipped_count"], 1)
+            results = imported["results"]
+            self.assertEqual(results[0]["note"]["note_id"], "source-codex-session-metadata")
+            self.assertEqual(results[0]["evidence_note"]["note_id"], "evidence-session-metadata")
+            self.assertEqual(results[1]["note"]["note_id"], "source-codex-session-transcript")
+            self.assertEqual(results[1]["evidence_note"]["note_id"], "evidence-session-transcript")
+            self.assertEqual(results[2]["existing_note_id"], "source-codex-session-transcript")
+            self.assertEqual(results[2]["reason"], "duplicate-content")
+
+            vault = Vault.load(vault_path)
+            self.assertEqual(vault.validate(), [])
+            source = vault.find_note("source-codex-session-metadata")
+            self.assertIsNotNone(source)
+            assert source is not None
+            self.assertEqual(source.metadata["bundle_artifact_path"], "exports/01-session.json")
+            self.assertEqual(source.metadata["bundle_manifest_index"], 2)
+            queue = handlers.get_review_queue()
+            self.assertTrue(queue["ok"], queue)
+            self.assertIn("evidence-session-metadata", [note["noesis_id"] for note in queue["notes"]])
 
     def test_write_workflow_creates_audited_context_and_preserves_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

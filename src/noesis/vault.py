@@ -254,6 +254,16 @@ class SourceCaptureResult:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class SourceBundleImportResult:
+    bundle_id: str
+    title: str
+    bundle_path: Path
+    manifest_path: Path
+    manifest_hash: str
+    results: list[SourceCaptureResult]
+
+
 @dataclass
 class Vault:
     root: Path
@@ -929,6 +939,120 @@ def ingest_sources(
     return results
 
 
+def import_source_bundle(
+    vault_path: Path | str,
+    bundle_path: Path | str,
+    *,
+    manifest_name: str = "noesis-bundle.yaml",
+    create_evidence: bool = False,
+    allow_duplicates: bool = False,
+    today: str | None = None,
+) -> SourceBundleImportResult:
+    root = ensure_valid_vault(vault_path)
+    manifest_path = resolve_bundle_manifest(bundle_path, manifest_name)
+    manifest = read_source_bundle_manifest(manifest_path)
+    bundle_root = manifest_path.parent.resolve()
+    bundle_title = manifest_text(manifest, "title", default=title_from_source_path(bundle_root))
+    bundle_id = slugify(manifest_text(manifest, "bundle_id", default=bundle_title))
+    bundle_source_type = manifest_text(manifest, "source_type", default="project-artifact-bundle")
+    bundle_original_url = manifest_text(manifest, "original_url", default="unknown")
+    bundle_author = manifest_text(manifest, "author", default="unknown")
+    bundle_source_date = manifest_text(manifest, "source_date", default="unknown")
+    if not is_date_like(bundle_source_date):
+        raise ValueError("bundle source_date must be YYYY-MM-DD or unknown")
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("bundle manifest must contain a non-empty artifacts list")
+
+    manifest_hash = file_content_hash(manifest_path)
+    parsed_items: list[tuple[str, int, Path, dict[str, Any]]] = []
+    for manifest_index, entry in enumerate(artifacts, start=1):
+        item = normalize_bundle_artifact(entry, manifest_index)
+        artifact_rel = Path(manifest_text(item, "path"))
+        artifact_path = resolve_bundle_artifact(bundle_root, artifact_rel)
+        parsed_items.append((artifact_rel.as_posix(), manifest_index, artifact_path, item))
+
+    results: list[SourceCaptureResult] = []
+    for bundle_item_index, (artifact_rel, manifest_index, artifact_path, item) in enumerate(
+        sorted(parsed_items, key=lambda parsed: (parsed[0], parsed[1])),
+        start=1,
+    ):
+        source_title = manifest_text(
+            item,
+            "title",
+            default=title_from_source_path(artifact_path, source_root=bundle_root),
+        )
+        source_slug = manifest_text(
+            item,
+            "slug",
+            default=slug_from_source_path(artifact_path, source_root=bundle_root),
+        )
+        source_type = manifest_text(item, "source_type", default=bundle_source_type)
+        original_url = manifest_text(item, "original_url", default=bundle_original_url)
+        author = manifest_text(item, "author", default=bundle_author)
+        source_date = manifest_text(item, "source_date", default=bundle_source_date)
+        if not is_date_like(source_date):
+            raise ValueError(f"source_date for bundle artifact {artifact_rel} must be YYYY-MM-DD or unknown")
+
+        source_metadata = {
+            "import_pipeline": "source-bundle",
+            "bundle_id": bundle_id,
+            "bundle_title": bundle_title,
+            "bundle_path": bundle_root.as_posix(),
+            "bundle_manifest_path": manifest_path.as_posix(),
+            "bundle_manifest_hash": manifest_hash,
+            "bundle_artifact_path": artifact_rel,
+            "bundle_item_id": manifest_text(item, "id", default=source_slug),
+            "bundle_item_index": bundle_item_index,
+            "bundle_manifest_index": manifest_index,
+        }
+        result = capture_source(
+            root,
+            artifact_path,
+            source_title,
+            slug=source_slug,
+            source_type=source_type,
+            original_url=original_url,
+            author=author,
+            source_date=source_date,
+            today=today,
+            allow_duplicate=allow_duplicates,
+            source_metadata=source_metadata,
+        )
+        if create_evidence and result.note is not None:
+            evidence = extract_evidence(
+                root,
+                result.note.note_id,
+                title=manifest_optional_text(item, "evidence_title"),
+                evidence=manifest_optional_text(item, "evidence"),
+                slug=manifest_optional_text(item, "evidence_slug"),
+                today=today,
+            )
+            result = SourceCaptureResult(
+                status=result.status,
+                source_file=result.source_file,
+                title=result.title,
+                content_hash=result.content_hash,
+                note=result.note,
+                raw_path=result.raw_path,
+                evidence_note=evidence,
+                existing_note_id=result.existing_note_id,
+                existing_note_path=result.existing_note_path,
+                reason=result.reason,
+            )
+        results.append(result)
+
+    return SourceBundleImportResult(
+        bundle_id=bundle_id,
+        title=bundle_title,
+        bundle_path=bundle_root,
+        manifest_path=manifest_path,
+        manifest_hash=manifest_hash,
+        results=results,
+    )
+
+
 def capture_source(
     vault_path: Path | str,
     source_file: Path | str,
@@ -941,6 +1065,7 @@ def capture_source(
     source_date: str = "unknown",
     today: str | None = None,
     allow_duplicate: bool = False,
+    source_metadata: dict[str, Any] | None = None,
 ) -> SourceCaptureResult:
     root = ensure_valid_vault(vault_path)
     source_path = Path(source_file).expanduser().resolve()
@@ -996,6 +1121,8 @@ def capture_source(
         "tags": ["noesis", "source"],
         "aliases": [],
     }
+    if source_metadata:
+        metadata.update(validate_flat_source_metadata(source_metadata))
     body = f"""# {title}
 
 Raw source: [{raw_name}](../raw/{raw_name})
@@ -1083,6 +1210,92 @@ def source_note_content_hash(note: Note) -> str | None:
     if not candidate.is_file():
         return None
     return file_content_hash(candidate)
+
+
+def resolve_bundle_manifest(bundle_path: Path | str, manifest_name: str) -> Path:
+    path = Path(bundle_path).expanduser().resolve()
+    if path.is_dir():
+        manifest_path = path / manifest_name
+    elif path.is_file():
+        manifest_path = path
+    else:
+        raise ValueError(f"source bundle path does not exist: {bundle_path}")
+    if not manifest_path.is_file():
+        raise ValueError(f"source bundle manifest does not exist: {manifest_path}")
+    return manifest_path.resolve()
+
+
+def read_source_bundle_manifest(manifest_path: Path) -> dict[str, Any]:
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid source bundle manifest YAML: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("source bundle manifest must be a YAML mapping")
+    for key, value in manifest.items():
+        if key == "artifacts":
+            continue
+        if isinstance(value, (dict, list)):
+            raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
+    return manifest
+
+
+def normalize_bundle_artifact(entry: Any, manifest_index: int) -> dict[str, Any]:
+    if isinstance(entry, str):
+        return {"path": entry}
+    if not isinstance(entry, dict):
+        raise ValueError(f"bundle artifact #{manifest_index} must be a path string or mapping")
+    for key, value in entry.items():
+        if isinstance(value, (dict, list)):
+            raise ValueError(f"bundle artifact #{manifest_index} field {key!r} must be a scalar value")
+    manifest_text(entry, "path")
+    return entry
+
+
+def resolve_bundle_artifact(bundle_root: Path, artifact_rel: Path) -> Path:
+    if artifact_rel.is_absolute() or ".." in artifact_rel.parts:
+        raise ValueError(f"bundle artifact path must stay inside the bundle: {artifact_rel.as_posix()}")
+    artifact_path = (bundle_root / artifact_rel).resolve()
+    try:
+        artifact_path.relative_to(bundle_root)
+    except ValueError as exc:
+        raise ValueError(f"bundle artifact path must stay inside the bundle: {artifact_rel.as_posix()}") from exc
+    if not artifact_path.is_file():
+        raise ValueError(f"bundle artifact does not exist: {artifact_rel.as_posix()}")
+    return artifact_path
+
+
+def manifest_text(data: dict[str, Any], key: str, *, default: Any = None) -> str:
+    value = data.get(key, default)
+    if isinstance(value, date):
+        value = value.isoformat()
+    if value is None or is_blank(value):
+        raise ValueError(f"bundle manifest field {key!r} must not be blank")
+    if isinstance(value, (dict, list)):
+        raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
+    return str(value)
+
+
+def manifest_optional_text(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None or is_blank(value):
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (dict, list)):
+        raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
+    return str(value)
+
+
+def validate_flat_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if isinstance(value, dict):
+            raise ValueError(f"source metadata field {key!r} must be flat, not a mapping")
+        if isinstance(value, list) and any(isinstance(item, dict) for item in value):
+            raise ValueError(f"source metadata field {key!r} must be flat, not nested")
+        cleaned[str(key)] = value.isoformat() if isinstance(value, date) else value
+    return cleaned
 
 
 def extract_evidence(

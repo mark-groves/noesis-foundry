@@ -26,6 +26,7 @@ from .vault import (
     compose_context,
     extract_evidence,
     filter_knowledge_by_scope,
+    import_source_bundle,
     ingest_sources,
     init_vault,
     mark_memory_stale,
@@ -84,6 +85,19 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
     source.add_argument("--json", action="store_true", help="Write structured JSON")
     source.set_defaults(func=cmd_ingest_source)
+
+    bundle = ingest_commands.add_parser("bundle", help="Import a local manifest-driven source bundle")
+    bundle.add_argument("--vault", type=Path, required=True)
+    bundle.add_argument("path", type=Path, help="Bundle directory or manifest file")
+    bundle.add_argument(
+        "--manifest",
+        default="noesis-bundle.yaml",
+        help="Manifest filename when path is a directory",
+    )
+    bundle.add_argument("--allow-duplicates", action="store_true")
+    bundle.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
+    bundle.add_argument("--json", action="store_true", help="Write structured JSON")
+    bundle.set_defaults(func=cmd_ingest_bundle)
 
     extract = subcommands.add_parser("extract", help="Extract lifecycle drafts")
     extract_commands = extract.add_subparsers(dest="extract_command", required=True)
@@ -339,6 +353,38 @@ def cmd_ingest_source(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_bundle(args: argparse.Namespace) -> int:
+    try:
+        imported = import_source_bundle(
+            args.vault,
+            args.path,
+            manifest_name=args.manifest,
+            create_evidence=args.evidence_drafts,
+            allow_duplicates=args.allow_duplicates,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        write_json(source_bundle_import_payload(imported, args.vault))
+        return 0
+
+    created_count = sum(1 for result in imported.results if result.status == "created")
+    skipped_count = sum(1 for result in imported.results if result.status == "skipped")
+    print(f"bundle import: {imported.bundle_id}")
+    print(f"manifest: {imported.manifest_path}")
+    print(f"ingest summary: created={created_count} skipped={skipped_count}")
+    for result in imported.results:
+        if result.note is not None:
+            print(f"created {result.note.note_id}\t{result.note.path}\t{result.source_file}")
+            if result.evidence_note is not None:
+                print(f"created {result.evidence_note.note_id}\t{result.evidence_note.path}\tevidence")
+        else:
+            print(f"skipped {result.existing_note_id}\t{result.reason}\t{result.source_file}")
+    return 0
+
+
 def collect_ingest_source_files(args: argparse.Namespace) -> list[Path]:
     if args.file:
         if args.recursive:
@@ -386,6 +432,22 @@ def source_capture_result_payload(result: Any) -> dict[str, Any]:
     if result.reason is not None:
         payload["reason"] = result.reason
     return payload
+
+
+def source_bundle_import_payload(imported: Any, vault_path: Path | str) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "vault_path": str(Path(vault_path).expanduser().resolve()),
+        "bundle_id": imported.bundle_id,
+        "title": imported.title,
+        "bundle_path": str(imported.bundle_path),
+        "manifest_path": str(imported.manifest_path),
+        "manifest_hash": imported.manifest_hash,
+        "artifact_count": len(imported.results),
+        "created_count": sum(1 for result in imported.results if result.status == "created"),
+        "skipped_count": sum(1 for result in imported.results if result.status == "skipped"),
+        "results": [source_capture_result_payload(result) for result in imported.results],
+    }
 
 
 def cmd_extract_evidence(args: argparse.Namespace) -> int:

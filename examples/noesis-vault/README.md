@@ -18,6 +18,14 @@ such as `source_type`, `original_url`, `author`, `source_date`, `captured`,
 `content_hash`, `source_size_bytes`, and `original_path`; duplicate content is
 skipped by default and reported in the command summary.
 
+For realistic project artifact imports, `ingest bundle` reads a local
+`noesis-bundle.yaml` manifest and captures listed artifacts in deterministic
+artifact-path order. The test fixture at
+`tests/fixtures/codex-session-bundle` demonstrates a Codex session export
+without requiring network access; imported source notes add flat bundle
+metadata such as `bundle_id`, `bundle_artifact_path`,
+`bundle_manifest_hash`, and `bundle_item_index`.
+
 The `agent-memory` dogfood extension models a realistic project-session handoff:
 `source -> evidence -> claim -> review -> synthesis -> reviewed knowledge ->
 operational context`. It starts at `sources/source-agent-memory-session.md`,
@@ -46,10 +54,10 @@ PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
 ```
 
-An MCP client should follow the same lifecycle through `noesis_ingest_source`,
-`noesis_create_evidence_draft`, `noesis_create_claim_draft`, review tools, and
-`noesis_build_context`; the tools are adapters over these vault files, not a
-separate source of truth.
+An MCP client should follow the same lifecycle through `noesis_ingest_source`
+or `noesis_import_source_bundle`, `noesis_create_evidence_draft`,
+`noesis_create_claim_draft`, review tools, and `noesis_build_context`; the
+tools are adapters over these vault files, not a separate source of truth.
 
 Open this folder as a vault in Obsidian, then start at
 `_dashboards/noesis-review-dashboard.md`.

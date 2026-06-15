@@ -187,6 +187,7 @@ PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
 PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --directory /path/to/sources --recursive --evidence-drafts
+PYTHONPATH=src python -m noesis ingest bundle --vault examples/noesis-vault /path/to/source-bundle --evidence-drafts
 PYTHONPATH=src python -m noesis extract evidence --vault examples/noesis-vault --source source-id --title "Evidence Title"
 PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --evidence evidence-id --title "Claim Title"
 PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer"
@@ -214,6 +215,7 @@ Supported commands:
 | `noesis vault init <path>` | Create the V1 contract metadata file, folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/`, add source provenance and a SHA-256 content hash, skip already-captured content unless `--allow-duplicates` is set, and create a linked source note in `sources/`. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order, report created/skipped summaries, and optionally create one reviewable evidence draft for each new source. |
+| `noesis ingest bundle --vault <path> <bundle-path> --evidence-drafts` | Import a local manifest-driven artifact bundle in deterministic artifact-path order, preserve raw artifacts, record bundle provenance, skip duplicate content, and optionally create reviewable evidence drafts. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
 | `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
 | `noesis synthesize --vault <path> --claim <claim-id>` | Create a review-ready synthesis draft grounded in claim, evidence, and source links. |
@@ -312,6 +314,7 @@ Controlled write tools:
 | Tool | Purpose |
 | --- | --- |
 | `noesis_ingest_source` | Copy raw source material into `raw/` and create a linked source note. |
+| `noesis_import_source_bundle` | Import a local manifest-driven artifact bundle into source notes and optional evidence drafts. |
 | `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
 | `noesis_create_claim_draft` | Create a review-ready claim draft grounded in evidence notes. |
 | `noesis_create_synthesis_draft` | Create a review-ready synthesis draft grounded in claim lineage. |
