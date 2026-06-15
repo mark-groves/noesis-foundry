@@ -21,8 +21,8 @@ tags:
 
 ## CLI Review Workbench
 
-Use these read-only commands from the repo root when a row needs closer
-inspection:
+Use these read-only inspection commands from the repo root when a row needs
+closer inspection:
 
 ```bash
 PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
@@ -32,6 +32,16 @@ PYTHONPATH=src python -m noesis review show stale-custom-plugin-first --vault ex
 
 `review show` reports the note state, linked support, audit records, requested
 changes, downstream reviewed-knowledge/context impact, and complete lineage.
+
+Use this write action after a scheduled review confirms the note still fits
+its current lifecycle role:
+
+```bash
+PYTHONPATH=src python -m noesis review renew stale-custom-plugin-first --vault examples/noesis-vault --next-review 2026-07-05
+```
+
+`review renew` records the scheduled review audit and moves `next_review`
+without changing active, stale, or superseded lifecycle status.
 
 ## Lifecycle Dashboard
 

@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from .vault import (
+    ContextLineageSummary,
     ContextPackage,
     ContextSelection,
     CreatedNote,
@@ -19,12 +20,14 @@ from .vault import (
     Vault,
     approve_review,
     compose_context,
+    context_lifecycle_exclusion_kind,
     extract_evidence,
     ingest_source,
     mark_memory_stale,
     note_review_due,
     promote_synthesis,
     propose_claim,
+    renew_review,
     request_review_changes,
     synthesize_claims,
     write_context_note,
@@ -191,26 +194,40 @@ class NoesisMcpHandlers:
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
+        profile: str | None = None,
     ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
         try:
-            package = compose_context(vault, scope=scope, purpose=purpose, limit=limit, max_chars=max_chars)
+            package = compose_context(
+                vault,
+                scope=scope,
+                purpose=purpose,
+                limit=limit,
+                max_chars=max_chars,
+                profile=profile,
+            )
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "vault_path": str(vault.root)}
         return {
             "ok": True,
             "vault_path": str(vault.root),
-            "scope": scope,
-            "purpose": purpose,
-            "limit": limit,
-            "max_chars": max_chars,
+            "scope": package.scope,
+            "purpose": package.purpose,
+            "profile": package.profile,
+            "profile_description": package.profile_description,
+            "limit": package.limit,
+            "max_chars": package.max_chars,
+            "requested_limit": package.requested_limit,
+            "requested_max_chars": package.requested_max_chars,
+            "applied_profile_defaults": list(package.applied_profile_defaults),
             "available_reviewed_knowledge_count": package.available_count,
             "reviewed_knowledge_count": len(package.reviewed_knowledge),
             "reviewed_knowledge": [note_summary(note, vault.root) for note in package.reviewed_knowledge],
             "selection": context_package_selection_payload(package, vault.root),
+            "lineage_summaries": context_lineage_summary_payloads(package, vault.root),
             "content": package.content,
         }
 
@@ -330,6 +347,27 @@ class NoesisMcpHandlers:
             slug=slug,
         )
 
+    def renew_review(
+        self,
+        note: str,
+        next_review: str,
+        vault_path: str | None = None,
+        reviewer: str = "unknown",
+        basis: str | None = None,
+        title: str | None = None,
+        slug: str | None = None,
+    ) -> JsonObject:
+        return self.write_result(
+            renew_review,
+            self.resolve_vault(vault_path),
+            note,
+            next_review=next_review,
+            reviewer=reviewer,
+            basis=basis,
+            title=title,
+            slug=slug,
+        )
+
     def promote_synthesis(
         self,
         synthesis: str,
@@ -375,6 +413,7 @@ class NoesisMcpHandlers:
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
+        profile: str | None = None,
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -386,6 +425,7 @@ class NoesisMcpHandlers:
             purpose=purpose,
             limit=limit,
             max_chars=max_chars,
+            profile=profile,
             title=title,
             slug=slug,
             next_review=next_review,
@@ -503,6 +543,7 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
+        profile: str | None = None,
     ) -> JsonObject:
         """Build operational context from current reviewed knowledge only."""
         return handlers.build_context(
@@ -511,6 +552,7 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             purpose=purpose,
             limit=limit,
             max_chars=max_chars,
+            profile=profile,
         )
 
     @server.tool()
@@ -612,6 +654,27 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         )
 
     @server.tool()
+    def noesis_renew_review(
+        note: str,
+        next_review: str,
+        vault_path: str | None = None,
+        reviewer: str = "unknown",
+        basis: str | None = None,
+        title: str | None = None,
+        slug: str | None = None,
+    ) -> JsonObject:
+        """Record a scheduled review audit and move the note's next_review date."""
+        return handlers.renew_review(
+            note=note,
+            next_review=next_review,
+            vault_path=vault_path,
+            reviewer=reviewer,
+            basis=basis,
+            title=title,
+            slug=slug,
+        )
+
+    @server.tool()
     def noesis_promote_synthesis(
         synthesis: str,
         vault_path: str | None = None,
@@ -656,6 +719,7 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
+        profile: str | None = None,
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -667,6 +731,7 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             purpose=purpose,
             limit=limit,
             max_chars=max_chars,
+            profile=profile,
             title=title,
             slug=slug,
             next_review=next_review,
@@ -720,9 +785,12 @@ def context_package_selection_payload(package: ContextPackage, vault_root: Path)
     return {
         "included": [context_selection_payload(selection, vault_root) for selection in package.included],
         "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
+        "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
+        "budgeted_out": [context_selection_payload(selection, vault_root) for selection in package.budgeted_out],
         "lifecycle_excluded": [
             context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
         ],
+        "lifecycle_exclusion_summary": lifecycle_exclusion_summary(package.lifecycle_excluded),
     }
 
 
@@ -734,9 +802,41 @@ def context_selection_payload(selection: ContextSelection, vault_root: Path) -> 
             "selection_reason": selection.reason,
             "scope_score": selection.score,
             "content_chars": selection.content_chars,
+            "lifecycle_exclusion_kind": (
+                context_lifecycle_exclusion_kind(selection.note)
+                if selection.status == "lifecycle_excluded"
+                else None
+            ),
         }
     )
     return payload
+
+
+def lifecycle_exclusion_summary(selections: list[ContextSelection]) -> JsonObject:
+    summary = {"stale": 0, "superseded": 0, "archived": 0, "excluded": 0}
+    for selection in selections:
+        kind = context_lifecycle_exclusion_kind(selection.note)
+        summary[kind] = summary.get(kind, 0) + 1
+    return summary
+
+
+def context_lineage_summary_payloads(package: ContextPackage, vault_root: Path) -> list[JsonObject]:
+    return [context_lineage_summary_payload(summary, vault_root) for summary in package.lineage_summaries]
+
+
+def context_lineage_summary_payload(summary: ContextLineageSummary, vault_root: Path) -> JsonObject:
+    stages = {
+        "sources": summary.sources,
+        "evidence": summary.evidence,
+        "claims": summary.claims,
+        "syntheses": summary.syntheses,
+        "reviews": summary.reviews,
+    }
+    return {
+        "reviewed_knowledge": note_summary(summary.reviewed_knowledge, vault_root),
+        "counts": {stage: len(notes) for stage, notes in stages.items()},
+        **{stage: [note_summary(note, vault_root) for note in notes] for stage, notes in stages.items()},
+    }
 
 
 def note_to_dict(note: Note, vault_root: Path) -> JsonObject:
@@ -807,6 +907,7 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
     audits = vault.review_audits_for(note)
     support = vault.support_notes_for(note)
     lineage = vault.lineage(note.noesis_id)
+    review_due = note_review_due(note, due_on=due_on)
     changes_requested = [
         {
             "review": note_summary(audit, vault.root),
@@ -824,7 +925,8 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
         "vault_path": str(vault.root),
         "note_ref": note_ref,
         "note": note_to_dict(note, vault.root),
-        "review_due": note_review_due(note, due_on=due_on),
+        "review_due": review_due,
+        "review_schedule": review_schedule_to_dict(vault, note, audits, due_on=due_on, review_due=review_due),
         "audit_status": {
             "requires_audit": requires_audit,
             "has_audit": bool(audits),
@@ -847,6 +949,24 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
             ],
         },
         "lineage": [note_summary(lineage_note, vault.root) for lineage_note in lineage],
+    }
+
+
+def review_schedule_to_dict(
+    vault: Vault,
+    note: Note,
+    audits: list[Note],
+    *,
+    due_on: str | None,
+    review_due: bool,
+) -> JsonObject:
+    latest_audit = audits[-1] if audits else None
+    return {
+        "next_review": json_safe(note.metadata.get("next_review")),
+        "due_on": due_on,
+        "due": review_due,
+        "audit_count": len(audits),
+        "latest_audit": review_audit_to_dict(latest_audit, vault.root) if latest_audit else None,
     }
 
 

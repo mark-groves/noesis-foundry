@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "noesis": {
+      "command": "/absolute/path/to/.venv/bin/noesis-mcp",
+      "args": ["/absolute/path/to/noesis-vault"]
+    }
+  }
+}

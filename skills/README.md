@@ -18,19 +18,20 @@ the `noesis` CLI as the source of truth for commands and file behavior.
 
 ## Operating Boundary
 
-Prefer the CLI whenever it is available:
+Prefer the installed CLI whenever it is available:
 
 ```bash
-PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
+noesis vault validate /absolute/path/to/noesis-vault
 ```
 
-If the package is installed, the `noesis` console script is equivalent. Direct
-Markdown/YAML edits are fallback adapter behavior only. When falling back, copy
-local vault templates where possible, keep YAML flat, use wikilinks for
-relationships, preserve raw sources, and validate the vault before reporting
-completion.
+From a source checkout without installation, `PYTHONPATH=src python -m noesis`
+is equivalent for local development. Direct Markdown/YAML edits are fallback
+adapter behavior only. When falling back, copy local vault templates where
+possible, keep YAML flat, use wikilinks for relationships, preserve raw
+sources, and validate the vault before reporting completion.
 
-See the root [`README.md`](../README.md) and
+See the root [`README.md`](../README.md),
+[`docs/install.md`](../docs/install.md), and
 [`docs/architecture/noesis-local-first-obsidian-interface.md`](../docs/architecture/noesis-local-first-obsidian-interface.md)
 for the current vault and CLI contract.
 

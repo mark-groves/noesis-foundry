@@ -286,6 +286,91 @@ class NoesisCliTests(unittest.TestCase):
             [note["noesis_id"] for note in payload["impact"]["dependent_contexts"]],
         )
 
+    def test_review_renew_handles_due_stale_memory_without_reactivating_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            renew = run_noesis(
+                "review",
+                "renew",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "The custom plugin assumption remains superseded by the local-first workflow.",
+                "--next-review",
+                "2026-07-05",
+                "--slug",
+                "stale-custom-plugin-still-superseded",
+            )
+            self.assertEqual(renew.returncode, 0, renew.stderr)
+            self.assertIn("created review-stale-custom-plugin-still-superseded", renew.stdout)
+
+            vault = Vault.load(vault_path)
+            stale_note = vault.find_note("stale-custom-plugin-first")
+            self.assertIsNotNone(stale_note)
+            assert stale_note is not None
+            self.assertEqual(stale_note.status, "superseded")
+            self.assertEqual(stale_note.lifecycle_stage, "stale")
+            self.assertEqual(stale_note.review_state, "reviewed")
+            self.assertEqual(str(stale_note.metadata["next_review"]), "2026-07-05")
+            self.assertIn("[[review-stale-custom-plugin-still-superseded]]", stale_note.metadata["reviewed_by"])
+
+            due_queue = run_noesis(
+                "review",
+                "queue",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(due_queue.returncode, 0, due_queue.stderr)
+            due_payload = parse_json_stdout(due_queue)
+            self.assertNotIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in due_payload["notes"]],
+            )
+
+            show = run_noesis(
+                "review",
+                "show",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            show_payload = parse_json_stdout(show)
+            self.assertEqual(show_payload["review_due"], False)
+            self.assertEqual(show_payload["review_schedule"]["next_review"], "2026-07-05")
+            self.assertEqual(show_payload["review_schedule"]["latest_audit"]["decision"], "renewed")
+            self.assertEqual(show_payload["audit_records"][-1]["noesis_id"], "review-stale-custom-plugin-still-superseded")
+            self.assertIn(
+                "context-first-cli-mcp-workflow",
+                [note["noesis_id"] for note in show_payload["impact"]["dependent_contexts"]],
+            )
+
+            context = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "lifecycle",
+                "--purpose",
+                "check renewed stale memory",
+            )
+            self.assertEqual(context.returncode, 0, context.stderr)
+            self.assertIn("reviewed-knowledge-noesis-lifecycle", context.stdout)
+            self.assertNotIn("stale-custom-plugin-first", context.stdout)
+            self.assertNotIn("Build Custom Obsidian Plugin First", context.stdout)
+
     def test_review_show_does_not_require_audits_for_generated_reviewed_notes(self) -> None:
         for note_id in ("context-first-cli-mcp-workflow", "stale-agent-memory-global-summary"):
             show = run_noesis(
@@ -589,6 +674,146 @@ class NoesisCliTests(unittest.TestCase):
             "stale-noesis-roadmap-plugin-first",
         ):
             self.assertIn(expected, trace.stdout)
+
+    def test_context_explain_json_reports_profile_provenance_and_lineage(self) -> None:
+        scoped = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--purpose",
+            "continue Noesis Foundry project work",
+            "--profile",
+            "review",
+            "--json",
+        )
+        self.assertEqual(scoped.returncode, 0, scoped.stderr)
+        scoped_payload = parse_json_stdout(scoped)
+        self.assertEqual(scoped_payload["profile"], "review")
+        self.assertEqual(scoped_payload["limit"], 6)
+        self.assertEqual(scoped_payload["max_chars"], 12000)
+        self.assertEqual(scoped_payload["requested_limit"], None)
+        self.assertEqual(scoped_payload["requested_max_chars"], None)
+        self.assertEqual(scoped_payload["applied_profile_defaults"], ["limit", "max_chars"])
+
+        selection = scoped_payload["selection"]
+        self.assertEqual(
+            [note["noesis_id"] for note in selection["included"]],
+            ["reviewed-knowledge-agent-memory-dogfood"],
+        )
+        self.assertIn(
+            "reviewed-knowledge-noesis-lifecycle",
+            [note["noesis_id"] for note in selection["scoped_out"]],
+        )
+        self.assertEqual(selection["budgeted_out"], [])
+        self.assertIn("profile 'review' supplied context defaults", selection["included"][0]["selection_reason"])
+        self.assertIn("profile 'review' supplied context defaults", selection["scoped_out"][0]["selection_reason"])
+        self.assertGreaterEqual(selection["lifecycle_exclusion_summary"]["superseded"], 2)
+        self.assertGreaterEqual(selection["lifecycle_exclusion_summary"]["archived"], 1)
+        self.assertIn(
+            "stale-agent-memory-global-summary",
+            [note["noesis_id"] for note in selection["lifecycle_excluded"]],
+        )
+        self.assertIn(
+            "archive-2026-05-29-first-lifecycle",
+            [note["noesis_id"] for note in selection["lifecycle_excluded"]],
+        )
+
+        lineage = scoped_payload["lineage_summaries"][0]
+        self.assertEqual(lineage["reviewed_knowledge"]["noesis_id"], "reviewed-knowledge-agent-memory-dogfood")
+        self.assertEqual(lineage["counts"]["sources"], 1)
+        self.assertEqual(lineage["counts"]["evidence"], 1)
+        self.assertEqual(lineage["counts"]["claims"], 1)
+        self.assertEqual(lineage["counts"]["syntheses"], 1)
+        self.assertEqual(lineage["counts"]["reviews"], 1)
+        self.assertEqual(lineage["sources"][0]["noesis_id"], "source-agent-memory-session")
+
+        overridden = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--profile",
+            "review",
+            "--limit",
+            "2",
+            "--max-chars",
+            "5000",
+            "--json",
+        )
+        self.assertEqual(overridden.returncode, 0, overridden.stderr)
+        overridden_payload = parse_json_stdout(overridden)
+        self.assertEqual(overridden_payload["profile"], "review")
+        self.assertEqual(overridden_payload["limit"], 2)
+        self.assertEqual(overridden_payload["max_chars"], 5000)
+        self.assertEqual(overridden_payload["requested_limit"], 2)
+        self.assertEqual(overridden_payload["requested_max_chars"], 5000)
+        self.assertEqual(overridden_payload["applied_profile_defaults"], [])
+        overridden_selection = overridden_payload["selection"]
+        for selection_group in ("included", "scoped_out"):
+            reason = overridden_selection[selection_group][0]["selection_reason"]
+            self.assertIn("profile 'review' selected with explicit context budgets", reason)
+            self.assertNotIn("supplied context defaults", reason)
+
+        budgeted = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--limit",
+            "1",
+            "--json",
+        )
+        self.assertEqual(budgeted.returncode, 0, budgeted.stderr)
+        budgeted_payload = parse_json_stdout(budgeted)
+        self.assertEqual(budgeted_payload["reviewed_knowledge_count"], 1)
+        self.assertGreaterEqual(len(budgeted_payload["selection"]["budgeted_out"]), 1)
+        self.assertIn(
+            "excluded by limit 1",
+            budgeted_payload["selection"]["budgeted_out"][0]["selection_reason"],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            stale_note_path = vault_path / "stale" / "stale-agent-memory-global-summary.md"
+            stale_note_path.write_text(
+                stale_note_path.read_text(encoding="utf-8").replace(
+                    "status: superseded",
+                    "status: stale",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            stale = run_noesis("context", "explain", "--vault", str(vault_path), "--json")
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+            stale_payload = parse_json_stdout(stale)
+            stale_summary = stale_payload["selection"]["lifecycle_exclusion_summary"]
+            self.assertGreaterEqual(stale_summary["stale"], 1)
+            self.assertGreaterEqual(stale_summary["superseded"], 1)
+            self.assertGreaterEqual(stale_summary["archived"], 1)
+
+        text = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--profile",
+            "review",
+        )
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertIn("Profile: review", text.stdout)
+        self.assertIn("## Included Lineage Summaries", text.stdout)
+        self.assertIn("## Scoped Out", text.stdout)
+        self.assertIn("## Budgeted Out", text.stdout)
+        self.assertIn("Summary: stale=0, superseded=", text.stdout)
 
     def test_initialized_vault_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

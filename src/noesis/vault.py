@@ -202,15 +202,64 @@ class ContextSelection:
 
 
 @dataclass(frozen=True)
+class ContextProfile:
+    name: str
+    description: str
+    default_limit: int | None
+    default_max_chars: int | None
+
+
+@dataclass(frozen=True)
+class ContextLineageSummary:
+    reviewed_knowledge: Note
+    sources: list[Note]
+    evidence: list[Note]
+    claims: list[Note]
+    syntheses: list[Note]
+    reviews: list[Note]
+
+
+CONTEXT_PROFILES = {
+    "project-continuation": ContextProfile(
+        name="project-continuation",
+        description="Prefer a broad, current briefing for continuing implementation work.",
+        default_limit=8,
+        default_max_chars=16000,
+    ),
+    "research": ContextProfile(
+        name="research",
+        description="Prefer a larger evidence-oriented briefing for discovery and synthesis work.",
+        default_limit=10,
+        default_max_chars=24000,
+    ),
+    "review": ContextProfile(
+        name="review",
+        description="Prefer a tighter briefing for evaluating changes and lifecycle state.",
+        default_limit=6,
+        default_max_chars=12000,
+    ),
+}
+CONTEXT_PROFILE_NAMES = set(CONTEXT_PROFILES)
+
+
+@dataclass(frozen=True)
 class ContextPackage:
+    profile: str | None
+    profile_description: str | None
     scope: str | None
     purpose: str | None
     limit: int | None
     max_chars: int | None
+    requested_limit: int | None
+    requested_max_chars: int | None
+    applied_profile_defaults: tuple[str, ...]
     available_count: int
     included: list[ContextSelection]
     excluded: list[ContextSelection]
+    scoped_out: list[ContextSelection]
+    budgeted_out: list[ContextSelection]
     lifecycle_excluded: list[ContextSelection]
+    lineage_summaries: list[ContextLineageSummary]
     content: str
 
     @property
@@ -395,13 +444,28 @@ class Vault:
                 continue
             if relationship_contains(self, target.metadata, "reviewed_by", note.noesis_id):
                 audits.append(note)
+        relationship_order = self.review_audit_relationship_order(target)
         return sorted(
             audits,
             key=lambda note: (
                 str(note.metadata.get("reviewed_at", note.metadata.get("updated", ""))),
+                relationship_order.get(note.noesis_id, -1),
                 note.title.lower(),
+                note.rel_path.as_posix(),
             ),
         )
+
+    def review_audit_relationship_order(self, target: Note) -> dict[str, int]:
+        order: dict[str, int] = {}
+        for index, item in enumerate(as_list(target.metadata.get("reviewed_by"))):
+            if not isinstance(item, str):
+                continue
+            for link_target in extract_wikilinks(item):
+                note = self.find_note(link_target)
+                if note is None or note.type != "review":
+                    continue
+                order.setdefault(note.noesis_id, index)
+        return order
 
     def support_notes_for(self, target: Note) -> dict[str, list[Note]]:
         support: dict[str, list[Note]] = {}
@@ -1333,6 +1397,99 @@ def request_review_changes(
     )
 
 
+def renew_review(
+    vault_path: Path | str,
+    note_ref: str,
+    *,
+    next_review: str | date,
+    reviewer: str = "unknown",
+    basis: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+    parsed_next_review = parse_review_date(next_review)
+    if parsed_next_review is None:
+        raise ValueError("next_review must be YYYY-MM-DD")
+
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    target = vault.find_note(note_ref)
+    if target is None:
+        raise ValueError(f"review target not found: {note_ref}")
+    if target.type in {"dashboard", "review", "source", "archived-history"}:
+        raise ValueError(f"note type cannot be renewed by this command: {target.type}")
+    if target.type == "stale-memory":
+        if not is_excluded(target):
+            raise ValueError("stale-memory renewal requires stale, superseded, or archived status")
+    elif target.review_state not in {"approved", "reviewed"} or is_excluded(target):
+        raise ValueError("only current approved or reviewed notes can be renewed")
+
+    renewed_at = today or date.today().isoformat()
+    scheduled_for = parsed_next_review.isoformat()
+    note_title = title or f"Scheduled Review - {target.title}"
+    note_slug = slugify(slug or f"{target.noesis_id}-renewed")
+    note_id = unique_noesis_id(root, f"review-{note_slug}")
+    note_path = unique_note_path(root / "review", f"{note_id}.md")
+    review_link = wikilink(note_id)
+    target_link = wikilink(target.noesis_id)
+
+    review_metadata: dict[str, Any] = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "review",
+        "lifecycle_stage": "review",
+        "status": "complete",
+        "review_state": "approved",
+        "confidence": "medium",
+        "created": renewed_at,
+        "updated": renewed_at,
+        "reviewer": reviewer,
+        "reviewed_at": renewed_at,
+        "reviewed_notes": [target_link],
+        "decision": "renewed",
+        "next_review": scheduled_for,
+        "tags": ["noesis", "review"],
+        "aliases": [],
+    }
+
+    target_metadata = dict(target.metadata)
+    target_metadata["updated"] = renewed_at
+    target_metadata["reviewed_at"] = renewed_at
+    target_metadata["next_review"] = scheduled_for
+    if target.type == "stale-memory":
+        target_metadata["review_state"] = "reviewed"
+    add_relationship_link(target_metadata, "reviewed_by", review_link)
+
+    basis_text = basis or "Scheduled lifecycle review confirmed the note remains fit for its current lifecycle role."
+    body = f"""# {note_title}
+
+## Decision
+
+renewed
+
+## Reviewed Note
+
+- {target_link}
+
+## Basis
+
+{basis_text}
+
+## Changes Requested
+
+None.
+
+## Next Review
+
+{scheduled_for}
+"""
+    write_notes_and_validate(root, [(target.path, target_metadata, target.body), (note_path, review_metadata, body)])
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
 def write_review_decision(
     vault_path: Path | str,
     note_ref: str,
@@ -1679,6 +1836,7 @@ def write_context_note(
     purpose: str | None = None,
     limit: int | None = None,
     max_chars: int | None = None,
+    profile: str | None = None,
     title: str | None = None,
     slug: str | None = None,
     next_review: str | None = None,
@@ -1691,7 +1849,14 @@ def write_context_note(
     validate_context_budget(limit=limit, max_chars=max_chars)
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    package = compose_context(vault, scope=scope, purpose=purpose, limit=limit, max_chars=max_chars)
+    package = compose_context(
+        vault,
+        scope=scope,
+        purpose=purpose,
+        limit=limit,
+        max_chars=max_chars,
+        profile=profile,
+    )
     knowledge = package.reviewed_knowledge
     if not knowledge:
         raise ValueError("no current reviewed knowledge found for context")
@@ -1726,10 +1891,12 @@ def write_context_note(
         metadata["scope"] = scope
     if purpose:
         metadata["purpose"] = purpose
-    if limit is not None:
-        metadata["context_limit"] = limit
-    if max_chars is not None:
-        metadata["context_max_chars"] = max_chars
+    if package.profile is not None:
+        metadata["context_profile"] = package.profile
+    if package.limit is not None:
+        metadata["context_limit"] = package.limit
+    if package.max_chars is not None:
+        metadata["context_max_chars"] = package.max_chars
 
     body = package.content
     body = body.rstrip() + "\n\n## Traceability\n\n"
@@ -1788,8 +1955,8 @@ tags:
 
 ## CLI Review Workbench
 
-Use these read-only commands from the repo root when a row needs closer
-inspection:
+Use these read-only inspection commands from the repo root when a row needs
+closer inspection:
 
 ```bash
 PYTHONPATH=src python -m noesis review summary --vault <vault-path>
@@ -1799,6 +1966,16 @@ PYTHONPATH=src python -m noesis review show <note-id> --vault <vault-path>
 
 `review show` reports the note state, linked support, audit records, requested
 changes, downstream reviewed-knowledge/context impact, and complete lineage.
+
+Use this write action after a scheduled review confirms the note still fits
+its current lifecycle role:
+
+```bash
+PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --next-review <YYYY-MM-DD>
+```
+
+`review renew` records the scheduled review audit and moves `next_review`
+without changing active, stale, or superseded lifecycle status.
 
 ## Lifecycle Dashboard
 
@@ -2145,8 +2322,16 @@ def build_context(
     *,
     limit: int | None = None,
     max_chars: int | None = None,
+    profile: str | None = None,
 ) -> str:
-    return compose_context(vault, scope=scope, purpose=purpose, limit=limit, max_chars=max_chars).content
+    return compose_context(
+        vault,
+        scope=scope,
+        purpose=purpose,
+        limit=limit,
+        max_chars=max_chars,
+        profile=profile,
+    ).content
 
 
 def compose_context(
@@ -2156,31 +2341,58 @@ def compose_context(
     *,
     limit: int | None = None,
     max_chars: int | None = None,
+    profile: str | None = None,
 ) -> ContextPackage:
     validate_context_budget(limit=limit, max_chars=max_chars)
+    profile_definition = resolve_context_profile(profile)
+    effective_limit, effective_max_chars, applied_profile_defaults = apply_context_profile_defaults(
+        profile_definition,
+        limit=limit,
+        max_chars=max_chars,
+    )
+    validate_context_budget(limit=effective_limit, max_chars=effective_max_chars)
     available = vault.current_reviewed_knowledge()
-    selected, scoped_out = select_knowledge_for_context(available, scope)
-    included, budgeted_out = apply_context_budget(selected, limit=limit, max_chars=max_chars)
+    selected, scoped_out = select_knowledge_for_context(
+        available,
+        scope,
+        profile=profile_definition,
+        applied_profile_defaults=applied_profile_defaults,
+    )
+    included, budgeted_out = apply_context_budget(
+        selected,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
+    )
     excluded = sorted(scoped_out + budgeted_out, key=lambda selection: (selection.status, selection.note.title.lower()))
     lifecycle_excluded = explain_lifecycle_exclusions(vault)
+    lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
     content = render_context(
         [selection.note for selection in included],
         scope=scope,
         purpose=purpose,
-        limit=limit,
-        max_chars=max_chars,
+        profile=profile_definition,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
         total_candidates=len(available),
         excluded=excluded,
     )
     return ContextPackage(
+        profile=profile_definition.name if profile_definition else None,
+        profile_description=profile_definition.description if profile_definition else None,
         scope=scope,
         purpose=purpose,
-        limit=limit,
-        max_chars=max_chars,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
+        requested_limit=limit,
+        requested_max_chars=max_chars,
+        applied_profile_defaults=applied_profile_defaults,
         available_count=len(available),
         included=included,
         excluded=excluded,
+        scoped_out=scoped_out,
+        budgeted_out=budgeted_out,
         lifecycle_excluded=lifecycle_excluded,
+        lineage_summaries=lineage_summaries,
         content=content,
     )
 
@@ -2192,9 +2404,43 @@ def validate_context_budget(*, limit: int | None = None, max_chars: int | None =
         raise ValueError("max_chars must be greater than zero")
 
 
+def resolve_context_profile(profile: str | None) -> ContextProfile | None:
+    if profile is None or not profile.strip():
+        return None
+    key = profile.strip().lower()
+    profile_definition = CONTEXT_PROFILES.get(key)
+    if profile_definition is None:
+        expected = ", ".join(sorted(CONTEXT_PROFILE_NAMES))
+        raise ValueError(f"profile must be one of: {expected}")
+    return profile_definition
+
+
+def apply_context_profile_defaults(
+    profile: ContextProfile | None,
+    *,
+    limit: int | None,
+    max_chars: int | None,
+) -> tuple[int | None, int | None, tuple[str, ...]]:
+    if profile is None:
+        return limit, max_chars, ()
+    applied: list[str] = []
+    effective_limit = limit
+    effective_max_chars = max_chars
+    if effective_limit is None and profile.default_limit is not None:
+        effective_limit = profile.default_limit
+        applied.append("limit")
+    if effective_max_chars is None and profile.default_max_chars is not None:
+        effective_max_chars = profile.default_max_chars
+        applied.append("max_chars")
+    return effective_limit, effective_max_chars, tuple(applied)
+
+
 def select_knowledge_for_context(
     knowledge: list[Note],
     scope: str | None,
+    *,
+    profile: ContextProfile | None = None,
+    applied_profile_defaults: tuple[str, ...] = (),
 ) -> tuple[list[ContextSelection], list[ContextSelection]]:
     scope_terms = context_scope_terms(scope)
     selected: list[ContextSelection] = []
@@ -2204,7 +2450,7 @@ def select_knowledge_for_context(
         selection = ContextSelection(
             note=note,
             status="included",
-            reason=context_include_reason(scope, score),
+            reason=context_include_reason(scope, score, profile, applied_profile_defaults),
             score=score,
             content_chars=len(note.body.strip()),
         )
@@ -2213,7 +2459,7 @@ def select_knowledge_for_context(
                 ContextSelection(
                     note=note,
                     status="scoped_out",
-                    reason=f"does not match scope {scope!r}",
+                    reason=context_scoped_out_reason(scope, profile, applied_profile_defaults),
                     score=score,
                     content_chars=selection.content_chars,
                 )
@@ -2279,10 +2525,40 @@ def context_scope_score(note: Note, scope_terms: list[str]) -> int:
     return sum(1 for term in scope_terms if term in searchable)
 
 
-def context_include_reason(scope: str | None, score: int) -> str:
+def context_include_reason(
+    scope: str | None,
+    score: int,
+    profile: ContextProfile | None = None,
+    applied_profile_defaults: tuple[str, ...] = (),
+) -> str:
     if scope is None or not scope.strip():
-        return "included because no scope filter was requested"
-    return f"matches scope {scope!r} with score {score}"
+        reason = "included because no scope filter was requested"
+    else:
+        reason = f"matches scope {scope!r} with score {score}"
+    reason += context_profile_reason_suffix(profile, applied_profile_defaults)
+    return reason
+
+
+def context_scoped_out_reason(
+    scope: str | None,
+    profile: ContextProfile | None = None,
+    applied_profile_defaults: tuple[str, ...] = (),
+) -> str:
+    reason = f"does not match scope {scope!r}"
+    reason += context_profile_reason_suffix(profile, applied_profile_defaults)
+    return reason
+
+
+def context_profile_reason_suffix(
+    profile: ContextProfile | None,
+    applied_profile_defaults: tuple[str, ...] = (),
+) -> str:
+    if profile is None:
+        return ""
+    if applied_profile_defaults:
+        defaults = ", ".join(applied_profile_defaults)
+        return f"; profile {profile.name!r} supplied context defaults: {defaults}"
+    return f"; profile {profile.name!r} selected with explicit context budgets"
 
 
 def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
@@ -2294,7 +2570,11 @@ def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
             ContextSelection(
                 note=note,
                 status="lifecycle_excluded",
-                reason=f"{note.type} has status {note.status!r} and is not active guidance",
+                reason=(
+                    f"{note.type} has status {note.status!r} "
+                    f"and lifecycle_stage {note.lifecycle_stage!r}; "
+                    f"intentionally excluded as {context_lifecycle_exclusion_kind(note)} note"
+                ),
                 score=0,
                 content_chars=len(note.body.strip()),
             )
@@ -2302,11 +2582,54 @@ def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
     return sorted(selections, key=lambda selection: selection.note.title.lower())
 
 
+def context_lifecycle_exclusion_kind(note: Note) -> str:
+    if note.lifecycle_stage == "archive" or note.status == "archived":
+        return "archived"
+    if note.status == "superseded":
+        return "superseded"
+    if note.status == "stale":
+        return "stale"
+    return "excluded"
+
+
+def context_lineage_summary(vault: Vault, note: Note) -> ContextLineageSummary:
+    return ContextLineageSummary(
+        reviewed_knowledge=note,
+        sources=context_relationship_notes(vault, note, "sources", expected_type="source"),
+        evidence=context_relationship_notes(vault, note, "evidence", expected_type="evidence"),
+        claims=context_relationship_notes(vault, note, "claims", expected_type="claim"),
+        syntheses=context_relationship_notes(vault, note, "syntheses", expected_type="synthesis"),
+        reviews=context_relationship_notes(vault, note, "reviewed_by", expected_type="review"),
+    )
+
+
+def context_relationship_notes(
+    vault: Vault,
+    note: Note,
+    key: str,
+    *,
+    expected_type: str | None = None,
+) -> list[Note]:
+    notes_by_id: dict[str, Note] = {}
+    for item in as_list(note.metadata.get(key)):
+        if not isinstance(item, str):
+            continue
+        for target in extract_wikilinks(item):
+            target_note = vault.find_note(target)
+            if target_note is None:
+                continue
+            if expected_type is not None and target_note.type != expected_type:
+                continue
+            notes_by_id[target_note.noesis_id] = target_note
+    return sorted(notes_by_id.values(), key=lambda item: item.rel_path.as_posix())
+
+
 def render_context(
     knowledge: list[Note],
     scope: str | None = None,
     purpose: str | None = None,
     *,
+    profile: ContextProfile | None = None,
     limit: int | None = None,
     max_chars: int | None = None,
     total_candidates: int | None = None,
@@ -2318,6 +2641,8 @@ def render_context(
         lines.extend([f"Scope: {scope}", ""])
     if purpose:
         lines.extend([f"Purpose: {purpose}", ""])
+    if profile is not None:
+        lines.extend([f"Profile: {profile.name}", ""])
     if limit is not None or max_chars is not None:
         budget = []
         if limit is not None:
