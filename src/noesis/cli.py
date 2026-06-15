@@ -31,6 +31,7 @@ from .vault import (
     mark_memory_stale,
     promote_synthesis,
     propose_claim,
+    renew_review,
     request_review_changes,
     synthesize_claims,
     write_context_note,
@@ -157,6 +158,16 @@ def build_parser() -> argparse.ArgumentParser:
     request_changes.add_argument("--title", default=None)
     request_changes.add_argument("--slug", default=None)
     request_changes.set_defaults(func=cmd_review_request_changes)
+
+    renew = review_commands.add_parser("renew", help="Record a scheduled review audit and reschedule a note")
+    renew.add_argument("note")
+    renew.add_argument("--vault", type=Path, required=True)
+    renew.add_argument("--reviewer", default="unknown")
+    renew.add_argument("--basis", default=None)
+    renew.add_argument("--title", default=None)
+    renew.add_argument("--slug", default=None)
+    renew.add_argument("--next-review", required=True)
+    renew.set_defaults(func=cmd_review_renew)
 
     knowledge = subcommands.add_parser("knowledge", help="Reviewed knowledge workflows")
     knowledge_commands = knowledge.add_subparsers(dest="knowledge_command", required=True)
@@ -579,8 +590,17 @@ def cmd_review_show(args: argparse.Namespace) -> int:
     print(f"path: {note.rel_path.as_posix()}")
     print(f"state: {note.status} / {note.review_state}")
     print(f"confidence: {note.metadata.get('confidence', 'unknown')}")
-    print(f"next_review: {note.metadata.get('next_review', 'not scheduled')}")
-    print(f"review_due: {str(payload['review_due']).lower()}")
+    schedule = payload["review_schedule"]
+    print(f"next_review: {schedule.get('next_review') or 'not scheduled'}")
+    print(f"review_due: {str(schedule['due']).lower()}")
+    latest_audit = schedule.get("latest_audit")
+    if latest_audit:
+        print(
+            "latest_audit: "
+            f"{latest_audit.get('reviewed_at', 'unknown')} "
+            f"{latest_audit.get('decision', 'unknown')} "
+            f"{latest_audit['noesis_id']}"
+        )
     audit_status = payload["audit_status"]
     print(
         "audit: "
@@ -588,6 +608,7 @@ def cmd_review_show(args: argparse.Namespace) -> int:
         f"required={str(audit_status['requires_audit']).lower()}, "
         f"ok={str(audit_status['ok']).lower()}"
     )
+    print_audit_history(payload["audit_records"])
     print_section_notes("support", payload["support"])
     print_flat_notes("dependent reviewed knowledge", payload["impact"]["dependent_reviewed_knowledge"])
     print_flat_notes("dependent contexts", payload["impact"]["dependent_contexts"])
@@ -628,6 +649,24 @@ def cmd_review_request_changes(args: argparse.Namespace) -> int:
             changes_requested=args.changes_requested,
             title=args.title,
             slug=args.slug,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    print(f"created {created.note_id}\t{created.path}")
+    return 0
+
+
+def cmd_review_renew(args: argparse.Namespace) -> int:
+    try:
+        created = renew_review(
+            args.vault,
+            args.note,
+            reviewer=args.reviewer,
+            basis=args.basis,
+            title=args.title,
+            slug=args.slug,
+            next_review=args.next_review,
         )
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
@@ -1004,3 +1043,22 @@ def print_flat_notes(title: str, notes: list[dict[str, Any]]) -> None:
         return
     for note in notes:
         print(f"  {note['noesis_id']}\t{note['path']}\t{note['review_state']}\t{note['title']}")
+
+
+def print_audit_history(audits: list[dict[str, Any]]) -> None:
+    print("audit history:")
+    if not audits:
+        print("  none")
+        return
+    for audit in audits:
+        print(
+            "\t".join(
+                [
+                    "  " + str(audit.get("reviewed_at", "unknown")),
+                    str(audit.get("decision", "unknown")),
+                    audit["noesis_id"],
+                    audit["path"],
+                    audit["title"],
+                ]
+            )
+        )

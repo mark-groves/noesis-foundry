@@ -286,6 +286,91 @@ class NoesisCliTests(unittest.TestCase):
             [note["noesis_id"] for note in payload["impact"]["dependent_contexts"]],
         )
 
+    def test_review_renew_handles_due_stale_memory_without_reactivating_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            renew = run_noesis(
+                "review",
+                "renew",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "The custom plugin assumption remains superseded by the local-first workflow.",
+                "--next-review",
+                "2026-07-05",
+                "--slug",
+                "stale-custom-plugin-still-superseded",
+            )
+            self.assertEqual(renew.returncode, 0, renew.stderr)
+            self.assertIn("created review-stale-custom-plugin-still-superseded", renew.stdout)
+
+            vault = Vault.load(vault_path)
+            stale_note = vault.find_note("stale-custom-plugin-first")
+            self.assertIsNotNone(stale_note)
+            assert stale_note is not None
+            self.assertEqual(stale_note.status, "superseded")
+            self.assertEqual(stale_note.lifecycle_stage, "stale")
+            self.assertEqual(stale_note.review_state, "reviewed")
+            self.assertEqual(str(stale_note.metadata["next_review"]), "2026-07-05")
+            self.assertIn("[[review-stale-custom-plugin-still-superseded]]", stale_note.metadata["reviewed_by"])
+
+            due_queue = run_noesis(
+                "review",
+                "queue",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(due_queue.returncode, 0, due_queue.stderr)
+            due_payload = parse_json_stdout(due_queue)
+            self.assertNotIn(
+                "stale-custom-plugin-first",
+                [note["noesis_id"] for note in due_payload["notes"]],
+            )
+
+            show = run_noesis(
+                "review",
+                "show",
+                "stale-custom-plugin-first",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            show_payload = parse_json_stdout(show)
+            self.assertEqual(show_payload["review_due"], False)
+            self.assertEqual(show_payload["review_schedule"]["next_review"], "2026-07-05")
+            self.assertEqual(show_payload["review_schedule"]["latest_audit"]["decision"], "renewed")
+            self.assertEqual(show_payload["audit_records"][-1]["noesis_id"], "review-stale-custom-plugin-still-superseded")
+            self.assertIn(
+                "context-first-cli-mcp-workflow",
+                [note["noesis_id"] for note in show_payload["impact"]["dependent_contexts"]],
+            )
+
+            context = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "lifecycle",
+                "--purpose",
+                "check renewed stale memory",
+            )
+            self.assertEqual(context.returncode, 0, context.stderr)
+            self.assertIn("reviewed-knowledge-noesis-lifecycle", context.stdout)
+            self.assertNotIn("stale-custom-plugin-first", context.stdout)
+            self.assertNotIn("Build Custom Obsidian Plugin First", context.stdout)
+
     def test_review_show_does_not_require_audits_for_generated_reviewed_notes(self) -> None:
         for note_id in ("context-first-cli-mcp-workflow", "stale-agent-memory-global-summary"):
             show = run_noesis(
