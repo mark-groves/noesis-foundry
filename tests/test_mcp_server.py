@@ -81,6 +81,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 "noesis_lint_vault",
                 "noesis_mark_memory_stale",
                 "noesis_promote_synthesis",
+                "noesis_renew_review",
                 "noesis_request_review_changes",
                 "noesis_search_notes",
                 "noesis_show_review",
@@ -325,6 +326,114 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertTrue(workbench["ok"], workbench)
             self.assertEqual(workbench["review_due"], True)
 
+    def test_review_renew_reports_latest_audit_from_relationship_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            first = handlers.renew_review(
+                "context-first-cli-mcp-workflow",
+                next_review="2026-07-01",
+                title="ZZZ Older Renewal",
+                slug="older-renewal",
+            )
+            self.assertTrue(first["ok"], first)
+            second = handlers.renew_review(
+                "context-first-cli-mcp-workflow",
+                next_review="2026-08-01",
+                title="AAA Newer Renewal",
+                slug="newer-renewal",
+            )
+            self.assertTrue(second["ok"], second)
+
+            workbench = handlers.show_review("context-first-cli-mcp-workflow", due_on="2026-07-15")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], False)
+            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-08-01")
+            self.assertEqual(
+                workbench["review_schedule"]["latest_audit"]["noesis_id"],
+                "review-newer-renewal",
+            )
+            self.assertEqual(
+                [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
+                [
+                    "review-older-renewal",
+                    "review-newer-renewal",
+                ],
+            )
+
+    def test_review_workbench_keeps_newer_reverse_only_audit_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            linked = handlers.renew_review("context-first-cli-mcp-workflow", next_review="2026-07-01")
+            self.assertTrue(linked["ok"], linked)
+            (vault_path / "review" / "review-imported-later-audit.md").write_text(
+                """---
+title: Imported Later Audit
+noesis_id: review-imported-later-audit
+type: review
+lifecycle_stage: review
+status: complete
+review_state: approved
+confidence: medium
+created: 2026-08-01
+updated: 2026-08-01
+reviewer: imported
+reviewed_at: 2026-08-01
+reviewed_notes:
+  - "[[context-first-cli-mcp-workflow]]"
+decision: renewed
+next_review: 2026-09-01
+tags:
+  - noesis
+  - review
+aliases: []
+---
+
+# Imported Later Audit
+
+## Decision
+
+renewed
+
+## Reviewed Note
+
+- [[context-first-cli-mcp-workflow]]
+
+## Basis
+
+Imported audit record without a target-side backlink.
+
+## Changes Requested
+
+None.
+
+## Next Review
+
+2026-09-01
+""",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+            workbench = handlers.show_review("context-first-cli-mcp-workflow")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(
+                workbench["review_schedule"]["latest_audit"]["noesis_id"],
+                "review-imported-later-audit",
+            )
+            self.assertEqual(
+                [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
+                [
+                    "review-context-first-cli-mcp-workflow-renewed",
+                    "review-imported-later-audit",
+                ],
+            )
+
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()
 
@@ -429,7 +538,28 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertEqual(written_context.metadata["context_profile"], "project-continuation")
             self.assertEqual(written_context.metadata["context_limit"], 8)
             self.assertEqual(written_context.metadata["context_max_chars"], 16000)
-            self.assertEqual(vault.validate(), [])
+
+            renewal = handlers.renew_review(
+                "context-review-before-reuse",
+                next_review="2026-09-06",
+                reviewer="test-human",
+                basis="Scheduled review confirms the operational context still matches current reviewed knowledge.",
+                slug="context-review-before-reuse-renewal",
+            )
+            self.assertTrue(renewal["ok"], renewal)
+            self.assertEqual(renewal["created"]["note_id"], "review-context-review-before-reuse-renewal")
+            renewed_context = Vault.load(vault_path).find_note("context-review-before-reuse")
+            self.assertIsNotNone(renewed_context)
+            assert renewed_context is not None
+            self.assertEqual(str(renewed_context.metadata["next_review"]), "2026-09-06")
+            self.assertIn("[[review-context-review-before-reuse-renewal]]", renewed_context.metadata["reviewed_by"])
+            workbench = handlers.show_review("context-review-before-reuse", due_on="2026-08-06")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], False)
+            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-09-06")
+            self.assertEqual(workbench["review_schedule"]["latest_audit"]["decision"], "renewed")
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
             queue = handlers.get_review_queue()
             self.assertTrue(queue["ok"], queue)
             self.assertEqual(queue["notes"], [])

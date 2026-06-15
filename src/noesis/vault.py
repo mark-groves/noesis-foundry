@@ -444,13 +444,28 @@ class Vault:
                 continue
             if relationship_contains(self, target.metadata, "reviewed_by", note.noesis_id):
                 audits.append(note)
+        relationship_order = self.review_audit_relationship_order(target)
         return sorted(
             audits,
             key=lambda note: (
                 str(note.metadata.get("reviewed_at", note.metadata.get("updated", ""))),
+                relationship_order.get(note.noesis_id, -1),
                 note.title.lower(),
+                note.rel_path.as_posix(),
             ),
         )
+
+    def review_audit_relationship_order(self, target: Note) -> dict[str, int]:
+        order: dict[str, int] = {}
+        for index, item in enumerate(as_list(target.metadata.get("reviewed_by"))):
+            if not isinstance(item, str):
+                continue
+            for link_target in extract_wikilinks(item):
+                note = self.find_note(link_target)
+                if note is None or note.type != "review":
+                    continue
+                order.setdefault(note.noesis_id, index)
+        return order
 
     def support_notes_for(self, target: Note) -> dict[str, list[Note]]:
         support: dict[str, list[Note]] = {}
@@ -1382,6 +1397,99 @@ def request_review_changes(
     )
 
 
+def renew_review(
+    vault_path: Path | str,
+    note_ref: str,
+    *,
+    next_review: str | date,
+    reviewer: str = "unknown",
+    basis: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+    today: str | None = None,
+) -> CreatedNote:
+    if title is not None and is_blank(title):
+        raise ValueError("title must not be blank")
+    parsed_next_review = parse_review_date(next_review)
+    if parsed_next_review is None:
+        raise ValueError("next_review must be YYYY-MM-DD")
+
+    root = ensure_valid_vault(vault_path)
+    vault = Vault.load(root)
+    target = vault.find_note(note_ref)
+    if target is None:
+        raise ValueError(f"review target not found: {note_ref}")
+    if target.type in {"dashboard", "review", "source", "archived-history"}:
+        raise ValueError(f"note type cannot be renewed by this command: {target.type}")
+    if target.type == "stale-memory":
+        if not is_excluded(target):
+            raise ValueError("stale-memory renewal requires stale, superseded, or archived status")
+    elif target.review_state not in {"approved", "reviewed"} or is_excluded(target):
+        raise ValueError("only current approved or reviewed notes can be renewed")
+
+    renewed_at = today or date.today().isoformat()
+    scheduled_for = parsed_next_review.isoformat()
+    note_title = title or f"Scheduled Review - {target.title}"
+    note_slug = slugify(slug or f"{target.noesis_id}-renewed")
+    note_id = unique_noesis_id(root, f"review-{note_slug}")
+    note_path = unique_note_path(root / "review", f"{note_id}.md")
+    review_link = wikilink(note_id)
+    target_link = wikilink(target.noesis_id)
+
+    review_metadata: dict[str, Any] = {
+        "title": note_title,
+        "noesis_id": note_id,
+        "type": "review",
+        "lifecycle_stage": "review",
+        "status": "complete",
+        "review_state": "approved",
+        "confidence": "medium",
+        "created": renewed_at,
+        "updated": renewed_at,
+        "reviewer": reviewer,
+        "reviewed_at": renewed_at,
+        "reviewed_notes": [target_link],
+        "decision": "renewed",
+        "next_review": scheduled_for,
+        "tags": ["noesis", "review"],
+        "aliases": [],
+    }
+
+    target_metadata = dict(target.metadata)
+    target_metadata["updated"] = renewed_at
+    target_metadata["reviewed_at"] = renewed_at
+    target_metadata["next_review"] = scheduled_for
+    if target.type == "stale-memory":
+        target_metadata["review_state"] = "reviewed"
+    add_relationship_link(target_metadata, "reviewed_by", review_link)
+
+    basis_text = basis or "Scheduled lifecycle review confirmed the note remains fit for its current lifecycle role."
+    body = f"""# {note_title}
+
+## Decision
+
+renewed
+
+## Reviewed Note
+
+- {target_link}
+
+## Basis
+
+{basis_text}
+
+## Changes Requested
+
+None.
+
+## Next Review
+
+{scheduled_for}
+"""
+    write_notes_and_validate(root, [(target.path, target_metadata, target.body), (note_path, review_metadata, body)])
+    return CreatedNote(note_id=note_id, path=note_path)
+
+
 def write_review_decision(
     vault_path: Path | str,
     note_ref: str,
@@ -1847,8 +1955,8 @@ tags:
 
 ## CLI Review Workbench
 
-Use these read-only commands from the repo root when a row needs closer
-inspection:
+Use these read-only inspection commands from the repo root when a row needs
+closer inspection:
 
 ```bash
 PYTHONPATH=src python -m noesis review summary --vault <vault-path>
@@ -1858,6 +1966,16 @@ PYTHONPATH=src python -m noesis review show <note-id> --vault <vault-path>
 
 `review show` reports the note state, linked support, audit records, requested
 changes, downstream reviewed-knowledge/context impact, and complete lineage.
+
+Use this write action after a scheduled review confirms the note still fits
+its current lifecycle role:
+
+```bash
+PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --next-review <YYYY-MM-DD>
+```
+
+`review renew` records the scheduled review audit and moves `next_review`
+without changing active, stale, or superseded lifecycle status.
 
 ## Lifecycle Dashboard
 
