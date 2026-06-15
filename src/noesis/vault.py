@@ -395,13 +395,42 @@ class Vault:
                 continue
             if relationship_contains(self, target.metadata, "reviewed_by", note.noesis_id):
                 audits.append(note)
+        relationship_order = self.review_audit_relationship_order(target)
+        if relationship_order:
+            return sorted(
+                audits,
+                key=lambda note: (
+                    1,
+                    relationship_order[note.noesis_id],
+                )
+                if note.noesis_id in relationship_order
+                else (
+                    0,
+                    str(note.metadata.get("reviewed_at", note.metadata.get("updated", ""))),
+                    note.title.lower(),
+                    note.rel_path.as_posix(),
+                ),
+            )
         return sorted(
             audits,
             key=lambda note: (
                 str(note.metadata.get("reviewed_at", note.metadata.get("updated", ""))),
                 note.title.lower(),
+                note.rel_path.as_posix(),
             ),
         )
+
+    def review_audit_relationship_order(self, target: Note) -> dict[str, int]:
+        order: dict[str, int] = {}
+        for index, item in enumerate(as_list(target.metadata.get("reviewed_by"))):
+            if not isinstance(item, str):
+                continue
+            for link_target in extract_wikilinks(item):
+                note = self.find_note(link_target)
+                if note is None or note.type != "review":
+                    continue
+                order.setdefault(note.noesis_id, index)
+        return order
 
     def support_notes_for(self, target: Note) -> dict[str, list[Note]]:
         support: dict[str, list[Note]] = {}

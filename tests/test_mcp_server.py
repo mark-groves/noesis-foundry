@@ -301,6 +301,33 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertTrue(workbench["ok"], workbench)
             self.assertEqual(workbench["review_due"], True)
 
+    def test_review_renew_reports_latest_audit_from_relationship_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            first = handlers.renew_review("context-first-cli-mcp-workflow", next_review="2026-07-01")
+            self.assertTrue(first["ok"], first)
+            second = handlers.renew_review("context-first-cli-mcp-workflow", next_review="2026-08-01")
+            self.assertTrue(second["ok"], second)
+
+            workbench = handlers.show_review("context-first-cli-mcp-workflow", due_on="2026-07-15")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["review_due"], False)
+            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-08-01")
+            self.assertEqual(
+                workbench["review_schedule"]["latest_audit"]["noesis_id"],
+                "review-context-first-cli-mcp-workflow-renewed-2",
+            )
+            self.assertEqual(
+                [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
+                [
+                    "review-context-first-cli-mcp-workflow-renewed",
+                    "review-context-first-cli-mcp-workflow-renewed-2",
+                ],
+            )
+
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()
 
