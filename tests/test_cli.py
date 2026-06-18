@@ -1525,6 +1525,13 @@ sources:
             all(str(EXAMPLE_VAULT.resolve()) in command for command in validation_commands[1:4]),
             validation_commands,
         )
+        self.assertTrue(
+            all(
+                "--purpose 'orchestrate next Noesis phases'" in command
+                for command in validation_commands[2:4]
+            ),
+            validation_commands,
+        )
         self.assertEqual(
             payload["handoff"]["selection_provenance"]["included"][0]["selection_status"],
             "included",

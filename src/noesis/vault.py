@@ -2954,7 +2954,7 @@ def context_handoff_guidance(
         (
             "PYTHONPATH=src python -m noesis context explain"
             f"{vault_flag}"
-            f"{scope_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
+            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
         ),
         "PYTHONPATH=src python -m unittest discover -s tests -v",
     ]
