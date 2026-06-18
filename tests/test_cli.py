@@ -323,9 +323,18 @@ class NoesisCliTests(unittest.TestCase):
                 "2026-07-05",
                 "--slug",
                 "stale-custom-plugin-still-superseded",
+                "--json",
             )
             self.assertEqual(renew.returncode, 0, renew.stderr)
-            self.assertIn("created review-stale-custom-plugin-still-superseded", renew.stdout)
+            renew_payload = parse_json_stdout(renew)
+            self.assertEqual(renew_payload["ok"], True)
+            self.assertEqual(
+                renew_payload["created"],
+                {
+                    "note_id": "review-stale-custom-plugin-still-superseded",
+                    "path": "review/review-stale-custom-plugin-still-superseded.md",
+                },
+            )
 
             vault = Vault.load(vault_path)
             stale_note = vault.find_note("stale-custom-plugin-first")
@@ -388,6 +397,23 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("reviewed-knowledge-noesis-lifecycle", context.stdout)
             self.assertNotIn("stale-custom-plugin-first", context.stdout)
             self.assertNotIn("Build Custom Obsidian Plugin First", context.stdout)
+
+    def test_review_renew_json_reports_structured_errors(self) -> None:
+        renew = run_noesis(
+            "review",
+            "renew",
+            "source-noesis-readme",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--next-review",
+            "not-a-date",
+            "--json",
+        )
+        self.assertNotEqual(renew.returncode, 0)
+        payload = parse_json_stdout(renew)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["error"], "next_review must be YYYY-MM-DD")
+        self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
 
     def test_review_show_does_not_require_audits_for_generated_reviewed_notes(self) -> None:
         for note_id in ("context-first-cli-mcp-workflow", "stale-agent-memory-global-summary"):
