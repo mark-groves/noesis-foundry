@@ -11,6 +11,7 @@ from .mcp_server import (
     json_safe,
     note_summary,
     review_filters,
+    review_note_summary,
     review_summary_to_dict,
     review_workbench_to_dict,
 )
@@ -539,7 +540,7 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
                 "ok": True,
                 "vault_path": str(vault.root),
                 "count": len(queue),
-                "notes": [note_summary(note, vault.root) for note in queue],
+                "notes": [review_note_summary(note, vault, due_on=args.due_on) for note in queue],
                 "filters": review_filters(
                     review_state=args.review_state,
                     note_type=args.note_type,
@@ -571,6 +572,9 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
         return 0
     for note in queue:
         next_review = note.metadata.get("next_review", "")
+        governance = review_note_summary(note, vault, due_on=args.due_on)
+        schedule = governance["review_schedule"]
+        impact = governance["impact"]
         print(
             "\t".join(
                 [
@@ -579,6 +583,8 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
                     note.review_state,
                     note.status,
                     str(next_review),
+                    schedule["status"],
+                    f"impact:{impact['dependent_reviewed_knowledge']}/{impact['dependent_contexts']}",
                     note.title,
                 ]
             )
@@ -613,9 +619,53 @@ def cmd_review_summary(args: argparse.Namespace) -> int:
     print("review summary")
     print(f"pending: {summary['pending_count']}")
     print(f"due: {summary['due_count']}")
+    print(f"overdue: {summary['overdue_count']}")
+    print(f"requested changes: {summary['requested_changes_count']}")
+    print(f"audit gaps: {summary['audit_gap_count']}")
     print("review states:")
     for state, count in summary["review_state_counts"].items():
         print(f"  {state}: {count}")
+    if summary["overdue_notes"]:
+        print("overdue:")
+        for note in summary["overdue_notes"]:
+            next_review = note.metadata.get("next_review", "")
+            print(
+                "\t".join(
+                    [
+                        str(next_review),
+                        note.noesis_id,
+                        note.rel_path.as_posix(),
+                        note.review_state,
+                        note.title,
+                    ]
+                )
+            )
+    if summary["requested_changes_notes"]:
+        print("requested changes:")
+        for note in summary["requested_changes_notes"]:
+            print(
+                "\t".join(
+                    [
+                        note.noesis_id,
+                        note.rel_path.as_posix(),
+                        note.status,
+                        note.title,
+                    ]
+                )
+            )
+    if summary["audit_gap_notes"]:
+        print("audit gaps:")
+        for note in summary["audit_gap_notes"]:
+            print(
+                "\t".join(
+                    [
+                        note.noesis_id,
+                        note.rel_path.as_posix(),
+                        note.review_state,
+                        note.title,
+                    ]
+                )
+            )
     if summary["next_review_notes"]:
         print("next review:")
         for note in summary["next_review_notes"]:
@@ -661,6 +711,17 @@ def cmd_review_show(args: argparse.Namespace) -> int:
     schedule = payload["review_schedule"]
     print(f"next_review: {schedule.get('next_review') or 'not scheduled'}")
     print(f"review_due: {str(schedule['due']).lower()}")
+    print(f"schedule_status: {schedule['status']}")
+    if schedule["overdue"]:
+        print(f"days_overdue: {schedule['days_overdue']}")
+    triage = payload["triage"]
+    print(f"recommended_action: {triage['recommended_action']}")
+    lifecycle_safety = payload["lifecycle_safety"]
+    if lifecycle_safety["stale_or_superseded_memory"]:
+        print(
+            "lifecycle_safety: "
+            "stale/superseded memory remains excluded from active context; renewal preserves lifecycle"
+        )
     latest_audit = schedule.get("latest_audit")
     if latest_audit:
         print(

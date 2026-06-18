@@ -38,3 +38,39 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - reviewed_by
+      - superseded_by
+  - type: table
+    name: Requested changes
+    filters:
+      and:
+        - review_state == "changes-requested"
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - reviewed_by
+      - updated
+  - type: table
+    name: Downstream impact cues
+    filters:
+      and:
+        - reviewed_knowledge != null || excluded_memory != null || superseded_by != null
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - reviewed_knowledge
+      - excluded_memory
+      - superseded_by
+      - updated

@@ -28,6 +28,22 @@ This note is a human-readable queue. The canonical sortable queue is
 - Confirm whether [[stale-custom-plugin-first]] should remain superseded after
   the first CLI/MCP implementation.
 
+## Overdue Scheduled Reviews
+
+- [[stale-custom-plugin-first]] is overdue for a scheduled review. If the
+  custom-plugin-first assumption remains superseded, renew the review schedule
+  without changing `lifecycle_stage: stale` or `status: superseded`.
+
+## Requested Changes
+
+- No current requested-changes blocker in the example vault.
+
+## Downstream Impact Checks
+
+- Before changing [[stale-custom-plugin-first]], inspect downstream context that
+  records it as excluded memory, especially
+  [[operational-context-first-cli-mcp-workflow]].
+
 ## Recently Approved
 
 - [[claim-useful-memory-requires-lifecycle]]

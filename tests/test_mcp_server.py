@@ -122,6 +122,9 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(due_queue["ok"], due_queue)
         self.assertEqual([note["noesis_id"] for note in due_queue["notes"]], ["stale-custom-plugin-first"])
         self.assertEqual(due_queue["filters"]["type"], "stale-memory")
+        self.assertEqual(due_queue["notes"][0]["review_schedule"]["status"], "overdue")
+        self.assertEqual(due_queue["notes"][0]["review_schedule"]["days_overdue"], 8)
+        self.assertEqual(due_queue["notes"][0]["lifecycle_safety"]["renewal_preserves_lifecycle"], True)
         scheduled_due_queue = handlers.get_review_queue(due_on="2026-06-29")
         self.assertTrue(scheduled_due_queue["ok"], scheduled_due_queue)
         scheduled_due_ids = [note["noesis_id"] for note in scheduled_due_queue["notes"]]
@@ -133,7 +136,10 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         summary = handlers.get_review_summary(due_on="2026-06-13")
         self.assertTrue(summary["ok"], summary)
         self.assertGreaterEqual(summary["pending_count"], 1)
+        self.assertGreaterEqual(summary["overdue_count"], 1)
+        self.assertEqual(summary["audit_gap_count"], 0)
         self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["due_notes"]])
+        self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["overdue_notes"]])
 
         workbench = handlers.show_review("claim-useful-memory-requires-lifecycle", due_on="2026-06-13")
         self.assertTrue(workbench["ok"], workbench)
@@ -147,8 +153,11 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in workbench["impact"]["dependent_contexts"]],
         )
-        stale_workbench = handlers.show_review("stale-custom-plugin-first")
+        stale_workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
         self.assertTrue(stale_workbench["ok"], stale_workbench)
+        self.assertEqual(stale_workbench["triage"]["recommended_action"], "review-overdue-note")
+        self.assertEqual(stale_workbench["lifecycle_safety"]["stale_or_superseded_memory"], True)
+        self.assertEqual(stale_workbench["lifecycle_safety"]["renewal_preserves_lifecycle"], True)
         self.assertIn(
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in stale_workbench["impact"]["dependent_contexts"]],

@@ -179,6 +179,11 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(due_payload["filters"]["type"], "stale-memory")
         self.assertEqual(due_payload["filters"]["due"], True)
         self.assertEqual([note["noesis_id"] for note in due_payload["notes"]], ["stale-custom-plugin-first"])
+        stale_due = due_payload["notes"][0]
+        self.assertEqual(stale_due["review_schedule"]["status"], "overdue")
+        self.assertEqual(stale_due["review_schedule"]["days_overdue"], 8)
+        self.assertEqual(stale_due["lifecycle_safety"]["renewal_preserves_lifecycle"], True)
+        self.assertGreaterEqual(stale_due["impact"]["dependent_contexts"], 1)
 
         scheduled_due_queue = run_noesis(
             "review",
@@ -222,10 +227,16 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(summary.returncode, 0, summary.stderr)
         summary_payload = parse_json_stdout(summary)
         self.assertGreaterEqual(summary_payload["pending_count"], 1)
+        self.assertGreaterEqual(summary_payload["overdue_count"], 1)
+        self.assertEqual(summary_payload["audit_gap_count"], 0)
         self.assertIn("ready-for-review", summary_payload["review_state_counts"])
         self.assertIn(
             "stale-custom-plugin-first",
             [note["noesis_id"] for note in summary_payload["due_notes"]],
+        )
+        self.assertIn(
+            "stale-custom-plugin-first",
+            [note["noesis_id"] for note in summary_payload["overdue_notes"]],
         )
 
     def test_review_show_json_reports_support_audit_impact_and_changes(self) -> None:
@@ -264,6 +275,8 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("sources", payload["support"])
             self.assertIn("evidence", payload["support"])
             self.assertTrue(payload["audit_status"]["ok"], payload["audit_status"])
+            self.assertEqual(payload["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(payload["triage"]["blocked_by_requested_changes"], True)
             self.assertIn(
                 "reviewed-knowledge-noesis-lifecycle",
                 [note["noesis_id"] for note in payload["impact"]["dependent_reviewed_knowledge"]],
@@ -282,6 +295,10 @@ class NoesisCliTests(unittest.TestCase):
         )
         self.assertEqual(show.returncode, 0, show.stderr)
         payload = parse_json_stdout(show)
+        self.assertEqual(payload["triage"]["recommended_action"], "review-overdue-note")
+        self.assertEqual(payload["review_schedule"]["status"], "overdue")
+        self.assertEqual(payload["lifecycle_safety"]["stale_or_superseded_memory"], True)
+        self.assertEqual(payload["lifecycle_safety"]["renewal_preserves_lifecycle"], True)
         self.assertIn(
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in payload["impact"]["dependent_contexts"]],
