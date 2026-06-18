@@ -54,15 +54,19 @@ extract focused evidence, state a bounded claim, record review, synthesize the
 result, and promote only the reviewed conclusion into active operational
 context.
 
-Captured Codex session bundles are valuable source material because they
-preserve local artifacts, provenance, branch/session metadata, and duplicate
-handling. They should inform evidence and review, not bypass review by becoming
-active context directly.
+Captured session bundles are valuable source material because they preserve
+local artifacts, provenance, branch or session metadata, and duplicate handling.
+They should inform evidence and review, not bypass review by becoming active
+context directly.
+
+Unreviewed evidence drafts, such as imported artifact candidates awaiting
+review, remain preserved inputs. They are not active operational context until a
+claim, review, synthesis, and reviewed-knowledge promotion accepts the guidance.
 
 ## Why It Is Trusted
 
-- It is grounded in [[source-project-memory-corpus-repo-artifacts]] and [[source-project-memory-corpus-bundle-fixture]].
-- The supporting evidence is recorded in [[evidence-project-memory-corpus-contract]] and [[evidence-project-memory-corpus-import-fixture]].
+- It is grounded in [[source-project-memory-corpus-repo-artifacts]], [[source-project-memory-corpus-bundle-fixture]], and [[source-project-memory-corpus-review-governance]].
+- The supporting evidence is recorded in [[evidence-project-memory-corpus-contract]], [[evidence-project-memory-corpus-import-fixture]], and [[evidence-project-memory-corpus-review-gate]].
 - The claim is approved in [[review-project-memory-corpus-continuation]].
 - The synthesis is [[synthesis-project-memory-corpus-continuation]].
 

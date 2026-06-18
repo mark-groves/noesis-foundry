@@ -707,9 +707,12 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(context.returncode, 0, context.stderr)
         self.assertIn("reviewed-knowledge-project-memory-corpus-continuation", context.stdout)
         self.assertIn("Use source-backed project-memory chains", context.stdout)
-        self.assertIn("Captured Codex session bundles are valuable source material", context.stdout)
+        self.assertIn("Captured session bundles are valuable source material", context.stdout)
+        self.assertIn("Unreviewed evidence drafts", context.stdout)
         self.assertNotIn("Every imported bundle artifact should be promoted directly into active context", context.stdout)
         self.assertNotIn("stale-project-memory-corpus-bulk-import-active-context", context.stdout)
+        self.assertNotIn("UNREVIEWED_BUNDLE_SHORTCUT_ACTIVE_CONTEXT", context.stdout)
+        self.assertNotIn("evidence-project-memory-corpus-unreviewed-import-draft", context.stdout)
 
         context_note = (
             EXAMPLE_VAULT / "context" / "operational-context-project-memory-corpus-continuation.md"
@@ -727,8 +730,10 @@ class NoesisCliTests(unittest.TestCase):
         for expected in (
             "source-project-memory-corpus-repo-artifacts",
             "source-project-memory-corpus-bundle-fixture",
+            "source-project-memory-corpus-review-governance",
             "evidence-project-memory-corpus-contract",
             "evidence-project-memory-corpus-import-fixture",
+            "evidence-project-memory-corpus-review-gate",
             "claim-project-memory-corpus-continuation",
             "review-project-memory-corpus-continuation",
             "synthesis-project-memory-corpus-continuation",
@@ -737,6 +742,11 @@ class NoesisCliTests(unittest.TestCase):
             "stale-project-memory-corpus-bulk-import-active-context",
         ):
             self.assertIn(expected, trace.stdout)
+        self.assertIn("evidence-project-memory-corpus-unreviewed-import-draft", trace.stdout)
+
+        review_queue = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
+        self.assertEqual(review_queue.returncode, 0, review_queue.stderr)
+        self.assertIn("evidence-project-memory-corpus-unreviewed-import-draft", review_queue.stdout)
 
     def test_context_explain_json_reports_profile_provenance_and_lineage(self) -> None:
         scoped = run_noesis(

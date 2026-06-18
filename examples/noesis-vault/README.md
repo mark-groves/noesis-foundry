@@ -45,13 +45,16 @@ roadmap guidance.
 
 The `project-memory-corpus` continuation extension is a larger multi-source
 chain for future agents expanding this repository's own memory. It starts from
-checked-in repo artifacts and the local Codex session bundle fixture at
-`sources/source-project-memory-corpus-repo-artifacts.md` and
-`sources/source-project-memory-corpus-bundle-fixture.md`, promotes
+checked-in repo artifacts, checked-in review governance examples, and a local
+session bundle fixture at `sources/source-project-memory-corpus-repo-artifacts.md`,
+`sources/source-project-memory-corpus-bundle-fixture.md`, and
+`sources/source-project-memory-corpus-review-governance.md`, promotes
 `knowledge/reviewed-knowledge-project-memory-corpus-continuation.md`, ends at
-`context/operational-context-project-memory-corpus-continuation.md`, and keeps
+`context/operational-context-project-memory-corpus-continuation.md`, keeps
 `stale/stale-project-memory-corpus-bulk-import-active-context.md` traceable but
-excluded from active context.
+excluded from active context, and preserves
+`evidence/evidence-project-memory-corpus-unreviewed-import-draft.md` as a
+review-queued input that must not bypass promotion.
 
 The CLI context composer can scope and budget the active package without
 weakening lifecycle safety:

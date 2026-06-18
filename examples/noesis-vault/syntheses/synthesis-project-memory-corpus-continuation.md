@@ -11,9 +11,11 @@ updated: 2026-06-18
 sources:
   - "[[source-project-memory-corpus-repo-artifacts]]"
   - "[[source-project-memory-corpus-bundle-fixture]]"
+  - "[[source-project-memory-corpus-review-governance]]"
 evidence:
   - "[[evidence-project-memory-corpus-contract]]"
   - "[[evidence-project-memory-corpus-import-fixture]]"
+  - "[[evidence-project-memory-corpus-review-gate]]"
 claims:
   - "[[claim-project-memory-corpus-continuation]]"
 reviewed_by:
@@ -33,11 +35,11 @@ aliases:
 ## Synthesis
 
 The example vault should become a practical project-memory corpus for Noesis
-Foundry by preserving source-backed chains from repository artifacts and local
-fixtures. Imported session material is valuable when it remains traceable as
-source and evidence, but future agents should receive active guidance only after
-that material has been claimed, reviewed, synthesized, and promoted to current
-reviewed knowledge.
+Foundry by preserving source-backed chains from repository artifacts, local
+fixtures, and checked-in review-governance examples. Imported session material
+is valuable when it remains traceable as source and evidence, but future agents
+should receive active guidance only after that material has been claimed,
+reviewed, synthesized, and promoted to current reviewed knowledge.
 
 ## Supporting Claims
 
@@ -54,4 +56,5 @@ exists.
 
 Future project-memory additions should include source notes, evidence, claims,
 review notes, syntheses, reviewed knowledge, context, and explicit stale-memory
-exclusions when a tempting shortcut has been superseded.
+exclusions when a tempting shortcut has been superseded. Evidence drafts that
+are still `ready-for-review` remain preserved inputs, not active guidance.
