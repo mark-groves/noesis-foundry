@@ -676,6 +676,51 @@ class NoesisCliTests(unittest.TestCase):
         ):
             self.assertIn(expected, trace.stdout)
 
+    def test_example_project_memory_corpus_context_uses_reviewed_knowledge(self) -> None:
+        context = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "project-memory-corpus",
+            "--purpose",
+            "continue expanding Noesis Foundry project memory",
+        )
+        self.assertEqual(context.returncode, 0, context.stderr)
+        self.assertIn("reviewed-knowledge-project-memory-corpus-continuation", context.stdout)
+        self.assertIn("Use source-backed project-memory chains", context.stdout)
+        self.assertIn("Captured Codex session bundles are valuable source material", context.stdout)
+        self.assertNotIn("Every imported bundle artifact should be promoted directly into active context", context.stdout)
+        self.assertNotIn("stale-project-memory-corpus-bulk-import-active-context", context.stdout)
+
+        context_note = (
+            EXAMPLE_VAULT / "context" / "operational-context-project-memory-corpus-continuation.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("[[reviewed-knowledge-project-memory-corpus-continuation]]", context_note)
+        self.assertIn("[[stale-project-memory-corpus-bulk-import-active-context]]", context_note)
+
+        trace = run_noesis(
+            "trace",
+            "reviewed-knowledge-project-memory-corpus-continuation",
+            "--vault",
+            str(EXAMPLE_VAULT),
+        )
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        for expected in (
+            "source-project-memory-corpus-repo-artifacts",
+            "source-project-memory-corpus-bundle-fixture",
+            "evidence-project-memory-corpus-contract",
+            "evidence-project-memory-corpus-import-fixture",
+            "claim-project-memory-corpus-continuation",
+            "review-project-memory-corpus-continuation",
+            "synthesis-project-memory-corpus-continuation",
+            "reviewed-knowledge-project-memory-corpus-continuation",
+            "context-project-memory-corpus-continuation",
+            "stale-project-memory-corpus-bulk-import-active-context",
+        ):
+            self.assertIn(expected, trace.stdout)
+
     def test_context_explain_json_reports_profile_provenance_and_lineage(self) -> None:
         scoped = run_noesis(
             "context",
@@ -1497,7 +1542,7 @@ sources:
         self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
         self.assertIn("Purpose: prepare an agent", payload["content"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", payload["content"])
-        self.assertEqual(payload["available_reviewed_knowledge_count"], 3)
+        self.assertEqual(payload["available_reviewed_knowledge_count"], 4)
         self.assertEqual(payload["selection"]["included"][0]["selection_status"], "included")
 
         with tempfile.TemporaryDirectory() as tmp:
