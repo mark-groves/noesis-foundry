@@ -16,7 +16,12 @@ class DistributionDocsTests(unittest.TestCase):
             "python -m pip install -e .",
             "noesis vault doctor examples/noesis-vault --json",
             "noesis vault validate examples/noesis-vault",
-            "noesis-mcp --help",
+            "noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --json",
+            "noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault --json",
+            'noesis-mcp "$(pwd)/examples/noesis-vault"',
+            "noesis_lint_vault",
+            "noesis_build_context",
+            "noesis_trace_lineage",
             "bash scripts/smoke-install.sh",
             "examples/mcp/noesis-mcp.example.json",
         ]
@@ -44,14 +49,23 @@ class DistributionDocsTests(unittest.TestCase):
 
         required_snippets = [
             'python" -m pip install -e "$ROOT"',
+            'cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"',
             "unset PYTHONPATH",
-            'noesis" vault doctor "$EXAMPLE_VAULT" --json',
-            'noesis" vault validate "$EXAMPLE_VAULT"',
-            'noesis-mcp" --help',
+            'noesis" vault doctor "$SMOKE_VAULT" --json',
+            'noesis" vault validate "$SMOKE_VAULT"',
+            'noesis" context build',
+            'noesis" trace reviewed-knowledge-agent-memory-dogfood',
+            'noesis" review show claim-agent-memory-dogfood',
+            'NOESIS_MCP_BIN="$VENV/bin/noesis-mcp"',
+            '"method": "tools/call"',
+            '"name": "noesis_build_context"',
+            '"method": "resources/read"',
         ]
         for snippet in required_snippets:
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, script)
+
+        self.assertNotIn('noesis-mcp" --help', script)
 
 
 if __name__ == "__main__":

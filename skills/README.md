@@ -40,6 +40,14 @@ for the current vault and CLI contract.
 The example vault includes a Noesis Foundry project-memory fixture:
 
 ```bash
+noesis vault validate examples/noesis-vault
+noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+```
+
+From a source checkout without installation, use the equivalent module form:
+
+```bash
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-roadmap-phase-orchestration --vault examples/noesis-vault

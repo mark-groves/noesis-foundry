@@ -20,13 +20,16 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
 2. Validate the vault:
 
    ```bash
-   PYTHONPATH=src python -m noesis vault validate <vault>
+   noesis vault validate <vault>
    ```
+
+   From a source checkout without installation, use
+   `PYTHONPATH=src python -m noesis vault validate <vault>`.
 
 3. Build context from reviewed knowledge only:
 
    ```bash
-   PYTHONPATH=src python -m noesis context build --vault <vault> --purpose "<agent task>" --scope "<optional scope>"
+   noesis context build --vault <vault> --purpose "<agent task>" --scope "<optional scope>"
    ```
 
    Use `--output <path>` when the user wants a separate context artifact.
@@ -34,14 +37,14 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    CLI:
 
    ```bash
-   PYTHONPATH=src python -m noesis context write --vault <vault> --purpose "<agent task>" --scope "<optional scope>" --title "<context title>"
+   noesis context write --vault <vault> --purpose "<agent task>" --scope "<optional scope>" --title "<context title>"
    ```
 
 5. Trace any included knowledge that seems stale, surprising, or central to the
    task:
 
    ```bash
-   PYTHONPATH=src python -m noesis trace <reviewed-knowledge-id> --vault <vault>
+   noesis trace <reviewed-knowledge-id> --vault <vault>
    ```
 
 6. Re-run validation after writing a context note. Report the context output or
@@ -54,8 +57,8 @@ To prepare context for continuing Noesis Foundry project work from the example
 vault:
 
 ```bash
-PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
-PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
+noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
 ```
 
 With MCP, call `noesis_lint_vault`, `noesis_build_context` with

@@ -19,13 +19,17 @@ python -m venv .venv
 python -m pip install -e .
 noesis vault doctor examples/noesis-vault --json
 noesis vault validate examples/noesis-vault
-noesis-mcp --help
+noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --json
+noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault --json
+noesis-mcp "$(pwd)/examples/noesis-vault"
 ```
 
 The `doctor` command reports contract compatibility, validation completeness,
 and whether the vault is ready for CLI/MCP use. `validate` checks the example
 vault's Markdown frontmatter, wikilinks, Base YAML, Canvas JSON, and active
-context exclusions.
+context exclusions. The `context build` and `trace` commands prove the
+installed console script can read reviewed knowledge and lineage through the
+same lifecycle adapter an agent will use.
 
 For a disposable end-to-end check, run the checked-in smoke script:
 
@@ -34,13 +38,22 @@ bash scripts/smoke-install.sh
 ```
 
 The script creates a temporary virtual environment, installs the project in
-editable mode, unsets `PYTHONPATH`, then runs:
+editable mode, copies the example vault to a temporary vault, unsets
+`PYTHONPATH`, then runs:
 
 ```bash
-noesis vault doctor examples/noesis-vault --json
-noesis vault validate examples/noesis-vault
-noesis-mcp --help
+noesis vault doctor "$TEMP_VAULT" --json
+noesis vault validate "$TEMP_VAULT"
+noesis context build --vault "$TEMP_VAULT" --scope agent-memory --limit 1 --json
+noesis trace reviewed-knowledge-agent-memory-dogfood --vault "$TEMP_VAULT" --json
+noesis review show claim-agent-memory-dogfood --vault "$TEMP_VAULT" --json
+noesis-mcp "$TEMP_VAULT"
 ```
+
+The final step starts the installed `noesis-mcp` stdio server, performs a local
+JSON-RPC handshake, lists tools, calls `noesis_build_context`, and reads
+`noesis://vault/summary`. It does not require a desktop MCP client and does not
+write to the repository checkout.
 
 Set `PYTHON=/path/to/python` to choose a Python interpreter. Set
 `NOESIS_SMOKE_DIR=/path/to/dir` to keep the generated virtual environment and
@@ -71,6 +84,12 @@ servers from another directory, so use absolute vault paths in client configs.
 
 Tools also accept a `vault_path` argument. That lets one server operate on
 another compatible vault when the client supplies a path explicitly.
+
+For an agent smoke path, validate the vault with the CLI first, then have the
+MCP client call `noesis_lint_vault`, `noesis_build_context` with the task
+scope, and `noesis_trace_lineage` or `noesis_get_note` for any knowledge that
+will guide edits. Treat MCP responses as adapter output over vault files, not
+as a separate datastore.
 
 ## MCP Client Config
 
