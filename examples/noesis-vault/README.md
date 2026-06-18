@@ -23,8 +23,10 @@ For realistic project artifact imports, `ingest bundle` reads a local
 artifact-path order. The test fixture at
 `tests/fixtures/codex-session-bundle` demonstrates a Codex session export
 without requiring network access; imported source notes add flat bundle
-metadata such as `bundle_id`, `bundle_artifact_path`,
-`bundle_manifest_hash`, and `bundle_item_index`.
+metadata such as `bundle_schema_version`, `bundle_id`,
+`bundle_artifact_path`, `bundle_artifact_hash`, `bundle_manifest_hash`, and
+`bundle_item_index`. The v1 manifest contract is documented in
+`docs/source-bundle-schema-v1.md`.
 
 The `agent-memory` dogfood extension models a realistic project-session handoff:
 `source -> evidence -> claim -> review -> synthesis -> reviewed knowledge ->
