@@ -114,6 +114,36 @@ was run. If the client supports environment variables, keep them minimal; the
 installed package path should come from the console script, not from
 `PYTHONPATH`.
 
+## New Agent Workflow
+
+For a harness-neutral "new agent uses Noesis" flow, start from the installed
+CLI and the vault path. The agent runtime can be any coding or research
+assistant; the workflow depends only on the vault contract and adapter
+commands.
+
+```bash
+noesis vault doctor /absolute/path/to/noesis-vault --json
+noesis vault validate /absolute/path/to/noesis-vault
+noesis context build --vault /absolute/path/to/noesis-vault --scope "<task scope>" --purpose "<task purpose>" --json
+noesis trace <reviewed-knowledge-id> --vault /absolute/path/to/noesis-vault --json
+```
+
+When MCP is available, use the same order through tools:
+
+```text
+1. noesis_lint_vault with the target vault path.
+2. noesis_build_context with the task scope and purpose.
+3. noesis_trace_lineage for any reviewed knowledge that will guide changes.
+4. noesis_get_note when the agent needs the full source note body.
+5. Use lifecycle write tools only when the task explicitly asks to update memory.
+```
+
+When portable skills are available, load the repo-local `skills/` directory.
+The matching skill should choose CLI first, MCP second, and direct Markdown/YAML
+fallback only when neither adapter can run. Skills should point back to the
+vault contract and installed adapters instead of copying required fields into
+their own schema.
+
 ## Repo-Local Skills
 
 Repo-local skills in [`skills/`](../skills/) are distribution artifacts for

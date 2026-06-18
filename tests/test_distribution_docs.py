@@ -24,6 +24,12 @@ class DistributionDocsTests(unittest.TestCase):
             "noesis_trace_lineage",
             "bash scripts/smoke-install.sh",
             "examples/mcp/noesis-mcp.example.json",
+            "## New Agent Workflow",
+            "noesis context build --vault /absolute/path/to/noesis-vault",
+            "noesis trace <reviewed-knowledge-id> --vault /absolute/path/to/noesis-vault --json",
+            "Use lifecycle write tools only when the task explicitly asks to update memory.",
+            "CLI first, MCP second",
+            "fallback only when neither adapter can run",
         ]
         for snippet in required_snippets:
             with self.subTest(snippet=snippet):
@@ -32,7 +38,35 @@ class DistributionDocsTests(unittest.TestCase):
         self.assertIn("vault files are the source of truth", guide.lower())
         self.assertIn("replaceable adapters", guide.lower())
         self.assertIn("must not introduce a second schema", guide.lower())
+        self.assertIn("harness-neutral", guide)
         self.assertNotIn("PYTHONPATH=src python -m noesis vault doctor", guide)
+
+    def test_architecture_describes_repo_local_skills_as_implemented_adapters(self) -> None:
+        architecture = (ROOT / "docs" / "architecture" / "noesis-local-first-obsidian-interface.md").read_text(
+            encoding="utf-8"
+        )
+
+        required_snippets = [
+            "implemented CLI/MCP/portable-skill adapter baseline",
+            "repo-local portable Agent Skills are implemented agent-facing adapters",
+            "Repo-local portable skills are part of the implemented adapter surface",
+            "Implemented skill set:",
+            "Portable Agent Skills",
+        ]
+        for snippet in required_snippets:
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, architecture)
+
+        forbidden_snippets = [
+            "Portable Agent Skills remain a future adapter layer",
+            "Portable skills are not part of the implemented repo surface yet",
+            "Future portable Agent Skills",
+            "future skills are replaceable interfaces",
+            "Future skill set:",
+        ]
+        for snippet in forbidden_snippets:
+            with self.subTest(snippet=snippet):
+                self.assertNotIn(snippet, architecture)
 
     def test_mcp_client_example_is_valid_stdio_config(self) -> None:
         config_path = ROOT / "examples" / "mcp" / "noesis-mcp.example.json"

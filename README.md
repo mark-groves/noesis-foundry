@@ -358,8 +358,8 @@ Example agent workflow:
 5. Call noesis_build_context to prepare current reviewed context for the next task.
 ```
 
-For an ingest-to-context project workflow, a Codex or agent thread should use
-MCP tools in the same order as the CLI lifecycle:
+For an ingest-to-context project workflow, an agent thread should use MCP tools
+in the same order as the CLI lifecycle:
 
 ```text
 1. noesis_lint_vault with the target vault path.
