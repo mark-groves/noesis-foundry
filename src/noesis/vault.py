@@ -2588,7 +2588,7 @@ views:
     name: Context exclusions and superseded memory
     filters:
       and:
-        - excluded_memory != null || superseded_by != null || status == "stale" || status == "archived" || lifecycle_stage == "archive"
+        - excluded_memory != null || superseded_by != null || status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "archive"
     groupBy:
       property: lifecycle_stage
       direction: ASC

@@ -461,7 +461,7 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(
             context_exclusions["filters"]["and"],
             [
-                'excluded_memory != null || superseded_by != null || status == "stale" || status == "archived" || lifecycle_stage == "archive"'
+                'excluded_memory != null || superseded_by != null || status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "archive"'
             ],
         )
 
