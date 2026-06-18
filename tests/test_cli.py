@@ -1664,6 +1664,17 @@ This archived note is provenance, not active guidance.
             self.assertIn("status: needs-review", knowledge_note)
             self.assertIn("review_state: changes-requested", knowledge_note)
 
+            show = run_noesis(
+                "review",
+                "show",
+                "reviewed-knowledge-noesis-lifecycle",
+                "--vault",
+                str(vault_path),
+            )
+            self.assertEqual(show.returncode, 0, show.stderr)
+            self.assertIn("recommended_action: resolve-requested-changes", show.stdout)
+            self.assertIn("propagated-change-request", show.stdout)
+
             context_note = (
                 vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
             ).read_text(encoding="utf-8")

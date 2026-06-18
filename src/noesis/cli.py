@@ -745,7 +745,8 @@ def cmd_review_show(args: argparse.Namespace) -> int:
         print("changes requested:")
         for change in payload["changes_requested"]:
             review = change["review"]
-            print(f"  {review['noesis_id']}: {change['changes_requested']}")
+            review_id = review["noesis_id"] if review is not None else "propagated-change-request"
+            print(f"  {review_id}: {change['changes_requested']}")
     print_flat_notes("lineage", payload["lineage"])
     return 0
 
