@@ -49,9 +49,10 @@ cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"
     "$VENV/bin/python" - <<'PY'
 import json
 import os
-import selectors
+import queue
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -72,6 +73,17 @@ def send(message):
     process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
     process.stdin.flush()
 
+
+output_queue = queue.Queue()
+
+
+def read_lines(stream, label):
+    for line in stream:
+        output_queue.put((label, line))
+
+
+threading.Thread(target=read_lines, args=(process.stdout, "stdout"), daemon=True).start()
+threading.Thread(target=read_lines, args=(process.stderr, "stderr"), daemon=True).start()
 
 send(
     {
@@ -104,26 +116,23 @@ send(
 )
 send({"jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": "noesis://vault/summary"}})
 
-selector = selectors.DefaultSelector()
-selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-selector.register(process.stderr, selectors.EVENT_READ, "stderr")
 responses = {}
 stderr_lines = []
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline and not {1, 2, 3, 4}.issubset(responses):
-    for key, _ in selector.select(timeout=0.25):
-        line = key.fileobj.readline()
-        if not line:
-            continue
-        if key.data == "stderr":
-            stderr_lines.append(line)
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if "id" in message:
-            responses[message["id"]] = message
+    try:
+        label, line = output_queue.get(timeout=0.25)
+    except queue.Empty:
+        continue
+    if label == "stderr":
+        stderr_lines.append(line)
+        continue
+    try:
+        message = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if "id" in message:
+        responses[message["id"]] = message
 
 try:
     process.stdin.close()

@@ -61,12 +61,15 @@ class DistributionDocsTests(unittest.TestCase):
             '"method": "tools/call"',
             '"name": "noesis_build_context"',
             '"method": "resources/read"',
+            "queue.Queue()",
+            "threading.Thread",
         ]
         for snippet in required_snippets:
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, script)
 
         self.assertNotIn('noesis-mcp" --help', script)
+        self.assertNotIn("import selectors", script)
 
 
 if __name__ == "__main__":
