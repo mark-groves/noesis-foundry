@@ -1473,6 +1473,63 @@ sources:
         self.assertNotIn("Agents should turn session artifacts", payload["content"])
         self.assertNotIn("Noesis should represent memory as a lifecycle", payload["content"])
 
+    def test_context_build_codex_handoff_profile_reports_safe_handoff_pack(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "noesis-roadmap",
+            "--purpose",
+            "orchestrate next Noesis phases",
+            "--profile",
+            "codex-handoff",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        included_ids = [note["noesis_id"] for note in payload["handoff"]["active_reviewed_knowledge"]]
+        lifecycle_ids = [
+            note["noesis_id"] for note in payload["handoff"]["lifecycle_exclusions"]["notes"]
+        ]
+        validation_commands = payload["handoff"]["validation_commands"]
+
+        self.assertEqual(payload["profile"], "codex-handoff")
+        self.assertEqual(payload["limit"], 6)
+        self.assertEqual(payload["max_chars"], 14000)
+        self.assertEqual(payload["applied_profile_defaults"], ["limit", "max_chars"])
+        self.assertEqual(included_ids, ["reviewed-knowledge-noesis-roadmap-phase-orchestration"])
+        self.assertIn("stale-noesis-roadmap-plugin-first", lifecycle_ids)
+        self.assertIn("# Noesis Codex Handoff Pack", payload["content"])
+        self.assertIn("## Task Purpose", payload["content"])
+        self.assertIn("## Selection Provenance", payload["content"])
+        self.assertIn("## Lifecycle Exclusions", payload["content"])
+        self.assertIn("## Validation Commands", payload["content"])
+        self.assertIn("reviewed-knowledge-noesis-roadmap-phase-orchestration", payload["content"])
+        self.assertIn("stale-noesis-roadmap-plugin-first", payload["content"])
+        self.assertNotIn(
+            "The next Noesis roadmap phase should prioritize a custom Obsidian plugin",
+            payload["content"],
+        )
+        self.assertTrue(
+            any(
+                command.startswith(
+                    "PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault"
+                )
+                for command in validation_commands
+            ),
+            validation_commands,
+        )
+        self.assertEqual(
+            payload["handoff"]["selection_provenance"]["included"][0]["selection_status"],
+            "included",
+        )
+        self.assertEqual(
+            payload["handoff"]["lineage_summaries"][0]["sources"][0]["noesis_id"],
+            "source-noesis-roadmap-docs",
+        )
+
     def test_context_explain_reports_scoped_and_lifecycle_exclusions(self) -> None:
         result = run_noesis(
             "context",

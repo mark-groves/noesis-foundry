@@ -197,6 +197,36 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             profiled_context["lineage_summaries"][0]["sources"][0]["noesis_id"],
             "source-agent-memory-session",
         )
+        self.assertEqual(
+            profiled_context["handoff"]["active_reviewed_knowledge"][0]["noesis_id"],
+            "reviewed-knowledge-agent-memory-dogfood",
+        )
+        self.assertIn("validation_commands", profiled_context["handoff"])
+        self.assertIn("lifecycle_exclusions", profiled_context["handoff"])
+
+        handoff_context = handlers.build_context(
+            scope="noesis-roadmap",
+            purpose="orchestrate next Noesis phases",
+            profile="codex-handoff",
+        )
+        self.assertTrue(handoff_context["ok"], handoff_context)
+        self.assertEqual(handoff_context["profile"], "codex-handoff")
+        self.assertIn("# Noesis Codex Handoff Pack", handoff_context["content"])
+        self.assertEqual(
+            handoff_context["handoff"]["active_reviewed_knowledge"][0]["noesis_id"],
+            "reviewed-knowledge-noesis-roadmap-phase-orchestration",
+        )
+        self.assertIn(
+            "stale-noesis-roadmap-plugin-first",
+            [
+                note["noesis_id"]
+                for note in handoff_context["handoff"]["lifecycle_exclusions"]["notes"]
+            ],
+        )
+        self.assertNotIn(
+            "The next Noesis roadmap phase should prioritize a custom Obsidian plugin",
+            handoff_context["content"],
+        )
 
         invalid_profile = handlers.build_context(profile="missing-profile")
         self.assertFalse(invalid_profile["ok"])
