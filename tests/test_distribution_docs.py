@@ -63,6 +63,9 @@ class DistributionDocsTests(unittest.TestCase):
             '"method": "resources/read"',
             "queue.Queue()",
             "threading.Thread",
+            "initialize_response = responses.get(1, {})",
+            "MCP server did not exit after stdin closed",
+            "process.returncode != 0",
         ]
         for snippet in required_snippets:
             with self.subTest(snippet=snippet):

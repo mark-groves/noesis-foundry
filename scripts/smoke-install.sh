@@ -85,6 +85,28 @@ def read_lines(stream, label):
 threading.Thread(target=read_lines, args=(process.stdout, "stdout"), daemon=True).start()
 threading.Thread(target=read_lines, args=(process.stderr, "stderr"), daemon=True).start()
 
+responses = {}
+stderr_lines = []
+
+
+def read_responses(expected_ids, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not expected_ids.issubset(responses):
+        try:
+            label, line = output_queue.get(timeout=0.25)
+        except queue.Empty:
+            continue
+        if label == "stderr":
+            stderr_lines.append(line)
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "id" in message:
+            responses[message["id"]] = message
+
+
 send(
     {
         "jsonrpc": "2.0",
@@ -97,6 +119,15 @@ send(
         },
     }
 )
+read_responses({1})
+initialize_response = responses.get(1, {})
+if "error" in initialize_response:
+    raise SystemExit(f"MCP initialize failed: {initialize_response['error']}")
+if "result" not in initialize_response:
+    sys.stderr.write("missing MCP initialize response\n")
+    sys.stderr.write("".join(stderr_lines))
+    raise SystemExit(1)
+
 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
 send(
@@ -115,34 +146,40 @@ send(
     }
 )
 send({"jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": "noesis://vault/summary"}})
-
-responses = {}
-stderr_lines = []
-deadline = time.monotonic() + 15
-while time.monotonic() < deadline and not {1, 2, 3, 4}.issubset(responses):
-    try:
-        label, line = output_queue.get(timeout=0.25)
-    except queue.Empty:
-        continue
-    if label == "stderr":
-        stderr_lines.append(line)
-        continue
-    try:
-        message = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    if "id" in message:
-        responses[message["id"]] = message
+read_responses({1, 2, 3, 4})
 
 try:
     process.stdin.close()
 except BrokenPipeError:
     pass
+mcp_timed_out = False
 try:
     process.wait(timeout=5)
 except subprocess.TimeoutExpired:
+    mcp_timed_out = True
     process.terminate()
-    process.wait(timeout=5)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+while True:
+    try:
+        label, line = output_queue.get_nowait()
+    except queue.Empty:
+        break
+    if label == "stderr":
+        stderr_lines.append(line)
+
+if mcp_timed_out:
+    sys.stderr.write("MCP server did not exit after stdin closed\n")
+    sys.stderr.write("".join(stderr_lines))
+    raise SystemExit(1)
+if process.returncode != 0:
+    sys.stderr.write(f"MCP server exited with {process.returncode}\n")
+    sys.stderr.write("".join(stderr_lines))
+    raise SystemExit(1)
 
 missing = sorted({1, 2, 3, 4} - set(responses))
 if missing:
