@@ -59,6 +59,7 @@ weakening lifecycle safety:
 ```bash
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile codex-handoff
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope project-memory-corpus --purpose "continue expanding Noesis Foundry project memory"
 PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
 ```
@@ -68,6 +69,13 @@ PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --
 budgeted out, and labels stale/superseded/archive notes as background
 provenance only.
 
+Use `--profile codex-handoff` when launching a separate Codex worktree thread.
+That profile renders a handoff pack with the task purpose, selected reviewed
+knowledge, selection provenance, relevant lineage, lifecycle exclusions,
+assumptions, validation commands, and next-step guidance. Excluded stale,
+superseded, and archived notes appear by identifier and lifecycle reason only;
+their bodies are not active guidance.
+
 For a Codex or agent thread working on this repository, the fixture can be
 checked with:
 
@@ -76,7 +84,7 @@ PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-roadmap-phase-orchestration --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-project-memory-corpus-continuation --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
-PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile codex-handoff
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope project-memory-corpus --purpose "continue expanding Noesis Foundry project memory"
 ```
 

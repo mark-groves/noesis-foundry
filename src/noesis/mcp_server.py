@@ -230,6 +230,7 @@ class NoesisMcpHandlers:
             "reviewed_knowledge": [note_summary(note, vault.root) for note in package.reviewed_knowledge],
             "selection": context_package_selection_payload(package, vault.root),
             "lineage_summaries": context_lineage_summary_payloads(package, vault.root),
+            "handoff": context_handoff_payload(package, vault.root),
             "content": package.content,
         }
 
@@ -876,6 +877,30 @@ def context_lineage_summary_payload(summary: ContextLineageSummary, vault_root: 
         "reviewed_knowledge": note_summary(summary.reviewed_knowledge, vault_root),
         "counts": {stage: len(notes) for stage, notes in stages.items()},
         **{stage: [note_summary(note, vault_root) for note in notes] for stage, notes in stages.items()},
+    }
+
+
+def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonObject:
+    return {
+        "task_purpose": package.handoff.task_purpose,
+        "assumptions": list(package.handoff.assumptions),
+        "validation_commands": list(package.handoff.validation_commands),
+        "next_steps": list(package.handoff.next_steps),
+        "active_reviewed_knowledge": [
+            note_summary(selection.note, vault_root) for selection in package.included
+        ],
+        "selection_provenance": {
+            "included": [context_selection_payload(selection, vault_root) for selection in package.included],
+            "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
+        },
+        "lineage_summaries": context_lineage_summary_payloads(package, vault_root),
+        "lifecycle_exclusions": {
+            "summary": lifecycle_exclusion_summary(package.lifecycle_excluded),
+            "notes": [
+                context_selection_payload(selection, vault_root)
+                for selection in package.lifecycle_excluded
+            ],
+        },
     }
 
 

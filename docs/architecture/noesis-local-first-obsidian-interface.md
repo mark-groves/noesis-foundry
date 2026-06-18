@@ -226,7 +226,7 @@ Current tools:
 | `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
 | `noesis_get_review_queue` | Return notes that need human or agent review. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
-| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes. |
+| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes. The `codex-handoff` profile returns the same structured handoff fields as CLI JSON for launching separate agent threads. |
 | `noesis_ingest_source` | Copy immutable raw source material and create a linked source note. |
 | `noesis_import_source_bundle` | Import a local manifest-driven artifact bundle into source notes and optional evidence drafts. |
 | `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
@@ -236,7 +236,7 @@ Current tools:
 | `noesis_request_review_changes` | Write an audit review note, request changes, and invalidate affected active context where needed. |
 | `noesis_promote_synthesis` | Promote an approved synthesis with review audit into reviewed knowledge. |
 | `noesis_mark_memory_stale` | Mark memory stale or superseded and update context exclusions. |
-| `noesis_write_context` | Write an operational context note from current reviewed knowledge. |
+| `noesis_write_context` | Write an operational context note from current reviewed knowledge, including handoff-style content when a handoff profile is selected. |
 
 Current resources:
 

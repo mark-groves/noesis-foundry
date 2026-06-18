@@ -245,12 +245,26 @@ class ContextLineageSummary:
     reviews: list[Note]
 
 
+@dataclass(frozen=True)
+class ContextHandoffGuidance:
+    task_purpose: str
+    assumptions: list[str]
+    validation_commands: list[str]
+    next_steps: list[str]
+
+
 CONTEXT_PROFILES = {
     "project-continuation": ContextProfile(
         name="project-continuation",
         description="Prefer a broad, current briefing for continuing implementation work.",
         default_limit=8,
         default_max_chars=16000,
+    ),
+    "codex-handoff": ContextProfile(
+        name="codex-handoff",
+        description="Render a Codex-ready handoff pack for launching a separate agent thread.",
+        default_limit=6,
+        default_max_chars=14000,
     ),
     "research": ContextProfile(
         name="research",
@@ -286,6 +300,7 @@ class ContextPackage:
     budgeted_out: list[ContextSelection]
     lifecycle_excluded: list[ContextSelection]
     lineage_summaries: list[ContextLineageSummary]
+    handoff: ContextHandoffGuidance
     content: str
 
     @property
@@ -2667,19 +2682,47 @@ def compose_context(
         limit=effective_limit,
         max_chars=effective_max_chars,
     )
-    excluded = sorted(scoped_out + budgeted_out, key=lambda selection: (selection.status, selection.note.title.lower()))
+    excluded = sorted(
+        scoped_out + budgeted_out,
+        key=lambda selection: (selection.status, selection.note.title.lower()),
+    )
     lifecycle_excluded = explain_lifecycle_exclusions(vault)
     lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
-    content = render_context(
-        [selection.note for selection in included],
+    handoff = context_handoff_guidance(
+        vault_path=vault.root,
         scope=scope,
         purpose=purpose,
         profile=profile_definition,
         limit=effective_limit,
         max_chars=effective_max_chars,
-        total_candidates=len(available),
+        included=included,
         excluded=excluded,
+        lifecycle_excluded=lifecycle_excluded,
     )
+    if profile_definition is not None and profile_definition.name == "codex-handoff":
+        content = render_context_handoff(
+            included,
+            lineage_summaries,
+            lifecycle_excluded,
+            handoff,
+            scope=scope,
+            profile=profile_definition,
+            limit=effective_limit,
+            max_chars=effective_max_chars,
+            total_candidates=len(available),
+            excluded=excluded,
+        )
+    else:
+        content = render_context(
+            [selection.note for selection in included],
+            scope=scope,
+            purpose=purpose,
+            profile=profile_definition,
+            limit=effective_limit,
+            max_chars=effective_max_chars,
+            total_candidates=len(available),
+            excluded=excluded,
+        )
     return ContextPackage(
         profile=profile_definition.name if profile_definition else None,
         profile_description=profile_definition.description if profile_definition else None,
@@ -2697,6 +2740,7 @@ def compose_context(
         budgeted_out=budgeted_out,
         lifecycle_excluded=lifecycle_excluded,
         lineage_summaries=lineage_summaries,
+        handoff=handoff,
         content=content,
     )
 
@@ -2926,6 +2970,221 @@ def context_relationship_notes(
                 continue
             notes_by_id[target_note.noesis_id] = target_note
     return sorted(notes_by_id.values(), key=lambda item: item.rel_path.as_posix())
+
+
+def context_handoff_guidance(
+    *,
+    vault_path: Path,
+    scope: str | None,
+    purpose: str | None,
+    profile: ContextProfile | None,
+    limit: int | None,
+    max_chars: int | None,
+    included: list[ContextSelection],
+    excluded: list[ContextSelection],
+    lifecycle_excluded: list[ContextSelection],
+) -> ContextHandoffGuidance:
+    vault_flag = f" --vault {shell_quote(str(vault_path))}"
+    scope_flag = f" --scope {shell_quote(scope)}" if scope else ""
+    purpose_flag = f" --purpose {shell_quote(purpose)}" if purpose else ""
+    profile_flag = f" --profile {profile.name}" if profile is not None else ""
+    limit_flag = f" --limit {limit}" if limit is not None else ""
+    max_chars_flag = f" --max-chars {max_chars}" if max_chars is not None else ""
+    task_purpose = purpose or "Continue the task using the selected current reviewed knowledge."
+    assumptions = [
+        "Active guidance is limited to current reviewed knowledge selected for this package.",
+        (
+            "Stale, superseded, and archived notes are exclusion provenance only "
+            "and must not be treated as active instructions."
+        ),
+    ]
+    if scope:
+        assumptions.append(
+            f"The requested scope is {scope!r}; "
+            "scoped-out reviewed notes need a separate handoff if they matter."
+        )
+    if excluded:
+        assumptions.append(
+            "Some current reviewed notes were omitted by scope or budget; "
+            "inspect selection provenance before widening work."
+        )
+    if lifecycle_excluded:
+        assumptions.append(
+            "Lifecycle-excluded memory remains traceable for audit but is excluded from active context."
+        )
+
+    validation_commands = [
+        "git diff --check",
+        f"PYTHONPATH=src python -m noesis vault doctor {shell_quote(str(vault_path))} --json",
+        (
+            "PYTHONPATH=src python -m noesis context build"
+            f"{vault_flag}"
+            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
+        ),
+        (
+            "PYTHONPATH=src python -m noesis context explain"
+            f"{vault_flag}"
+            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
+        ),
+        "PYTHONPATH=src python -m unittest discover -s tests -v",
+    ]
+    next_steps = [
+        "Use the selected reviewed knowledge as the active task brief.",
+        "Check the lineage summaries before changing source-backed claims or syntheses.",
+        "Keep lifecycle-excluded notes out of active guidance unless they are renewed through review.",
+        "Run the validation commands before handing work back.",
+    ]
+    if included:
+        selected = ", ".join(selection.note.noesis_id for selection in included)
+        next_steps.insert(1, f"Start from selected reviewed knowledge: {selected}.")
+    return ContextHandoffGuidance(
+        task_purpose=task_purpose,
+        assumptions=assumptions,
+        validation_commands=validation_commands,
+        next_steps=next_steps,
+    )
+
+
+def shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def context_lifecycle_exclusion_counts(selections: list[ContextSelection]) -> dict[str, int]:
+    summary = {"stale": 0, "superseded": 0, "archived": 0, "excluded": 0}
+    for selection in selections:
+        kind = context_lifecycle_exclusion_kind(selection.note)
+        summary[kind] = summary.get(kind, 0) + 1
+    return summary
+
+
+def render_context_handoff(
+    included: list[ContextSelection],
+    lineage_summaries: list[ContextLineageSummary],
+    lifecycle_excluded: list[ContextSelection],
+    handoff: ContextHandoffGuidance,
+    *,
+    scope: str | None = None,
+    profile: ContextProfile | None = None,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    total_candidates: int | None = None,
+    excluded: list[ContextSelection] | None = None,
+) -> str:
+    lines = ["# Noesis Codex Handoff Pack", ""]
+    if scope:
+        lines.extend([f"Scope: {scope}", ""])
+    lines.extend([f"Purpose: {handoff.task_purpose}", ""])
+    if profile is not None:
+        lines.extend([f"Profile: {profile.name}", ""])
+    if limit is not None or max_chars is not None:
+        budget = []
+        if limit is not None:
+            budget.append(f"limit {limit}")
+        if max_chars is not None:
+            budget.append(f"max_chars {max_chars}")
+        lines.extend([f"Budget: {', '.join(budget)}", ""])
+    lines.extend(
+        [
+            "Active guidance in this pack is built from current reviewed knowledge only.",
+            "Stale, superseded, and archived memory is listed only as excluded provenance.",
+            "",
+            "## Task Purpose",
+            "",
+            handoff.task_purpose,
+            "",
+            "## Active Reviewed Knowledge",
+            "",
+        ]
+    )
+    if included:
+        for selection in included:
+            note = selection.note
+            lines.extend(
+                [
+                    f"### {note.title}",
+                    "",
+                    f"- noesis_id: {note.noesis_id}",
+                    f"- path: {note.rel_path.as_posix()}",
+                    f"- confidence: {note.metadata.get('confidence', 'unknown')}",
+                    f"- reviewed_at: {note.metadata.get('reviewed_at', 'unknown')}",
+                    f"- selection_reason: {selection.reason}",
+                    "",
+                    note.body.strip(),
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["No current reviewed knowledge selected.", ""])
+
+    lines.extend(["## Selection Provenance", ""])
+    available_count = total_candidates if total_candidates is not None else len(included)
+    lines.append(f"- Current reviewed knowledge available: {available_count}")
+    lines.append(f"- Included in active handoff: {len(included)}")
+    lines.append(f"- Excluded by scope or budget: {len(excluded or [])}")
+    lines.append("")
+    for selection in included:
+        lines.append(format_handoff_selection(selection))
+    if excluded:
+        for selection in excluded:
+            lines.append(format_handoff_selection(selection))
+    if not included and not excluded:
+        lines.append("No selection provenance available.")
+
+    lines.extend(["", "## Relevant Lineage", ""])
+    if lineage_summaries:
+        for summary in lineage_summaries:
+            lines.append(format_handoff_lineage(summary))
+    else:
+        lines.append("No included reviewed knowledge lineage to summarize.")
+
+    lines.extend(["", "## Lifecycle Exclusions", ""])
+    summary = context_lifecycle_exclusion_counts(lifecycle_excluded)
+    lines.append(
+        "Summary: "
+        f"stale={summary['stale']}, "
+        f"superseded={summary['superseded']}, "
+        f"archived={summary['archived']}, "
+        f"other={summary['excluded']}"
+    )
+    lines.append("")
+    if lifecycle_excluded:
+        for selection in lifecycle_excluded:
+            lines.append(format_handoff_selection(selection))
+    else:
+        lines.append("No stale, superseded, or archived reviewed memory found.")
+
+    lines.extend(["", "## Assumptions", ""])
+    lines.extend(f"- {assumption}" for assumption in handoff.assumptions)
+    lines.extend(["", "## Validation Commands", ""])
+    lines.extend(f"- `{command}`" for command in handoff.validation_commands)
+    lines.extend(["", "## Next Steps", ""])
+    lines.extend(f"- {step}" for step in handoff.next_steps)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def format_handoff_selection(selection: ContextSelection) -> str:
+    suffix = ""
+    if selection.status == "lifecycle_excluded":
+        suffix = f", kind={context_lifecycle_exclusion_kind(selection.note)}"
+    return (
+        f"- {selection.note.noesis_id} ({selection.status}{suffix}, score={selection.score}, "
+        f"chars={selection.content_chars}) - {selection.reason}; path: {selection.note.rel_path.as_posix()}"
+    )
+
+
+def format_handoff_lineage(summary: ContextLineageSummary) -> str:
+    parts = [
+        f"sources={format_handoff_note_ids(summary.sources)}",
+        f"evidence={format_handoff_note_ids(summary.evidence)}",
+        f"claims={format_handoff_note_ids(summary.claims)}",
+        f"syntheses={format_handoff_note_ids(summary.syntheses)}",
+        f"reviews={format_handoff_note_ids(summary.reviews)}",
+    ]
+    return f"- {summary.reviewed_knowledge.noesis_id}: " + "; ".join(parts)
+
+
+def format_handoff_note_ids(notes: list[Note]) -> str:
+    return ", ".join(note.noesis_id for note in notes) if notes else "none"
 
 
 def render_context(
