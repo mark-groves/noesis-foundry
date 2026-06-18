@@ -903,11 +903,16 @@ def open_review_changes(
     audits: list[Note],
     change_request_history: list[JsonObject],
 ) -> list[JsonObject]:
-    if not change_request_history:
-        return []
     latest_decision = audits[-1].metadata.get("decision") if audits else None
     if note.review_state == "changes-requested" or latest_decision == "changes-requested":
-        return change_request_history
+        if change_request_history:
+            return [change_request_history[-1]]
+        return [
+            {
+                "review": None,
+                "changes_requested": "Current note review_state is changes-requested without a direct change-request audit.",
+            }
+        ]
     return []
 
 

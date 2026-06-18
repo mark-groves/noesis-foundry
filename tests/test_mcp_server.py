@@ -305,6 +305,42 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertEqual(claim["requested_changes"]["count"], 0)
             self.assertEqual(claim["requested_changes"]["history_count"], 1)
 
+            requested_again = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                changes_requested="Clarify the follow-up cycle.",
+                slug="claim-needs-follow-up-clarification",
+            )
+            self.assertTrue(requested_again["ok"], requested_again)
+            follow_up = handlers.show_review("claim-useful-memory-requires-lifecycle")
+            self.assertTrue(follow_up["ok"], follow_up)
+            self.assertEqual(follow_up["triage"]["blocked_by_requested_changes"], True)
+            self.assertEqual(follow_up["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(len(follow_up["changes_requested"]), 1)
+            self.assertIn("follow-up cycle", follow_up["changes_requested"][0]["changes_requested"])
+            self.assertEqual(len(follow_up["changes_requested_history"]), 2)
+
+    def test_propagated_change_requests_are_open_without_direct_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            requested = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                changes_requested="Revise this claim before reuse.",
+                slug="claim-propagates-review-changes",
+            )
+            self.assertTrue(requested["ok"], requested)
+
+            workbench = handlers.show_review("reviewed-knowledge-noesis-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["note"]["review_state"], "changes-requested")
+            self.assertEqual(workbench["triage"]["blocked_by_requested_changes"], True)
+            self.assertEqual(workbench["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(len(workbench["changes_requested"]), 1)
+            self.assertIsNone(workbench["changes_requested"][0]["review"])
+            self.assertEqual(workbench["changes_requested_history"], [])
+
     def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
