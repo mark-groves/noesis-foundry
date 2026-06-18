@@ -216,25 +216,50 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         handoff_context = handlers.build_context(
             scope="noesis-roadmap",
             purpose="orchestrate next Noesis phases",
-            profile="codex-handoff",
+            profile="agent-handoff",
         )
         self.assertTrue(handoff_context["ok"], handoff_context)
-        self.assertEqual(handoff_context["profile"], "codex-handoff")
-        self.assertIn("# Noesis Codex Handoff Pack", handoff_context["content"])
+        self.assertEqual(handoff_context["profile"], "agent-handoff")
+        self.assertIn("# Noesis Agent Handoff Pack", handoff_context["content"])
+        self.assertIn("scoped_out_reviewed_knowledge", handoff_context["handoff"])
+        self.assertIn(
+            "reviewed-knowledge-agent-memory-dogfood",
+            [
+                note["noesis_id"]
+                for note in handoff_context["handoff"]["scoped_out_reviewed_knowledge"]
+            ],
+        )
+        self.assertEqual(handoff_context["handoff"]["budgeted_out_reviewed_knowledge"], [])
+        self.assertTrue(
+            any(
+                "Noesis handoff output is harness-agnostic" in assumption
+                for assumption in handoff_context["handoff"]["assumptions"]
+            ),
+            handoff_context["handoff"]["assumptions"],
+        )
+
+        codex_handoff_context = handlers.build_context(
+            scope="noesis-roadmap",
+            purpose="orchestrate next Noesis phases",
+            profile="codex-handoff",
+        )
+        self.assertTrue(codex_handoff_context["ok"], codex_handoff_context)
+        self.assertEqual(codex_handoff_context["profile"], "codex-handoff")
+        self.assertIn("# Noesis Codex Handoff Pack", codex_handoff_context["content"])
         self.assertEqual(
-            handoff_context["handoff"]["active_reviewed_knowledge"][0]["noesis_id"],
+            codex_handoff_context["handoff"]["active_reviewed_knowledge"][0]["noesis_id"],
             "reviewed-knowledge-noesis-roadmap-phase-orchestration",
         )
         self.assertIn(
             "stale-noesis-roadmap-plugin-first",
             [
                 note["noesis_id"]
-                for note in handoff_context["handoff"]["lifecycle_exclusions"]["notes"]
+                for note in codex_handoff_context["handoff"]["lifecycle_exclusions"]["notes"]
             ],
         )
         self.assertNotIn(
             "The next Noesis roadmap phase should prioritize a custom Obsidian plugin",
-            handoff_context["content"],
+            codex_handoff_context["content"],
         )
 
         invalid_profile = handlers.build_context(profile="missing-profile")

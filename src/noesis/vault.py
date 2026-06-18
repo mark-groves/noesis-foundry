@@ -254,6 +254,12 @@ class ContextHandoffGuidance:
 
 
 CONTEXT_PROFILES = {
+    "agent-handoff": ContextProfile(
+        name="agent-handoff",
+        description="Render a harness-agnostic handoff pack for launching parallel agent work.",
+        default_limit=6,
+        default_max_chars=14000,
+    ),
     "project-continuation": ContextProfile(
         name="project-continuation",
         description="Prefer a broad, current briefing for continuing implementation work.",
@@ -262,7 +268,7 @@ CONTEXT_PROFILES = {
     ),
     "codex-handoff": ContextProfile(
         name="codex-handoff",
-        description="Render a Codex-ready handoff pack for launching a separate agent thread.",
+        description="Render a Codex-ready adapter of the generic agent handoff pack.",
         default_limit=6,
         default_max_chars=14000,
     ),
@@ -3018,7 +3024,7 @@ def compose_context(
         excluded=excluded,
         lifecycle_excluded=lifecycle_excluded,
     )
-    if profile_definition is not None and profile_definition.name == "codex-handoff":
+    if is_handoff_profile(profile_definition):
         content = render_context_handoff(
             included,
             lineage_summaries,
@@ -3062,6 +3068,10 @@ def compose_context(
         handoff=handoff,
         content=content,
     )
+
+
+def is_handoff_profile(profile: ContextProfile | None) -> bool:
+    return profile is not None and profile.name in {"agent-handoff", "codex-handoff"}
 
 
 def validate_context_budget(*, limit: int | None = None, max_chars: int | None = None) -> None:
@@ -3316,6 +3326,7 @@ def context_handoff_guidance(
             "Stale, superseded, and archived notes are exclusion provenance only "
             "and must not be treated as active instructions."
         ),
+        "Noesis handoff output is harness-agnostic; Codex is one adapter for dogfood runs.",
     ]
     if scope:
         assumptions.append(
@@ -3389,7 +3400,8 @@ def render_context_handoff(
     total_candidates: int | None = None,
     excluded: list[ContextSelection] | None = None,
 ) -> str:
-    lines = ["# Noesis Codex Handoff Pack", ""]
+    title = "Noesis Codex Handoff Pack" if profile and profile.name == "codex-handoff" else "Noesis Agent Handoff Pack"
+    lines = [f"# {title}", ""]
     if scope:
         lines.extend([f"Scope: {scope}", ""])
     lines.extend([f"Purpose: {handoff.task_purpose}", ""])
@@ -3406,6 +3418,7 @@ def render_context_handoff(
         [
             "Active guidance in this pack is built from current reviewed knowledge only.",
             "Stale, superseded, and archived memory is listed only as excluded provenance.",
+            "The handoff contract is Markdown plus flat YAML; harness-specific launchers are adapters.",
             "",
             "## Task Purpose",
             "",
@@ -3448,6 +3461,22 @@ def render_context_handoff(
             lines.append(format_handoff_selection(selection))
     if not included and not excluded:
         lines.append("No selection provenance available.")
+
+    scoped_out = [selection for selection in excluded or [] if selection.status == "scoped_out"]
+    budgeted_out = [selection for selection in excluded or [] if selection.status == "budgeted_out"]
+    lines.extend(["", "## Scoped-Out Reviewed Knowledge", ""])
+    if scoped_out:
+        for selection in scoped_out:
+            lines.append(format_handoff_selection(selection))
+    else:
+        lines.append("No current reviewed knowledge was scoped out.")
+
+    lines.extend(["", "## Budgeted-Out Reviewed Knowledge", ""])
+    if budgeted_out:
+        for selection in budgeted_out:
+            lines.append(format_handoff_selection(selection))
+    else:
+        lines.append("No current reviewed knowledge was budgeted out.")
 
     lines.extend(["", "## Relevant Lineage", ""])
     if lineage_summaries:

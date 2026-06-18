@@ -1126,9 +1126,17 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> dict[s
         "active_reviewed_knowledge": [
             note_summary(selection.note, vault_root) for selection in package.included
         ],
+        "scoped_out_reviewed_knowledge": [
+            context_selection_payload(selection, vault_root) for selection in package.scoped_out
+        ],
+        "budgeted_out_reviewed_knowledge": [
+            context_selection_payload(selection, vault_root) for selection in package.budgeted_out
+        ],
         "selection_provenance": {
             "included": [context_selection_payload(selection, vault_root) for selection in package.included],
             "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
+            "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
+            "budgeted_out": [context_selection_payload(selection, vault_root) for selection in package.budgeted_out],
         },
         "lineage_summaries": context_lineage_summary_payloads(package, vault_root),
         "lifecycle_exclusions": {

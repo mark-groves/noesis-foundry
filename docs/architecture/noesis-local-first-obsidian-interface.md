@@ -217,6 +217,10 @@ context builder, and lifecycle write functions as the CLI. MCP is an adapter
 over the vault contract; it is not a custom Obsidian plugin, a database, or a
 second schema.
 
+For handoff rendering, `agent-handoff` is the harness-agnostic profile for
+launching separate agent threads in any capable harness. `codex-handoff`
+remains the Codex dogfood adapter over that same contract.
+
 Current tools:
 
 | Tool | Purpose |

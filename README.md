@@ -227,7 +227,7 @@ Supported commands:
 | `noesis knowledge promote --vault <path> --synthesis <synthesis-id>` | Promote an approved synthesis with a review audit into active reviewed knowledge. |
 | `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded, create a stale-memory trace note, and update affected context exclusions. |
 | `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
-| `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. Supports `--scope`, `--purpose`, `--limit`, `--max-chars`, and `--json` for agent-sized packages. |
+| `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. Supports `--scope`, `--purpose`, `--profile agent-handoff`, `--limit`, `--max-chars`, and `--json` for agent-sized packages. |
 | `noesis context explain --vault <path>` | Explain which current reviewed knowledge was included, scoped out, or budgeted out, and list stale/superseded/archive notes as background provenance only. |
 | `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge, using the same scope and budget controls as `context build`. |
 
@@ -318,7 +318,7 @@ Read tools:
 | `noesis_get_note` | Return one parsed note by `noesis_id`, filename stem, path, alias, or wikilink target. |
 | `noesis_get_review_queue` | Return notes whose `review_state` still needs attention. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, and stale-memory lineage. |
-| `noesis_build_context` | Build operational context from current reviewed knowledge only, excluding stale, superseded, and archived memory, with optional scope and budget controls plus selection provenance. |
+| `noesis_build_context` | Build operational context from current reviewed knowledge only, excluding stale, superseded, and archived memory, with optional scope and budget controls plus selection provenance. Use `profile: "agent-handoff"` for harness-agnostic handoff packs; `codex-handoff` is the Codex dogfood adapter over the same Markdown/YAML contract. |
 
 Controlled write tools:
 
