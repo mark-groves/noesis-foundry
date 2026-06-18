@@ -24,6 +24,7 @@ SMOKE_VAULT="$SMOKE_DIR/noesis-vault"
 "$PYTHON_BIN" -m venv "$VENV"
 "$VENV/bin/python" -m pip install -e "$ROOT"
 
+rm -rf "$SMOKE_VAULT"
 cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"
 
 (

@@ -49,6 +49,7 @@ class DistributionDocsTests(unittest.TestCase):
 
         required_snippets = [
             'python" -m pip install -e "$ROOT"',
+            'rm -rf "$SMOKE_VAULT"',
             'cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"',
             "unset PYTHONPATH",
             'noesis" vault doctor "$SMOKE_VAULT" --json',
