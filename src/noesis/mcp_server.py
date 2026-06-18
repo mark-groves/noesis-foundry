@@ -827,6 +827,8 @@ def note_summary(note: Note, vault_root: Path) -> JsonObject:
 def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) -> JsonObject:
     data = note_summary(note, vault.root)
     audits = vault.review_audits_for(note)
+    change_request_history = review_change_request_history(vault, audits)
+    open_change_requests = open_review_changes(note, audits, change_request_history)
     data["review_schedule"] = review_due_details(note, due_on=due_on)
     data["audit"] = {
         "count": len(audits),
@@ -835,9 +837,9 @@ def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) 
         "latest_decision": json_safe(audits[-1].metadata.get("decision")) if audits else None,
     }
     data["requested_changes"] = {
-        "open": note.review_state == "changes-requested"
-        or any(audit.metadata.get("decision") == "changes-requested" for audit in audits),
-        "count": sum(1 for audit in audits if audit.metadata.get("decision") == "changes-requested"),
+        "open": bool(open_change_requests),
+        "count": len(open_change_requests),
+        "history_count": len(change_request_history),
     }
     data["impact"] = review_impact_counts(vault, note)
     data["lifecycle_safety"] = review_lifecycle_safety(note)
@@ -885,6 +887,30 @@ def review_lifecycle_safety(note: Note) -> JsonObject:
     }
 
 
+def review_change_request_history(vault: Vault, audits: list[Note]) -> list[JsonObject]:
+    return [
+        {
+            "review": note_summary(audit, vault.root),
+            "changes_requested": markdown_section(audit.body, "Changes Requested"),
+        }
+        for audit in audits
+        if audit.metadata.get("decision") == "changes-requested"
+    ]
+
+
+def open_review_changes(
+    note: Note,
+    audits: list[Note],
+    change_request_history: list[JsonObject],
+) -> list[JsonObject]:
+    if not change_request_history:
+        return []
+    latest_decision = audits[-1].metadata.get("decision") if audits else None
+    if note.review_state == "changes-requested" or latest_decision == "changes-requested":
+        return change_request_history
+    return []
+
+
 def review_triage(
     note: Note,
     *,
@@ -894,7 +920,7 @@ def review_triage(
     dependent_reviewed_knowledge: list[Note],
     dependent_contexts: list[Note],
 ) -> JsonObject:
-    if changes_requested or note.review_state == "changes-requested":
+    if changes_requested:
         action = "resolve-requested-changes"
     elif not audit_status["ok"]:
         action = "add-missing-review-audit"
@@ -909,7 +935,7 @@ def review_triage(
     return {
         "status": schedule["status"],
         "recommended_action": action,
-        "blocked_by_requested_changes": bool(changes_requested) or note.review_state == "changes-requested",
+        "blocked_by_requested_changes": bool(changes_requested),
         "audit_gap": not audit_status["ok"],
         "downstream_impact_count": len(dependent_reviewed_knowledge) + len(dependent_contexts),
         "renewal_preserves_lifecycle": review_lifecycle_safety(note)["renewal_preserves_lifecycle"],
@@ -1056,14 +1082,8 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
     schedule = review_due_details(note, due_on=due_on)
     dependent_reviewed_knowledge = vault.dependent_reviewed_knowledge_for(note)
     dependent_contexts = vault.dependent_contexts_for(note)
-    changes_requested = [
-        {
-            "review": note_summary(audit, vault.root),
-            "changes_requested": markdown_section(audit.body, "Changes Requested"),
-        }
-        for audit in audits
-        if audit.metadata.get("decision") == "changes-requested"
-    ]
+    changes_requested_history = review_change_request_history(vault, audits)
+    changes_requested = open_review_changes(note, audits, changes_requested_history)
     requires_audit = review_requires_audit(note)
     audit_status = {
         "requires_audit": requires_audit,
@@ -1092,6 +1112,7 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
             for key, notes in support.items()
         },
         "changes_requested": changes_requested,
+        "changes_requested_history": changes_requested_history,
         "impact": {
             "dependent_reviewed_knowledge": [
                 note_summary(dependent, vault.root)

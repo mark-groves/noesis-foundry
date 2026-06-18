@@ -267,6 +267,44 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertEqual(empty_queue["ok"], False)
             self.assertEqual(empty_queue["error"], "due_on must be YYYY-MM-DD")
 
+    def test_resolved_change_requests_are_history_not_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            requested = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                changes_requested="Clarify before approval.",
+                slug="claim-needs-clarification",
+            )
+            self.assertTrue(requested["ok"], requested)
+            approved = handlers.approve_review(
+                "claim-useful-memory-requires-lifecycle",
+                basis="Clarification is complete.",
+                slug="claim-clarification-approved",
+            )
+            self.assertTrue(approved["ok"], approved)
+
+            workbench = handlers.show_review("claim-useful-memory-requires-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["note"]["review_state"], "approved")
+            self.assertEqual(workbench["triage"]["blocked_by_requested_changes"], False)
+            self.assertNotEqual(workbench["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(workbench["changes_requested"], [])
+            self.assertEqual(len(workbench["changes_requested_history"]), 1)
+
+            queue = handlers.get_review_queue(review_state="approved")
+            self.assertTrue(queue["ok"], queue)
+            claim = next(
+                note
+                for note in queue["notes"]
+                if note["noesis_id"] == "claim-useful-memory-requires-lifecycle"
+            )
+            self.assertEqual(claim["requested_changes"]["open"], False)
+            self.assertEqual(claim["requested_changes"]["count"], 0)
+            self.assertEqual(claim["requested_changes"]["history_count"], 1)
+
     def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
