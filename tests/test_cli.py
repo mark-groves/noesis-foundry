@@ -1515,10 +1515,14 @@ sources:
         self.assertTrue(
             any(
                 command.startswith(
-                    "PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault"
+                    "PYTHONPATH=src python -m noesis context explain --vault "
                 )
                 for command in validation_commands
             ),
+            validation_commands,
+        )
+        self.assertTrue(
+            all(str(EXAMPLE_VAULT.resolve()) in command for command in validation_commands[1:4]),
             validation_commands,
         )
         self.assertEqual(
@@ -1529,6 +1533,32 @@ sources:
             payload["handoff"]["lineage_summaries"][0]["sources"][0]["noesis_id"],
             "source-noesis-roadmap-docs",
         )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "copied-vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            copied = run_noesis(
+                "context",
+                "build",
+                "--vault",
+                str(vault_path),
+                "--scope",
+                "noesis-roadmap",
+                "--profile",
+                "codex-handoff",
+                "--json",
+            )
+            self.assertEqual(copied.returncode, 0, copied.stderr)
+            copied_payload = parse_json_stdout(copied)
+            copied_commands = copied_payload["handoff"]["validation_commands"]
+            self.assertTrue(
+                all(str(vault_path.resolve()) in command for command in copied_commands[1:4]),
+                copied_commands,
+            )
+            self.assertTrue(
+                all("examples/noesis-vault" not in command for command in copied_commands[1:4]),
+                copied_commands,
+            )
 
     def test_context_explain_reports_scoped_and_lifecycle_exclusions(self) -> None:
         result = run_noesis(

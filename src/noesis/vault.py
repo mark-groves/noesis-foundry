@@ -2619,6 +2619,7 @@ def compose_context(
     lifecycle_excluded = explain_lifecycle_exclusions(vault)
     lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
     handoff = context_handoff_guidance(
+        vault_path=vault.root,
         scope=scope,
         purpose=purpose,
         profile=profile_definition,
@@ -2901,6 +2902,7 @@ def context_relationship_notes(
 
 def context_handoff_guidance(
     *,
+    vault_path: Path,
     scope: str | None,
     purpose: str | None,
     profile: ContextProfile | None,
@@ -2908,6 +2910,7 @@ def context_handoff_guidance(
     excluded: list[ContextSelection],
     lifecycle_excluded: list[ContextSelection],
 ) -> ContextHandoffGuidance:
+    vault_flag = f" --vault {shell_quote(str(vault_path))}"
     scope_flag = f" --scope {shell_quote(scope)}" if scope else ""
     purpose_flag = f" --purpose {shell_quote(purpose)}" if purpose else ""
     profile_flag = f" --profile {profile.name}" if profile is not None else ""
@@ -2936,13 +2939,15 @@ def context_handoff_guidance(
 
     validation_commands = [
         "git diff --check",
-        "PYTHONPATH=src python -m noesis vault doctor examples/noesis-vault --json",
+        f"PYTHONPATH=src python -m noesis vault doctor {shell_quote(str(vault_path))} --json",
         (
-            "PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault"
+            "PYTHONPATH=src python -m noesis context build"
+            f"{vault_flag}"
             f"{scope_flag}{purpose_flag}{profile_flag} --json"
         ),
         (
-            "PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault"
+            "PYTHONPATH=src python -m noesis context explain"
+            f"{vault_flag}"
             f"{scope_flag}{profile_flag} --json"
         ),
         "PYTHONPATH=src python -m unittest discover -s tests -v",
