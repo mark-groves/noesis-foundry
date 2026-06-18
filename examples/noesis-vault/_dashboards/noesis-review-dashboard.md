@@ -7,7 +7,7 @@ status: active
 review_state: none
 confidence: unknown
 created: 2026-05-29
-updated: 2026-06-13
+updated: 2026-06-18
 tags:
   - noesis
   - dashboard
@@ -47,10 +47,21 @@ without changing active, stale, or superseded lifecycle status.
 The Base includes separate views for the open queue, scheduled review dates,
 requested changes, and downstream impact cues. Those views are inspection aids;
 Markdown files and flat YAML remain the durable contract.
+Use the Direct audit link checks view as a frontmatter shortcut only; the CLI
+review summary remains authoritative for audit gaps because review notes can
+also link targets through `reviewed_notes`.
 
 ## Lifecycle Dashboard
 
 ![[lifecycle-dashboard.base]]
+
+## Traceability Workbench
+
+![[traceability-workbench.base]]
+
+Use this Base to inspect lineage links, review audit notes, active context
+packages, and excluded memory before changing lifecycle state. It is a view over
+frontmatter and wikilinks only; notes remain canonical.
 
 ## Current Complete Lineage
 

@@ -107,8 +107,12 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
 - `_dashboards/noesis-review-dashboard.md` - human review entry point.
 - `_bases/review-queue.base` - Base views for notes needing review and
   scheduled `next_review` dates.
-- `_bases/lifecycle-dashboard.base` - Base view grouped by lifecycle stage.
-- `_canvas/noesis-lifecycle.canvas` - visual map of the example lifecycle.
+- `_bases/lifecycle-dashboard.base` - Base views grouped by lifecycle and
+  status.
+- `_bases/traceability-workbench.base` - Base views for lineage links, review
+  audit records, active context, and excluded or superseded memory.
+- `_canvas/noesis-lifecycle.canvas` - visual map of the example lifecycle and
+  human workbench views.
 - `_templates/` - note templates for humans and agents.
 - `context/operational-context-first-cli-mcp-workflow.md` - the final context
   package the next agent would read.
@@ -134,6 +138,9 @@ before approving, renewing, or requesting changes when you need the note's
 lineage, evidence support, audit trail, downstream context impact, and changes
 requested in one place. Renewing stale or superseded memory records a review
 audit and reschedules the note without making it active context again.
+The Direct audit link checks Base view is a frontmatter shortcut; the CLI
+review summary is the canonical audit-gap check because review notes can also
+link reviewed targets through `reviewed_notes`.
 
 Template note: Obsidian core Templates will replace `{{title}}` and `{{date}}`.
 Placeholders in angle brackets, such as `<slug>`, are for humans, the future

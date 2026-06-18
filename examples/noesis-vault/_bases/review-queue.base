@@ -74,3 +74,21 @@ views:
       - excluded_memory
       - superseded_by
       - updated
+  - type: table
+    name: Direct audit link checks
+    filters:
+      and:
+        - review_state == "approved" || review_state == "reviewed"
+        - type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"
+        - reviewed_by == null
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - reviewed_by
+      - updated

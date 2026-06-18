@@ -27,4 +27,8 @@ aliases: []
 
 ## Changes Requested
 
+## Lineage Checked
+
+## Context Safety
+
 ## Next Review

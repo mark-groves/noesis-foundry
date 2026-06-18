@@ -2320,9 +2320,21 @@ PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --ne
 `review renew` records the scheduled review audit and moves `next_review`
 without changing active, stale, or superseded lifecycle status.
 
+Use the Direct audit link checks Base view as a frontmatter shortcut only; the
+CLI review summary remains authoritative for audit gaps because review notes
+can also link targets through `reviewed_notes`.
+
 ## Lifecycle Dashboard
 
 ![[lifecycle-dashboard.base]]
+
+## Traceability Workbench
+
+![[traceability-workbench.base]]
+
+Use this Base to inspect lineage links, review audit notes, active context
+packages, and excluded memory before changing lifecycle state. It is a view over
+frontmatter and wikilinks only; notes remain canonical.
 
 ## Visual Map
 
@@ -2449,6 +2461,24 @@ views:
       - excluded_memory
       - superseded_by
       - updated
+  - type: table
+    name: Direct audit link checks
+    filters:
+      and:
+        - review_state == "approved" || review_state == "reviewed"
+        - type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"
+        - reviewed_by == null
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - reviewed_by
+      - updated
 """,
         Path("_bases/lifecycle-dashboard.base"): """filters:
   and:
@@ -2468,6 +2498,109 @@ views:
       - review_state
       - confidence
       - updated
+  - type: table
+    name: Active, stale, and archived state
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - superseded_by
+      - next_review
+      - updated
+  - type: table
+    name: Review readiness by stage
+    filters:
+      and:
+        - review_state != "none"
+    groupBy:
+      property: review_state
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - next_review
+""",
+        Path("_bases/traceability-workbench.base"): """filters:
+  and:
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
+    - noesis_id != null
+views:
+  - type: table
+    name: Lineage support links
+    filters:
+      and:
+        - type != "dashboard"
+        - type != "review"
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - sources
+      - evidence
+      - claims
+      - syntheses
+      - reviewed_knowledge
+  - type: table
+    name: Review audit records
+    filters:
+      and:
+        - type == "review"
+        - reviewed_notes != null
+    groupBy:
+      property: decision
+      direction: ASC
+    order:
+      - reviewed_at
+      - file.name
+      - decision
+      - reviewer
+      - reviewed_notes
+      - next_review
+  - type: table
+    name: Active context packages
+    filters:
+      and:
+        - type == "operational-context"
+        - status == "active"
+    groupBy:
+      property: review_state
+      direction: ASC
+    order:
+      - file.name
+      - reviewed_knowledge
+      - excluded_memory
+      - next_review
+      - updated
+  - type: table
+    name: Context exclusions and superseded memory
+    filters:
+      and:
+        - excluded_memory != null || superseded_by != null || status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "archive"
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - status
+      - review_state
+      - excluded_memory
+      - superseded_by
+      - next_review
+      - updated
 """,
         Path("_canvas/noesis-lifecycle.canvas"): json.dumps(
             {
@@ -2480,9 +2613,106 @@ views:
                         "y": 0,
                         "width": 360,
                         "height": 180,
+                    },
+                    {
+                        "id": "review-queue-note",
+                        "type": "file",
+                        "file": "review/review-queue.md",
+                        "x": 440,
+                        "y": 0,
+                        "width": 320,
+                        "height": 180,
+                    },
+                    {
+                        "id": "review-base",
+                        "type": "file",
+                        "file": "_bases/review-queue.base",
+                        "x": 0,
+                        "y": 260,
+                        "width": 320,
+                        "height": 160,
+                    },
+                    {
+                        "id": "lifecycle-base",
+                        "type": "file",
+                        "file": "_bases/lifecycle-dashboard.base",
+                        "x": 380,
+                        "y": 260,
+                        "width": 320,
+                        "height": 160,
+                    },
+                    {
+                        "id": "traceability-base",
+                        "type": "file",
+                        "file": "_bases/traceability-workbench.base",
+                        "x": 760,
+                        "y": 260,
+                        "width": 320,
+                        "height": 160,
+                    },
+                    {
+                        "id": "review-template",
+                        "type": "file",
+                        "file": "_templates/review.md",
+                        "x": 0,
+                        "y": 500,
+                        "width": 320,
+                        "height": 160,
+                    },
+                    {
+                        "id": "context-template",
+                        "type": "file",
+                        "file": "_templates/operational-context.md",
+                        "x": 380,
+                        "y": 500,
+                        "width": 320,
+                        "height": 160,
                     }
                 ],
-                "edges": [],
+                "edges": [
+                    {
+                        "id": "dashboard-review-note",
+                        "fromNode": "dashboard",
+                        "fromSide": "right",
+                        "toNode": "review-queue-note",
+                        "toSide": "left",
+                    },
+                    {
+                        "id": "dashboard-review-base",
+                        "fromNode": "dashboard",
+                        "fromSide": "bottom",
+                        "toNode": "review-base",
+                        "toSide": "top",
+                    },
+                    {
+                        "id": "review-base-lifecycle-base",
+                        "fromNode": "review-base",
+                        "fromSide": "right",
+                        "toNode": "lifecycle-base",
+                        "toSide": "left",
+                    },
+                    {
+                        "id": "lifecycle-base-traceability-base",
+                        "fromNode": "lifecycle-base",
+                        "fromSide": "right",
+                        "toNode": "traceability-base",
+                        "toSide": "left",
+                    },
+                    {
+                        "id": "traceability-base-review-template",
+                        "fromNode": "traceability-base",
+                        "fromSide": "bottom",
+                        "toNode": "review-template",
+                        "toSide": "top",
+                    },
+                    {
+                        "id": "traceability-base-context-template",
+                        "fromNode": "traceability-base",
+                        "fromSide": "bottom",
+                        "toNode": "context-template",
+                        "toSide": "top",
+                    },
+                ],
             },
             indent=2,
         )
@@ -2611,6 +2841,10 @@ aliases: []
 ## Limits
 
 ## Review Notes
+
+## Lifecycle Impact
+
+## Context Safety
 """,
         "synthesis": """---
 title: "{{title}}"
@@ -2643,6 +2877,8 @@ aliases: []
 ## Tensions Or Gaps
 
 ## Implications
+
+## Context Safety
 """,
         "review": """---
 title: "{{title}}"
@@ -2672,6 +2908,10 @@ aliases: []
 ## Basis
 
 ## Changes Requested
+
+## Lineage Checked
+
+## Context Safety
 
 ## Next Review
 """,
@@ -2704,6 +2944,8 @@ aliases: []
 ## Current Guidance
 
 ## Do Not Use
+
+## Context Exclusions
 
 ## Traceability
 """,
