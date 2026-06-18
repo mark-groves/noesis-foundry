@@ -2463,6 +2463,7 @@ views:
       and:
         - review_state == "approved" || review_state == "reviewed"
         - type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"
+        - reviewed_by == null
     groupBy:
       property: type
       direction: ASC

@@ -417,6 +417,7 @@ class NoesisCliTests(unittest.TestCase):
             'type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"',
             audit_gaps["filters"]["and"],
         )
+        self.assertIn("reviewed_by == null", audit_gaps["filters"]["and"])
         self.assertEqual(
             scheduled["filters"]["and"],
             ["next_review != null", 'review_state != "none"', 'type != "review"'],
