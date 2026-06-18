@@ -166,6 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--title", default=None)
     approve.add_argument("--slug", default=None)
     approve.add_argument("--next-review", default=None)
+    approve.add_argument("--json", action="store_true", help="Write structured JSON")
     approve.set_defaults(func=cmd_review_approve)
 
     request_changes = review_commands.add_parser("request-changes", help="Request changes and write an audit review")
@@ -176,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     request_changes.add_argument("--changes-requested", default=None)
     request_changes.add_argument("--title", default=None)
     request_changes.add_argument("--slug", default=None)
+    request_changes.add_argument("--json", action="store_true", help="Write structured JSON")
     request_changes.set_defaults(func=cmd_review_request_changes)
 
     renew = review_commands.add_parser("renew", help="Record a scheduled review audit and reschedule a note")
@@ -186,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     renew.add_argument("--title", default=None)
     renew.add_argument("--slug", default=None)
     renew.add_argument("--next-review", required=True)
+    renew.add_argument("--json", action="store_true", help="Write structured JSON")
     renew.set_defaults(func=cmd_review_renew)
 
     knowledge = subcommands.add_parser("knowledge", help="Reviewed knowledge workflows")
@@ -766,8 +769,14 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
             next_review=args.next_review,
         )
     except ValueError as exc:
+        if args.json:
+            write_json(review_write_error_payload(args.vault, exc))
+            return 1
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
+    if args.json:
+        write_json(review_write_success_payload(args.vault, created))
+        return 0
     print(f"created {created.note_id}\t{created.path}")
     return 0
 
@@ -784,8 +793,14 @@ def cmd_review_request_changes(args: argparse.Namespace) -> int:
             slug=args.slug,
         )
     except ValueError as exc:
+        if args.json:
+            write_json(review_write_error_payload(args.vault, exc))
+            return 1
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
+    if args.json:
+        write_json(review_write_success_payload(args.vault, created))
+        return 0
     print(f"created {created.note_id}\t{created.path}")
     return 0
 
@@ -802,8 +817,14 @@ def cmd_review_renew(args: argparse.Namespace) -> int:
             next_review=args.next_review,
         )
     except ValueError as exc:
+        if args.json:
+            write_json(review_write_error_payload(args.vault, exc))
+            return 1
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
+    if args.json:
+        write_json(review_write_success_payload(args.vault, created))
+        return 0
     print(f"created {created.note_id}\t{created.path}")
     return 0
 
@@ -1246,6 +1267,30 @@ def review_error_payload(vault: Vault, error: ValueError) -> dict[str, Any]:
         "ok": False,
         "error": str(error),
         "vault_path": str(vault.root),
+    }
+
+
+def review_write_success_payload(vault_path: Path, created: Any) -> dict[str, Any]:
+    vault_root = vault_path.resolve()
+    try:
+        path = created.path.relative_to(vault_root).as_posix()
+    except ValueError:
+        path = str(created.path)
+    return {
+        "ok": True,
+        "vault_path": str(vault_root),
+        "created": {
+            "note_id": created.note_id,
+            "path": path,
+        },
+    }
+
+
+def review_write_error_payload(vault_path: Path, error: ValueError) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": str(error),
+        "vault_path": str(vault_path.resolve()),
     }
 
 
