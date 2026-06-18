@@ -11,9 +11,11 @@ updated: 2026-06-18
 sources:
   - "[[source-project-memory-corpus-repo-artifacts]]"
   - "[[source-project-memory-corpus-bundle-fixture]]"
+  - "[[source-project-memory-corpus-review-governance]]"
 evidence:
   - "[[evidence-project-memory-corpus-contract]]"
   - "[[evidence-project-memory-corpus-import-fixture]]"
+  - "[[evidence-project-memory-corpus-review-gate]]"
 reviewed_by:
   - "[[review-project-memory-corpus-continuation]]"
 reviewed_at: 2026-06-18
@@ -32,13 +34,14 @@ aliases:
 
 The example vault should grow as source-backed project memory for continuing
 Noesis Foundry by adding complete lifecycle chains from real repository
-artifacts and local fixtures, then selecting active guidance only from current
-reviewed knowledge.
+artifacts, local fixtures, and checked-in review-governance examples, then
+selecting active guidance only from current reviewed knowledge.
 
 ## Supporting Evidence
 
 - [[evidence-project-memory-corpus-contract]]
 - [[evidence-project-memory-corpus-import-fixture]]
+- [[evidence-project-memory-corpus-review-gate]]
 
 ## Limits
 
