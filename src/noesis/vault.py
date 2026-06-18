@@ -2320,6 +2320,10 @@ PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --ne
 `review renew` records the scheduled review audit and moves `next_review`
 without changing active, stale, or superseded lifecycle status.
 
+Use the Direct audit link checks Base view as a frontmatter shortcut only; the
+CLI review summary remains authoritative for audit gaps because review notes
+can also link targets through `reviewed_notes`.
+
 ## Lifecycle Dashboard
 
 ![[lifecycle-dashboard.base]]
@@ -2458,7 +2462,7 @@ views:
       - superseded_by
       - updated
   - type: table
-    name: Audit trail gaps
+    name: Direct audit link checks
     filters:
       and:
         - review_state == "approved" || review_state == "reviewed"

@@ -47,6 +47,9 @@ without changing active, stale, or superseded lifecycle status.
 The Base includes separate views for the open queue, scheduled review dates,
 requested changes, and downstream impact cues. Those views are inspection aids;
 Markdown files and flat YAML remain the durable contract.
+Use the Direct audit link checks view as a frontmatter shortcut only; the CLI
+review summary remains authoritative for audit gaps because review notes can
+also link targets through `reviewed_notes`.
 
 ## Lifecycle Dashboard
 

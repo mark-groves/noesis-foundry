@@ -75,7 +75,7 @@ views:
       - superseded_by
       - updated
   - type: table
-    name: Audit trail gaps
+    name: Direct audit link checks
     filters:
       and:
         - review_state == "approved" || review_state == "reviewed"

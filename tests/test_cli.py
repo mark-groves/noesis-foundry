@@ -411,13 +411,13 @@ class NoesisCliTests(unittest.TestCase):
         self.assertNotIn('review_state != "approved"', top_filters)
         open_queue = next(view for view in base["views"] if view["name"] == "Open review queue")
         scheduled = next(view for view in base["views"] if view["name"] == "Due and scheduled reviews")
-        audit_gaps = next(view for view in base["views"] if view["name"] == "Audit trail gaps")
+        audit_link_checks = next(view for view in base["views"] if view["name"] == "Direct audit link checks")
         self.assertIn('review_state != "approved"', open_queue["filters"]["and"])
         self.assertIn(
             'type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"',
-            audit_gaps["filters"]["and"],
+            audit_link_checks["filters"]["and"],
         )
-        self.assertIn("reviewed_by == null", audit_gaps["filters"]["and"])
+        self.assertIn("reviewed_by == null", audit_link_checks["filters"]["and"])
         self.assertEqual(
             scheduled["filters"]["and"],
             ["next_review != null", 'review_state != "none"', 'type != "review"'],
@@ -937,6 +937,9 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("## Lineage Checked", review_template)
             context_template = (vault_path / "_templates" / "operational-context.md").read_text(encoding="utf-8")
             self.assertIn("## Context Exclusions", context_template)
+            dashboard = (vault_path / "_dashboards" / "noesis-review-dashboard.md").read_text(encoding="utf-8")
+            self.assertIn("Direct audit link checks", dashboard)
+            self.assertIn("reviewed_notes", dashboard)
 
     def test_authoring_loop_creates_reviewable_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

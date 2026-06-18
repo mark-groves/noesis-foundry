@@ -135,6 +135,9 @@ before approving, renewing, or requesting changes when you need the note's
 lineage, evidence support, audit trail, downstream context impact, and changes
 requested in one place. Renewing stale or superseded memory records a review
 audit and reschedules the note without making it active context again.
+The Direct audit link checks Base view is a frontmatter shortcut; the CLI
+review summary is the canonical audit-gap check because review notes can also
+link reviewed targets through `reviewed_notes`.
 
 Template note: Obsidian core Templates will replace `{{title}}` and `{{date}}`.
 Placeholders in angle brackets, such as `<slug>`, are for humans, the future
