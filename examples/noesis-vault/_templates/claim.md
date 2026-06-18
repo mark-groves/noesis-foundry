@@ -27,3 +27,7 @@ aliases: []
 ## Limits
 
 ## Review Notes
+
+## Lifecycle Impact
+
+## Context Safety

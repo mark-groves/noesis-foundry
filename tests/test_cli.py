@@ -411,7 +411,9 @@ class NoesisCliTests(unittest.TestCase):
         self.assertNotIn('review_state != "approved"', top_filters)
         open_queue = next(view for view in base["views"] if view["name"] == "Open review queue")
         scheduled = next(view for view in base["views"] if view["name"] == "Due and scheduled reviews")
+        audit_gaps = next(view for view in base["views"] if view["name"] == "Audit trail gaps")
         self.assertIn('review_state != "approved"', open_queue["filters"]["and"])
+        self.assertIn('type != "operational-context"', audit_gaps["filters"]["and"])
         self.assertEqual(
             scheduled["filters"]["and"],
             ["next_review != null", 'review_state != "none"', 'type != "review"'],
@@ -435,6 +437,36 @@ class NoesisCliTests(unittest.TestCase):
                 initialized_scheduled["filters"]["and"],
                 ["next_review != null", 'review_state != "none"', 'type != "review"'],
             )
+
+    def test_traceability_workbench_base_scaffolds_human_review_views(self) -> None:
+        base = yaml.safe_load((EXAMPLE_VAULT / "_bases" / "traceability-workbench.base").read_text(encoding="utf-8"))
+        view_names = {view["name"] for view in base["views"]}
+        self.assertEqual(
+            view_names,
+            {
+                "Lineage support links",
+                "Review audit records",
+                "Active context packages",
+                "Context exclusions and superseded memory",
+            },
+        )
+        context_exclusions = next(
+            view for view in base["views"] if view["name"] == "Context exclusions and superseded memory"
+        )
+        self.assertEqual(
+            context_exclusions["filters"]["and"],
+            ['excluded_memory != null || superseded_by != null || status == "stale"'],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            initialized_base = yaml.safe_load(
+                (vault_path / "_bases" / "traceability-workbench.base").read_text(encoding="utf-8")
+            )
+            initialized_view_names = {view["name"] for view in initialized_base["views"]}
+            self.assertEqual(initialized_view_names, view_names)
 
     def test_review_due_on_rejects_invalid_values(self) -> None:
         for invalid_due_on in ("not-a-date", "2026-02-31"):
@@ -887,12 +919,17 @@ class NoesisCliTests(unittest.TestCase):
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
             self.assertTrue((vault_path / "_bases" / "review-queue.base").exists())
+            self.assertTrue((vault_path / "_bases" / "traceability-workbench.base").exists())
             self.assertTrue((vault_path / "_canvas" / "noesis-lifecycle.canvas").exists())
             self.assertTrue((vault_path / "_templates" / "source.md").exists())
             self.assertTrue((vault_path / "noesis.vault.yaml").exists())
 
             evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
             self.assertIn('  - "[[<source-note>]]"', evidence_template)
+            review_template = (vault_path / "_templates" / "review.md").read_text(encoding="utf-8")
+            self.assertIn("## Lineage Checked", review_template)
+            context_template = (vault_path / "_templates" / "operational-context.md").read_text(encoding="utf-8")
+            self.assertIn("## Context Exclusions", context_template)
 
     def test_authoring_loop_creates_reviewable_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

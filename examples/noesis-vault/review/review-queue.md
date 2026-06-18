@@ -7,7 +7,7 @@ status: active
 review_state: none
 confidence: unknown
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-18
 reviewer: unassigned
 next_review: 2026-06-05
 tags:
@@ -20,8 +20,9 @@ aliases:
 
 # Review Queue
 
-This note is a human-readable queue. The canonical sortable queue is
-[[review-queue.base]].
+This note is a human-readable queue. The sortable workbench views are
+[[review-queue.base]], [[lifecycle-dashboard.base]], and
+[[traceability-workbench.base]].
 
 ## Ready For Review
 
@@ -43,6 +44,13 @@ This note is a human-readable queue. The canonical sortable queue is
 - Before changing [[stale-custom-plugin-first]], inspect downstream context that
   records it as excluded memory, especially
   [[operational-context-first-cli-mcp-workflow]].
+- Use the Context exclusions and superseded memory view before making stale or
+  superseded notes active again.
+
+## Review Audit Checks
+
+- Use the Review audit records view before accepting approved memory as current
+  guidance.
 
 ## Recently Approved
 

@@ -104,8 +104,12 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
 - `_dashboards/noesis-review-dashboard.md` - human review entry point.
 - `_bases/review-queue.base` - Base views for notes needing review and
   scheduled `next_review` dates.
-- `_bases/lifecycle-dashboard.base` - Base view grouped by lifecycle stage.
-- `_canvas/noesis-lifecycle.canvas` - visual map of the example lifecycle.
+- `_bases/lifecycle-dashboard.base` - Base views grouped by lifecycle and
+  status.
+- `_bases/traceability-workbench.base` - Base views for lineage links, review
+  audit records, active context, and excluded or superseded memory.
+- `_canvas/noesis-lifecycle.canvas` - visual map of the example lifecycle and
+  human workbench views.
 - `_templates/` - note templates for humans and agents.
 - `context/operational-context-first-cli-mcp-workflow.md` - the final context
   package the next agent would read.

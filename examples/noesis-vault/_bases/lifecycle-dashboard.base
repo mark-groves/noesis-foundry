@@ -16,3 +16,33 @@ views:
       - review_state
       - confidence
       - updated
+  - type: table
+    name: Active, stale, and archived state
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - superseded_by
+      - next_review
+      - updated
+  - type: table
+    name: Review readiness by stage
+    filters:
+      and:
+        - review_state != "none"
+    groupBy:
+      property: review_state
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - next_review

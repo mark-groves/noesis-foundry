@@ -7,7 +7,7 @@ status: active
 review_state: none
 confidence: unknown
 created: 2026-05-29
-updated: 2026-06-13
+updated: 2026-06-18
 tags:
   - noesis
   - dashboard
@@ -51,6 +51,14 @@ Markdown files and flat YAML remain the durable contract.
 ## Lifecycle Dashboard
 
 ![[lifecycle-dashboard.base]]
+
+## Traceability Workbench
+
+![[traceability-workbench.base]]
+
+Use this Base to inspect lineage links, review audit notes, active context
+packages, and excluded memory before changing lifecycle state. It is a view over
+frontmatter and wikilinks only; notes remain canonical.
 
 ## Current Complete Lineage
 

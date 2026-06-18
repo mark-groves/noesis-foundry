@@ -1,0 +1,72 @@
+filters:
+  and:
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
+    - noesis_id != null
+views:
+  - type: table
+    name: Lineage support links
+    filters:
+      and:
+        - type != "dashboard"
+        - type != "review"
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - sources
+      - evidence
+      - claims
+      - syntheses
+      - reviewed_knowledge
+  - type: table
+    name: Review audit records
+    filters:
+      and:
+        - type == "review"
+        - reviewed_notes != null
+    groupBy:
+      property: decision
+      direction: ASC
+    order:
+      - reviewed_at
+      - file.name
+      - decision
+      - reviewer
+      - reviewed_notes
+      - next_review
+  - type: table
+    name: Active context packages
+    filters:
+      and:
+        - type == "operational-context"
+        - status == "active"
+    groupBy:
+      property: review_state
+      direction: ASC
+    order:
+      - file.name
+      - reviewed_knowledge
+      - excluded_memory
+      - next_review
+      - updated
+  - type: table
+    name: Context exclusions and superseded memory
+    filters:
+      and:
+        - excluded_memory != null || superseded_by != null || status == "stale"
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - status
+      - review_state
+      - excluded_memory
+      - superseded_by
+      - next_review
+      - updated

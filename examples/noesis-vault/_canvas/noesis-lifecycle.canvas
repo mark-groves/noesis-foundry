@@ -1,17 +1,184 @@
 {
-	"nodes":[
-		{"id":"source","type":"file","file":"sources/source-noesis-readme.md","x":0,"y":0,"width":300,"height":120},
-		{"id":"evidence","type":"file","file":"evidence/evidence-memory-lifecycle.md","x":360,"y":0,"width":300,"height":120},
-		{"id":"claim","type":"file","file":"claims/claim-useful-memory-requires-lifecycle.md","x":720,"y":0,"width":300,"height":120},
-		{"id":"synthesis","type":"file","file":"syntheses/synthesis-local-first-lifecycle-interface.md","x":1080,"y":0,"width":300,"height":120},
-		{"id":"knowledge","type":"file","file":"knowledge/reviewed-knowledge-noesis-lifecycle.md","x":1440,"y":0,"width":300,"height":120},
-		{"id":"context","type":"file","file":"context/operational-context-first-cli-mcp-workflow.md","x":1800,"y":0,"width":300,"height":120}
-	],
-	"edges":[
-		{"id":"source-evidence","fromNode":"source","fromSide":"right","toNode":"evidence","toSide":"left"},
-		{"id":"evidence-claim","fromNode":"evidence","fromSide":"right","toNode":"claim","toSide":"left"},
-		{"id":"claim-synthesis","fromNode":"claim","fromSide":"right","toNode":"synthesis","toSide":"left"},
-		{"id":"synthesis-knowledge","fromNode":"synthesis","fromSide":"right","toNode":"knowledge","toSide":"left"},
-		{"id":"knowledge-context","fromNode":"knowledge","fromSide":"right","toNode":"context","toSide":"left"}
-	]
+  "nodes": [
+    {
+      "id": "dashboard",
+      "type": "file",
+      "file": "_dashboards/noesis-review-dashboard.md",
+      "x": 0,
+      "y": -260,
+      "width": 340,
+      "height": 160
+    },
+    {
+      "id": "review-base",
+      "type": "file",
+      "file": "_bases/review-queue.base",
+      "x": 420,
+      "y": -260,
+      "width": 300,
+      "height": 150
+    },
+    {
+      "id": "lifecycle-base",
+      "type": "file",
+      "file": "_bases/lifecycle-dashboard.base",
+      "x": 780,
+      "y": -260,
+      "width": 300,
+      "height": 150
+    },
+    {
+      "id": "traceability-base",
+      "type": "file",
+      "file": "_bases/traceability-workbench.base",
+      "x": 1140,
+      "y": -260,
+      "width": 320,
+      "height": 150
+    },
+    {
+      "id": "source",
+      "type": "file",
+      "file": "sources/source-noesis-readme.md",
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "evidence",
+      "type": "file",
+      "file": "evidence/evidence-memory-lifecycle.md",
+      "x": 360,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "claim",
+      "type": "file",
+      "file": "claims/claim-useful-memory-requires-lifecycle.md",
+      "x": 720,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "synthesis",
+      "type": "file",
+      "file": "syntheses/synthesis-local-first-lifecycle-interface.md",
+      "x": 1080,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "knowledge",
+      "type": "file",
+      "file": "knowledge/reviewed-knowledge-noesis-lifecycle.md",
+      "x": 1440,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "context",
+      "type": "file",
+      "file": "context/operational-context-first-cli-mcp-workflow.md",
+      "x": 1800,
+      "y": 0,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "review-audit",
+      "type": "file",
+      "file": "review/review-local-first-lifecycle.md",
+      "x": 1440,
+      "y": 200,
+      "width": 300,
+      "height": 120
+    },
+    {
+      "id": "stale-exclusion",
+      "type": "file",
+      "file": "stale/stale-custom-plugin-first.md",
+      "x": 1800,
+      "y": 200,
+      "width": 300,
+      "height": 120
+    }
+  ],
+  "edges": [
+    {
+      "id": "dashboard-review-base",
+      "fromNode": "dashboard",
+      "fromSide": "right",
+      "toNode": "review-base",
+      "toSide": "left"
+    },
+    {
+      "id": "review-base-lifecycle-base",
+      "fromNode": "review-base",
+      "fromSide": "right",
+      "toNode": "lifecycle-base",
+      "toSide": "left"
+    },
+    {
+      "id": "lifecycle-base-traceability-base",
+      "fromNode": "lifecycle-base",
+      "fromSide": "right",
+      "toNode": "traceability-base",
+      "toSide": "left"
+    },
+    {
+      "id": "source-evidence",
+      "fromNode": "source",
+      "fromSide": "right",
+      "toNode": "evidence",
+      "toSide": "left"
+    },
+    {
+      "id": "evidence-claim",
+      "fromNode": "evidence",
+      "fromSide": "right",
+      "toNode": "claim",
+      "toSide": "left"
+    },
+    {
+      "id": "claim-synthesis",
+      "fromNode": "claim",
+      "fromSide": "right",
+      "toNode": "synthesis",
+      "toSide": "left"
+    },
+    {
+      "id": "synthesis-knowledge",
+      "fromNode": "synthesis",
+      "fromSide": "right",
+      "toNode": "knowledge",
+      "toSide": "left"
+    },
+    {
+      "id": "knowledge-context",
+      "fromNode": "knowledge",
+      "fromSide": "right",
+      "toNode": "context",
+      "toSide": "left"
+    },
+    {
+      "id": "review-audit-knowledge",
+      "fromNode": "review-audit",
+      "fromSide": "top",
+      "toNode": "knowledge",
+      "toSide": "bottom"
+    },
+    {
+      "id": "stale-exclusion-context",
+      "fromNode": "stale-exclusion",
+      "fromSide": "top",
+      "toNode": "context",
+      "toSide": "bottom"
+    }
+  ]
 }
