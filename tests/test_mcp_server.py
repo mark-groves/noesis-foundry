@@ -461,6 +461,8 @@ None.
             )
 
             self.assertTrue(imported["ok"], imported)
+            self.assertEqual(imported["schema"], "noesis-source-bundle")
+            self.assertEqual(imported["schema_version"], "1")
             self.assertEqual(imported["bundle_id"], "codex-session-export-demo")
             self.assertEqual(imported["artifact_count"], 3)
             self.assertEqual(imported["created_count"], 2)
@@ -479,6 +481,9 @@ None.
             self.assertIsNotNone(source)
             assert source is not None
             self.assertEqual(source.metadata["bundle_artifact_path"], "exports/01-session.json")
+            self.assertEqual(source.metadata["bundle_schema"], "noesis-source-bundle")
+            self.assertEqual(str(source.metadata["bundle_schema_version"]), "1")
+            self.assertTrue(str(source.metadata["bundle_artifact_hash"]).startswith("sha256:"))
             self.assertEqual(source.metadata["bundle_manifest_index"], 2)
             queue = handlers.get_review_queue()
             self.assertTrue(queue["ok"], queue)

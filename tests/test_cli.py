@@ -1004,6 +1004,8 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(ingest.returncode, 0, ingest.stderr)
             payload = parse_json_stdout(ingest)
             self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["schema"], "noesis-source-bundle")
+            self.assertEqual(payload["schema_version"], "1")
             self.assertEqual(payload["bundle_id"], "codex-session-export-demo")
             self.assertEqual(payload["artifact_count"], 3)
             self.assertEqual(payload["created_count"], 2)
@@ -1033,9 +1035,16 @@ class NoesisCliTests(unittest.TestCase):
             assert metadata_note is not None
             assert transcript_note is not None
             self.assertEqual(metadata_note.metadata["import_pipeline"], "source-bundle")
+            self.assertEqual(metadata_note.metadata["bundle_schema"], "noesis-source-bundle")
+            self.assertEqual(str(metadata_note.metadata["bundle_schema_version"]), "1")
             self.assertEqual(metadata_note.metadata["bundle_id"], "codex-session-export-demo")
             self.assertEqual(metadata_note.metadata["bundle_title"], "Codex Session Export Demo")
             self.assertEqual(metadata_note.metadata["bundle_artifact_path"], "exports/01-session.json")
+            self.assertTrue(str(metadata_note.metadata["bundle_artifact_hash"]).startswith("sha256:"))
+            self.assertEqual(
+                metadata_note.metadata["bundle_artifact_size_bytes"],
+                (CODEX_SESSION_BUNDLE / "exports" / "01-session.json").stat().st_size,
+            )
             self.assertEqual(metadata_note.metadata["bundle_item_id"], "session-metadata")
             self.assertEqual(metadata_note.metadata["bundle_item_index"], 1)
             self.assertEqual(metadata_note.metadata["bundle_manifest_index"], 2)
@@ -1094,7 +1103,8 @@ class NoesisCliTests(unittest.TestCase):
             (exports / "01-valid.md").write_text("valid artifact\n", encoding="utf-8")
             (exports / "02-invalid.md").write_text("invalid artifact\n", encoding="utf-8")
             (bundle_path / "noesis-bundle.yaml").write_text(
-                """bundle_id: invalid-metadata-demo
+                """schema_version: 1
+bundle_id: invalid-metadata-demo
 title: Invalid Metadata Demo
 artifacts:
   - path: exports/01-valid.md
@@ -1128,6 +1138,87 @@ artifacts:
             )
             self.assertFalse((vault_path / "raw" / "01-valid.md").exists())
             self.assertFalse((vault_path / "sources" / "source-valid-artifact.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_bundle_ingest_rejects_duplicate_artifact_paths_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-session.md").write_text("artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """schema_version: 1
+bundle_id: duplicate-path-demo
+title: Duplicate Path Demo
+artifacts:
+  - path: exports/01-session.md
+    id: first-session
+  - path: exports/01-session.md
+    id: second-session
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn(
+                "bundle manifest lists artifact path exports/01-session.md more than once",
+                ingest.stderr,
+            )
+            self.assertFalse((vault_path / "raw" / "01-session.md").exists())
+            self.assertFalse((vault_path / "sources" / "source-exports-01-session.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_bundle_ingest_rejects_unsupported_schema_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-session.md").write_text("artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """schema_version: 2
+bundle_id: future-schema-demo
+title: Future Schema Demo
+artifacts:
+  - path: exports/01-session.md
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn("unsupported source bundle schema_version '2'; expected '1'", ingest.stderr)
+            self.assertFalse((vault_path / "raw" / "01-session.md").exists())
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)

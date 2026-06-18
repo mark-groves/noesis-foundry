@@ -1,3 +1,4 @@
+schema_version: 1
 bundle_id: codex-session-export-demo
 title: Codex Session Export Demo
 source_type: codex-session-export
