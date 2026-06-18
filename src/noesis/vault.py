@@ -2623,6 +2623,8 @@ def compose_context(
         scope=scope,
         purpose=purpose,
         profile=profile_definition,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
         included=included,
         excluded=excluded,
         lifecycle_excluded=lifecycle_excluded,
@@ -2906,6 +2908,8 @@ def context_handoff_guidance(
     scope: str | None,
     purpose: str | None,
     profile: ContextProfile | None,
+    limit: int | None,
+    max_chars: int | None,
     included: list[ContextSelection],
     excluded: list[ContextSelection],
     lifecycle_excluded: list[ContextSelection],
@@ -2914,6 +2918,8 @@ def context_handoff_guidance(
     scope_flag = f" --scope {shell_quote(scope)}" if scope else ""
     purpose_flag = f" --purpose {shell_quote(purpose)}" if purpose else ""
     profile_flag = f" --profile {profile.name}" if profile is not None else ""
+    limit_flag = f" --limit {limit}" if limit is not None else ""
+    max_chars_flag = f" --max-chars {max_chars}" if max_chars is not None else ""
     task_purpose = purpose or "Continue the task using the selected current reviewed knowledge."
     assumptions = [
         "Active guidance is limited to current reviewed knowledge selected for this package.",
@@ -2943,12 +2949,12 @@ def context_handoff_guidance(
         (
             "PYTHONPATH=src python -m noesis context build"
             f"{vault_flag}"
-            f"{scope_flag}{purpose_flag}{profile_flag} --json"
+            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
         ),
         (
             "PYTHONPATH=src python -m noesis context explain"
             f"{vault_flag}"
-            f"{scope_flag}{profile_flag} --json"
+            f"{scope_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
         ),
         "PYTHONPATH=src python -m unittest discover -s tests -v",
     ]

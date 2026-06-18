@@ -1533,6 +1533,33 @@ sources:
             payload["handoff"]["lineage_summaries"][0]["sources"][0]["noesis_id"],
             "source-noesis-roadmap-docs",
         )
+        self.assertTrue(
+            all("--limit 6 --max-chars 14000" in command for command in validation_commands[2:4]),
+            validation_commands,
+        )
+
+        budgeted = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "noesis-roadmap",
+            "--profile",
+            "codex-handoff",
+            "--limit",
+            "1",
+            "--max-chars",
+            "5000",
+            "--json",
+        )
+        self.assertEqual(budgeted.returncode, 0, budgeted.stderr)
+        budgeted_payload = parse_json_stdout(budgeted)
+        budgeted_commands = budgeted_payload["handoff"]["validation_commands"]
+        self.assertTrue(
+            all("--limit 1 --max-chars 5000" in command for command in budgeted_commands[2:4]),
+            budgeted_commands,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "copied-vault"
