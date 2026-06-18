@@ -122,6 +122,9 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(due_queue["ok"], due_queue)
         self.assertEqual([note["noesis_id"] for note in due_queue["notes"]], ["stale-custom-plugin-first"])
         self.assertEqual(due_queue["filters"]["type"], "stale-memory")
+        self.assertEqual(due_queue["notes"][0]["review_schedule"]["status"], "overdue")
+        self.assertEqual(due_queue["notes"][0]["review_schedule"]["days_overdue"], 8)
+        self.assertEqual(due_queue["notes"][0]["lifecycle_safety"]["renewal_preserves_lifecycle"], True)
         scheduled_due_queue = handlers.get_review_queue(due_on="2026-06-29")
         self.assertTrue(scheduled_due_queue["ok"], scheduled_due_queue)
         scheduled_due_ids = [note["noesis_id"] for note in scheduled_due_queue["notes"]]
@@ -133,7 +136,10 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         summary = handlers.get_review_summary(due_on="2026-06-13")
         self.assertTrue(summary["ok"], summary)
         self.assertGreaterEqual(summary["pending_count"], 1)
+        self.assertGreaterEqual(summary["overdue_count"], 1)
+        self.assertEqual(summary["audit_gap_count"], 0)
         self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["due_notes"]])
+        self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["overdue_notes"]])
 
         workbench = handlers.show_review("claim-useful-memory-requires-lifecycle", due_on="2026-06-13")
         self.assertTrue(workbench["ok"], workbench)
@@ -147,8 +153,11 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in workbench["impact"]["dependent_contexts"]],
         )
-        stale_workbench = handlers.show_review("stale-custom-plugin-first")
+        stale_workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
         self.assertTrue(stale_workbench["ok"], stale_workbench)
+        self.assertEqual(stale_workbench["triage"]["recommended_action"], "review-overdue-note")
+        self.assertEqual(stale_workbench["lifecycle_safety"]["stale_or_superseded_memory"], True)
+        self.assertEqual(stale_workbench["lifecycle_safety"]["renewal_preserves_lifecycle"], True)
         self.assertIn(
             "context-first-cli-mcp-workflow",
             [note["noesis_id"] for note in stale_workbench["impact"]["dependent_contexts"]],
@@ -287,6 +296,80 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             empty_queue = empty_handlers.get_review_queue(due_on="not-a-date")
             self.assertEqual(empty_queue["ok"], False)
             self.assertEqual(empty_queue["error"], "due_on must be YYYY-MM-DD")
+
+    def test_resolved_change_requests_are_history_not_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            requested = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                changes_requested="Clarify before approval.",
+                slug="claim-needs-clarification",
+            )
+            self.assertTrue(requested["ok"], requested)
+            approved = handlers.approve_review(
+                "claim-useful-memory-requires-lifecycle",
+                basis="Clarification is complete.",
+                slug="claim-clarification-approved",
+            )
+            self.assertTrue(approved["ok"], approved)
+
+            workbench = handlers.show_review("claim-useful-memory-requires-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["note"]["review_state"], "approved")
+            self.assertEqual(workbench["triage"]["blocked_by_requested_changes"], False)
+            self.assertNotEqual(workbench["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(workbench["changes_requested"], [])
+            self.assertEqual(len(workbench["changes_requested_history"]), 1)
+
+            queue = handlers.get_review_queue(review_state="approved")
+            self.assertTrue(queue["ok"], queue)
+            claim = next(
+                note
+                for note in queue["notes"]
+                if note["noesis_id"] == "claim-useful-memory-requires-lifecycle"
+            )
+            self.assertEqual(claim["requested_changes"]["open"], False)
+            self.assertEqual(claim["requested_changes"]["count"], 0)
+            self.assertEqual(claim["requested_changes"]["history_count"], 1)
+
+            requested_again = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                changes_requested="Clarify the follow-up cycle.",
+                slug="claim-needs-follow-up-clarification",
+            )
+            self.assertTrue(requested_again["ok"], requested_again)
+            follow_up = handlers.show_review("claim-useful-memory-requires-lifecycle")
+            self.assertTrue(follow_up["ok"], follow_up)
+            self.assertEqual(follow_up["triage"]["blocked_by_requested_changes"], True)
+            self.assertEqual(follow_up["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(len(follow_up["changes_requested"]), 1)
+            self.assertIn("follow-up cycle", follow_up["changes_requested"][0]["changes_requested"])
+            self.assertEqual(len(follow_up["changes_requested_history"]), 2)
+
+    def test_propagated_change_requests_are_open_without_direct_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            requested = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                changes_requested="Revise this claim before reuse.",
+                slug="claim-propagates-review-changes",
+            )
+            self.assertTrue(requested["ok"], requested)
+
+            workbench = handlers.show_review("reviewed-knowledge-noesis-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["note"]["review_state"], "changes-requested")
+            self.assertEqual(workbench["triage"]["blocked_by_requested_changes"], True)
+            self.assertEqual(workbench["triage"]["recommended_action"], "resolve-requested-changes")
+            self.assertEqual(len(workbench["changes_requested"]), 1)
+            self.assertIsNone(workbench["changes_requested"][0]["review"])
+            self.assertEqual(workbench["changes_requested_history"], [])
 
     def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

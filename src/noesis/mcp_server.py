@@ -25,10 +25,14 @@ from .vault import (
     extract_evidence,
     import_source_bundle,
     ingest_source,
+    is_excluded,
     mark_memory_stale,
     note_review_due,
+    parse_review_date,
     promote_synthesis,
     propose_claim,
+    review_cutoff_date,
+    review_requires_audit,
     renew_review,
     request_review_changes,
     synthesize_claims,
@@ -146,7 +150,7 @@ class NoesisMcpHandlers:
             "ok": True,
             "vault_path": str(vault.root),
             "count": len(queue),
-            "notes": [note_summary(note, vault.root) for note in queue],
+            "notes": [review_note_summary(note, vault, due_on=due_on) for note in queue],
             "filters": review_filters(
                 review_state=review_state,
                 note_type=note_type,
@@ -822,6 +826,129 @@ def note_summary(note: Note, vault_root: Path) -> JsonObject:
     }
 
 
+def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) -> JsonObject:
+    data = note_summary(note, vault.root)
+    audits = vault.review_audits_for(note)
+    change_request_history = review_change_request_history(vault, audits)
+    open_change_requests = open_review_changes(note, audits, change_request_history)
+    data["review_schedule"] = review_due_details(note, due_on=due_on)
+    data["audit"] = {
+        "count": len(audits),
+        "requires_audit": review_requires_audit(note),
+        "has_audit": bool(audits),
+        "latest_decision": json_safe(audits[-1].metadata.get("decision")) if audits else None,
+    }
+    data["requested_changes"] = {
+        "open": bool(open_change_requests),
+        "count": len(open_change_requests),
+        "history_count": len(change_request_history),
+    }
+    data["impact"] = review_impact_counts(vault, note)
+    data["lifecycle_safety"] = review_lifecycle_safety(note)
+    return data
+
+
+def review_due_details(note: Note, *, due_on: str | None = None) -> JsonObject:
+    cutoff = review_cutoff_date(due_on)
+    next_review = parse_review_date(note.metadata.get("next_review"))
+    due = next_review is not None and next_review <= cutoff
+    overdue = next_review is not None and next_review < cutoff
+    days_overdue = (cutoff - next_review).days if overdue and next_review is not None else 0
+    if next_review is None:
+        status = "unscheduled"
+    elif overdue:
+        status = "overdue"
+    elif due:
+        status = "due"
+    else:
+        status = "scheduled"
+    return {
+        "next_review": next_review.isoformat() if next_review else json_safe(note.metadata.get("next_review")),
+        "due_on": cutoff.isoformat(),
+        "due": due,
+        "overdue": overdue,
+        "days_overdue": days_overdue,
+        "status": status,
+    }
+
+
+def review_impact_counts(vault: Vault, note: Note) -> JsonObject:
+    return {
+        "dependent_reviewed_knowledge": len(vault.dependent_reviewed_knowledge_for(note)),
+        "dependent_contexts": len(vault.dependent_contexts_for(note)),
+    }
+
+
+def review_lifecycle_safety(note: Note) -> JsonObject:
+    excluded = is_excluded(note)
+    stale_memory = note.type == "stale-memory"
+    return {
+        "excluded_from_active_context": excluded,
+        "stale_or_superseded_memory": stale_memory and excluded,
+        "renewal_preserves_lifecycle": stale_memory and excluded,
+    }
+
+
+def review_change_request_history(vault: Vault, audits: list[Note]) -> list[JsonObject]:
+    return [
+        {
+            "review": note_summary(audit, vault.root),
+            "changes_requested": markdown_section(audit.body, "Changes Requested"),
+        }
+        for audit in audits
+        if audit.metadata.get("decision") == "changes-requested"
+    ]
+
+
+def open_review_changes(
+    note: Note,
+    audits: list[Note],
+    change_request_history: list[JsonObject],
+) -> list[JsonObject]:
+    latest_decision = audits[-1].metadata.get("decision") if audits else None
+    if note.review_state == "changes-requested" or latest_decision == "changes-requested":
+        if change_request_history:
+            return [change_request_history[-1]]
+        return [
+            {
+                "review": None,
+                "changes_requested": "Current note review_state is changes-requested without a direct change-request audit.",
+            }
+        ]
+    return []
+
+
+def review_triage(
+    note: Note,
+    *,
+    schedule: JsonObject,
+    audit_status: JsonObject,
+    changes_requested: list[JsonObject],
+    dependent_reviewed_knowledge: list[Note],
+    dependent_contexts: list[Note],
+) -> JsonObject:
+    if changes_requested:
+        action = "resolve-requested-changes"
+    elif not audit_status["ok"]:
+        action = "add-missing-review-audit"
+    elif schedule["overdue"]:
+        action = "review-overdue-note"
+    elif schedule["due"]:
+        action = "review-due-note"
+    elif dependent_reviewed_knowledge or dependent_contexts:
+        action = "inspect-downstream-impact-before-changing"
+    else:
+        action = "no-review-action"
+    return {
+        "status": schedule["status"],
+        "recommended_action": action,
+        "blocked_by_requested_changes": bool(changes_requested),
+        "audit_gap": not audit_status["ok"],
+        "downstream_impact_count": len(dependent_reviewed_knowledge) + len(dependent_contexts),
+        "renewal_preserves_lifecycle": review_lifecycle_safety(note)["renewal_preserves_lifecycle"],
+    }
+
+
 def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> JsonObject:
     return {
         "included": [context_selection_payload(selection, vault_root) for selection in package.included],
@@ -961,10 +1088,20 @@ def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str
         "vault_path": str(vault.root),
         "pending_count": summary["pending_count"],
         "due_count": summary["due_count"],
+        "overdue_count": summary["overdue_count"],
+        "requested_changes_count": summary["requested_changes_count"],
+        "audit_gap_count": summary["audit_gap_count"],
         "due_on": due_on,
         "review_state_counts": json_safe(summary["review_state_counts"]),
-        "due_notes": [note_summary(note, vault.root) for note in summary["due_notes"]],
-        "next_review_notes": [note_summary(note, vault.root) for note in summary["next_review_notes"]],
+        "due_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["due_notes"]],
+        "overdue_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["overdue_notes"]],
+        "requested_changes_notes": [
+            review_note_summary(note, vault, due_on=due_on) for note in summary["requested_changes_notes"]
+        ],
+        "audit_gap_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["audit_gap_notes"]],
+        "next_review_notes": [
+            review_note_summary(note, vault, due_on=due_on) for note in summary["next_review_notes"]
+        ],
     }
 
 
@@ -973,17 +1110,16 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
     support = vault.support_notes_for(note)
     lineage = vault.lineage(note.noesis_id)
     review_due = note_review_due(note, due_on=due_on)
-    changes_requested = [
-        {
-            "review": note_summary(audit, vault.root),
-            "changes_requested": markdown_section(audit.body, "Changes Requested"),
-        }
-        for audit in audits
-        if audit.metadata.get("decision") == "changes-requested"
-    ]
-    requires_audit = note.type in {"evidence", "claim", "synthesis", "reviewed-knowledge"} and note.review_state in {
-        "approved",
-        "reviewed",
+    schedule = review_due_details(note, due_on=due_on)
+    dependent_reviewed_knowledge = vault.dependent_reviewed_knowledge_for(note)
+    dependent_contexts = vault.dependent_contexts_for(note)
+    changes_requested_history = review_change_request_history(vault, audits)
+    changes_requested = open_review_changes(note, audits, changes_requested_history)
+    requires_audit = review_requires_audit(note)
+    audit_status = {
+        "requires_audit": requires_audit,
+        "has_audit": bool(audits),
+        "ok": (not requires_audit) or bool(audits),
     }
     return {
         "ok": True,
@@ -992,27 +1128,37 @@ def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on:
         "note": note_to_dict(note, vault.root),
         "review_due": review_due,
         "review_schedule": review_schedule_to_dict(vault, note, audits, due_on=due_on, review_due=review_due),
-        "audit_status": {
-            "requires_audit": requires_audit,
-            "has_audit": bool(audits),
-            "ok": (not requires_audit) or bool(audits),
-        },
+        "triage": review_triage(
+            note,
+            schedule=schedule,
+            audit_status=audit_status,
+            changes_requested=changes_requested,
+            dependent_reviewed_knowledge=dependent_reviewed_knowledge,
+            dependent_contexts=dependent_contexts,
+        ),
+        "audit_status": audit_status,
         "audit_records": [review_audit_to_dict(audit, vault.root) for audit in audits],
         "support": {
             key: [note_summary(support_note, vault.root) for support_note in notes]
             for key, notes in support.items()
         },
         "changes_requested": changes_requested,
+        "changes_requested_history": changes_requested_history,
         "impact": {
             "dependent_reviewed_knowledge": [
                 note_summary(dependent, vault.root)
-                for dependent in vault.dependent_reviewed_knowledge_for(note)
+                for dependent in dependent_reviewed_knowledge
             ],
             "dependent_contexts": [
                 note_summary(dependent, vault.root)
-                for dependent in vault.dependent_contexts_for(note)
+                for dependent in dependent_contexts
             ],
+            "counts": {
+                "dependent_reviewed_knowledge": len(dependent_reviewed_knowledge),
+                "dependent_contexts": len(dependent_contexts),
+            },
         },
+        "lifecycle_safety": review_lifecycle_safety(note),
         "lineage": [note_summary(lineage_note, vault.root) for lineage_note in lineage],
     }
 
@@ -1026,10 +1172,14 @@ def review_schedule_to_dict(
     review_due: bool,
 ) -> JsonObject:
     latest_audit = audits[-1] if audits else None
+    schedule = review_due_details(note, due_on=due_on)
     return {
-        "next_review": json_safe(note.metadata.get("next_review")),
-        "due_on": due_on,
+        "next_review": schedule["next_review"],
+        "due_on": schedule["due_on"],
         "due": review_due,
+        "overdue": schedule["overdue"],
+        "days_overdue": schedule["days_overdue"],
+        "status": schedule["status"],
         "audit_count": len(audits),
         "latest_audit": review_audit_to_dict(latest_audit, vault.root) if latest_audit else None,
     }

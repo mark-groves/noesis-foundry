@@ -461,8 +461,7 @@ class Vault:
         return sort_review_notes(notes)
 
     def review_summary(self, *, due_on: str | date | None = None) -> dict[str, Any]:
-        if due_on is not None:
-            review_cutoff_date(due_on)
+        cutoff = review_cutoff_date(due_on)
         reviewable_notes = [note for note in self.notes if note.type != "dashboard"]
         review_counts: dict[str, int] = {}
         for note in reviewable_notes:
@@ -478,11 +477,35 @@ class Vault:
         scheduled_notes = sort_review_notes(
             [note for note in scheduled_candidates if parse_review_date(note.metadata.get("next_review")) is not None]
         )
+        overdue_notes = sort_review_notes(
+            [
+                note
+                for note in scheduled_candidates
+                if (next_review := parse_review_date(note.metadata.get("next_review"))) is not None
+                and next_review < cutoff
+            ]
+        )
+        requested_changes_notes = sort_review_notes(
+            [note for note in reviewable_notes if note.review_state == "changes-requested"]
+        )
+        audit_gap_notes = sort_review_notes(
+            [
+                note
+                for note in reviewable_notes
+                if review_requires_audit(note) and not self.review_audits_for(note)
+            ]
+        )
         return {
             "review_state_counts": dict(sorted(review_counts.items())),
             "pending_count": len(self.review_queue()),
             "due_count": len(due_notes),
+            "overdue_count": len(overdue_notes),
+            "requested_changes_count": len(requested_changes_notes),
+            "audit_gap_count": len(audit_gap_notes),
             "due_notes": due_notes,
+            "overdue_notes": overdue_notes,
+            "requested_changes_notes": requested_changes_notes,
+            "audit_gap_notes": audit_gap_notes,
             "next_review_notes": scheduled_notes[:10],
         }
 
@@ -2283,8 +2306,9 @@ PYTHONPATH=src python -m noesis review queue --vault <vault-path> --due --due-on
 PYTHONPATH=src python -m noesis review show <note-id> --vault <vault-path>
 ```
 
-`review show` reports the note state, linked support, audit records, requested
-changes, downstream reviewed-knowledge/context impact, and complete lineage.
+`review summary`, `review queue`, and `review show` report overdue review
+status, audit gaps, requested changes, downstream reviewed-knowledge/context
+impact, and complete lineage.
 
 Use this write action after a scheduled review confirms the note still fits
 its current lifecycle role:
@@ -2330,6 +2354,23 @@ The canonical sortable queue is [[review-queue.base]].
 
 ## Ready For Review
 
+## Overdue Scheduled Reviews
+
+Use `review show <note-id>` before renewing a stale or superseded note. Renewal
+records the audit and reschedules `next_review` without making stale memory
+active context again.
+
+## Requested Changes
+
+Notes here should be resolved before they support new synthesis, reviewed
+knowledge, or operational context.
+
+## Downstream Impact Checks
+
+Inspect dependent reviewed knowledge and context before changing or retiring a
+note with support links, `reviewed_knowledge`, `excluded_memory`, or
+`superseded_by` metadata.
+
 ## Recently Approved
 """,
         Path("_bases/review-queue.base"): """filters:
@@ -2372,6 +2413,42 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - reviewed_by
+      - superseded_by
+  - type: table
+    name: Requested changes
+    filters:
+      and:
+        - review_state == "changes-requested"
+    groupBy:
+      property: lifecycle_stage
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - reviewed_by
+      - updated
+  - type: table
+    name: Downstream impact cues
+    filters:
+      and:
+        - reviewed_knowledge != null || excluded_memory != null || superseded_by != null
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - reviewed_knowledge
+      - excluded_memory
+      - superseded_by
+      - updated
 """,
         Path("_bases/lifecycle-dashboard.base"): """filters:
   and:
@@ -3412,6 +3489,13 @@ def searchable_note_text(note: Note) -> str:
 
 def is_excluded(note: Note) -> bool:
     return note.lifecycle_stage in {"stale", "archive"} or note.status in EXCLUDED_STATUSES
+
+
+def review_requires_audit(note: Note) -> bool:
+    return note.type in {"evidence", "claim", "synthesis", "reviewed-knowledge"} and note.review_state in {
+        "approved",
+        "reviewed",
+    }
 
 
 def sort_review_notes(notes: Iterable[Note]) -> list[Note]:

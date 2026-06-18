@@ -30,8 +30,9 @@ PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --due
 PYTHONPATH=src python -m noesis review show stale-custom-plugin-first --vault examples/noesis-vault
 ```
 
-`review show` reports the note state, linked support, audit records, requested
-changes, downstream reviewed-knowledge/context impact, and complete lineage.
+`review summary`, `review queue`, and `review show` report overdue review
+status, audit gaps, requested changes, downstream reviewed-knowledge/context
+impact, and complete lineage.
 
 Use this write action after a scheduled review confirms the note still fits
 its current lifecycle role:
@@ -42,6 +43,10 @@ PYTHONPATH=src python -m noesis review renew stale-custom-plugin-first --vault e
 
 `review renew` records the scheduled review audit and moves `next_review`
 without changing active, stale, or superseded lifecycle status.
+
+The Base includes separate views for the open queue, scheduled review dates,
+requested changes, and downstream impact cues. Those views are inspection aids;
+Markdown files and flat YAML remain the durable contract.
 
 ## Lifecycle Dashboard
 

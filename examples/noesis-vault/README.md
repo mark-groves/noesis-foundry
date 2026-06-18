@@ -125,9 +125,12 @@ PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --due
 PYTHONPATH=src python -m noesis review show stale-custom-plugin-first --vault examples/noesis-vault
 ```
 
-Use `review show` before approving or requesting changes when you need the
-note's lineage, evidence support, audit trail, downstream context impact, and
-changes requested in one place.
+Use `review summary` and `review queue` to triage overdue scheduled reviews,
+requested changes, audit gaps, and downstream impact counts. Use `review show`
+before approving, renewing, or requesting changes when you need the note's
+lineage, evidence support, audit trail, downstream context impact, and changes
+requested in one place. Renewing stale or superseded memory records a review
+audit and reschedules the note without making it active context again.
 
 Template note: Obsidian core Templates will replace `{{title}}` and `{{date}}`.
 Placeholders in angle brackets, such as `<slug>`, are for humans, the future
