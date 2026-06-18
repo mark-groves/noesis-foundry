@@ -18,20 +18,23 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
 1. Validate the vault before making a review decision:
 
    ```bash
-   PYTHONPATH=src python -m noesis vault validate <vault>
+   noesis vault validate <vault>
    ```
+
+   From a source checkout without installation, use
+   `PYTHONPATH=src python -m noesis vault validate <vault>`.
 
 2. Find reviewable notes:
 
    ```bash
-   PYTHONPATH=src python -m noesis review queue --vault <vault>
+   noesis review queue --vault <vault>
    ```
 
 3. For each note under review, read the note and trace its lineage before
    deciding:
 
    ```bash
-   PYTHONPATH=src python -m noesis trace <note-id> --vault <vault>
+   noesis trace <note-id> --vault <vault>
    ```
 
    Inspect the linked source, evidence, claims, synthesis, existing review
@@ -40,22 +43,22 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    conflict with current reviewed knowledge:
 
    ```bash
-   PYTHONPATH=src python -m noesis review approve <note-id> --vault <vault> --reviewer "<reviewer>" --basis "<why this is supported>"
+   noesis review approve <note-id> --vault <vault> --reviewer "<reviewer>" --basis "<why this is supported>"
    ```
 
 5. Request changes when support is missing, lineage is broken, wording is too
    broad, or the note conflicts with fresher knowledge:
 
    ```bash
-   PYTHONPATH=src python -m noesis review request-changes <note-id> --vault <vault> --reviewer "<reviewer>" --changes-requested "<specific change>"
+   noesis review request-changes <note-id> --vault <vault> --reviewer "<reviewer>" --changes-requested "<specific change>"
    ```
 
 6. Promote or stale memory only through the CLI when the task explicitly asks
    to mature or retire memory:
 
    ```bash
-   PYTHONPATH=src python -m noesis knowledge promote --vault <vault> --synthesis <synthesis-id> --title "<knowledge title>"
-   PYTHONPATH=src python -m noesis memory stale <note-id> --vault <vault> --reason "<reason>"
+   noesis knowledge promote --vault <vault> --synthesis <synthesis-id> --title "<knowledge title>"
+   noesis memory stale <note-id> --vault <vault> --reason "<reason>"
    ```
 
 7. Re-run validation and the review queue. Report the review note created, the
@@ -67,8 +70,8 @@ The example vault has an approved Noesis Foundry project-memory chain. Use it
 as the review shape before approving new memory:
 
 ```bash
-PYTHONPATH=src python -m noesis trace claim-agent-memory-dogfood --vault examples/noesis-vault
-PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
+noesis trace claim-agent-memory-dogfood --vault examples/noesis-vault
+noesis review queue --vault examples/noesis-vault
 ```
 
 The equivalent MCP path is `noesis_get_note`, `noesis_trace_lineage`, and then

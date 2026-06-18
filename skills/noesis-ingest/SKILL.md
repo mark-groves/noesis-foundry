@@ -22,15 +22,15 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
 2. Validate the vault before writing:
 
    ```bash
-   PYTHONPATH=src python -m noesis vault validate <vault>
+   noesis vault validate <vault>
    ```
 
-   Use `noesis vault validate <vault>` instead when the console script is
-   available.
+   From a source checkout without installation, use
+   `PYTHONPATH=src python -m noesis vault validate <vault>`.
 3. Preserve the raw source and create the source note through the CLI:
 
    ```bash
-   PYTHONPATH=src python -m noesis ingest source --vault <vault> --file <source-file> --title "<source title>"
+   noesis ingest source --vault <vault> --file <source-file> --title "<source title>"
    ```
 
    Pass optional source metadata such as `--original-url`, `--author`, and
@@ -41,7 +41,7 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    new source when a reviewable placeholder is useful:
 
    ```bash
-   PYTHONPATH=src python -m noesis ingest source --vault <vault> --directory <source-dir> --recursive --evidence-drafts
+   noesis ingest source --vault <vault> --directory <source-dir> --recursive --evidence-drafts
    ```
 
    Review the created/skipped summary before doing interpretive work.
@@ -50,7 +50,7 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    item order are recorded as flat source metadata:
 
    ```bash
-   PYTHONPATH=src python -m noesis ingest bundle --vault <vault> <bundle-dir> --evidence-drafts
+   noesis ingest bundle --vault <vault> <bundle-dir> --evidence-drafts
    ```
 
    Use the checked-in `tests/fixtures/codex-session-bundle` shape for local
@@ -60,7 +60,7 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
    specific atomic evidence is needed:
 
    ```bash
-   PYTHONPATH=src python -m noesis extract evidence --vault <vault> --source <source-id> --title "<evidence title>" --evidence "<atomic evidence>"
+   noesis extract evidence --vault <vault> --source <source-id> --title "<evidence title>" --evidence "<atomic evidence>"
    ```
 
    Keep each evidence note atomic enough for later claim review.
@@ -74,8 +74,8 @@ For the checked-in Noesis Foundry dogfood fixture, inspect the source-backed
 path that begins with `source-agent-memory-session`:
 
 ```bash
-PYTHONPATH=src python -m noesis trace source-agent-memory-session --vault examples/noesis-vault
-PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
+noesis trace source-agent-memory-session --vault examples/noesis-vault
+noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
 ```
 
 The equivalent MCP path is to call `noesis_lint_vault`, then

@@ -676,6 +676,51 @@ class NoesisCliTests(unittest.TestCase):
         ):
             self.assertIn(expected, trace.stdout)
 
+    def test_example_project_memory_corpus_context_uses_reviewed_knowledge(self) -> None:
+        context = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "project-memory-corpus",
+            "--purpose",
+            "continue expanding Noesis Foundry project memory",
+        )
+        self.assertEqual(context.returncode, 0, context.stderr)
+        self.assertIn("reviewed-knowledge-project-memory-corpus-continuation", context.stdout)
+        self.assertIn("Use source-backed project-memory chains", context.stdout)
+        self.assertIn("Captured Codex session bundles are valuable source material", context.stdout)
+        self.assertNotIn("Every imported bundle artifact should be promoted directly into active context", context.stdout)
+        self.assertNotIn("stale-project-memory-corpus-bulk-import-active-context", context.stdout)
+
+        context_note = (
+            EXAMPLE_VAULT / "context" / "operational-context-project-memory-corpus-continuation.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("[[reviewed-knowledge-project-memory-corpus-continuation]]", context_note)
+        self.assertIn("[[stale-project-memory-corpus-bulk-import-active-context]]", context_note)
+
+        trace = run_noesis(
+            "trace",
+            "reviewed-knowledge-project-memory-corpus-continuation",
+            "--vault",
+            str(EXAMPLE_VAULT),
+        )
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        for expected in (
+            "source-project-memory-corpus-repo-artifacts",
+            "source-project-memory-corpus-bundle-fixture",
+            "evidence-project-memory-corpus-contract",
+            "evidence-project-memory-corpus-import-fixture",
+            "claim-project-memory-corpus-continuation",
+            "review-project-memory-corpus-continuation",
+            "synthesis-project-memory-corpus-continuation",
+            "reviewed-knowledge-project-memory-corpus-continuation",
+            "context-project-memory-corpus-continuation",
+            "stale-project-memory-corpus-bulk-import-active-context",
+        ):
+            self.assertIn(expected, trace.stdout)
+
     def test_context_explain_json_reports_profile_provenance_and_lineage(self) -> None:
         scoped = run_noesis(
             "context",
@@ -1004,6 +1049,8 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(ingest.returncode, 0, ingest.stderr)
             payload = parse_json_stdout(ingest)
             self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["schema"], "noesis-source-bundle")
+            self.assertEqual(payload["schema_version"], "1")
             self.assertEqual(payload["bundle_id"], "codex-session-export-demo")
             self.assertEqual(payload["artifact_count"], 3)
             self.assertEqual(payload["created_count"], 2)
@@ -1033,9 +1080,16 @@ class NoesisCliTests(unittest.TestCase):
             assert metadata_note is not None
             assert transcript_note is not None
             self.assertEqual(metadata_note.metadata["import_pipeline"], "source-bundle")
+            self.assertEqual(metadata_note.metadata["bundle_schema"], "noesis-source-bundle")
+            self.assertEqual(str(metadata_note.metadata["bundle_schema_version"]), "1")
             self.assertEqual(metadata_note.metadata["bundle_id"], "codex-session-export-demo")
             self.assertEqual(metadata_note.metadata["bundle_title"], "Codex Session Export Demo")
             self.assertEqual(metadata_note.metadata["bundle_artifact_path"], "exports/01-session.json")
+            self.assertTrue(str(metadata_note.metadata["bundle_artifact_hash"]).startswith("sha256:"))
+            self.assertEqual(
+                metadata_note.metadata["bundle_artifact_size_bytes"],
+                (CODEX_SESSION_BUNDLE / "exports" / "01-session.json").stat().st_size,
+            )
             self.assertEqual(metadata_note.metadata["bundle_item_id"], "session-metadata")
             self.assertEqual(metadata_note.metadata["bundle_item_index"], 1)
             self.assertEqual(metadata_note.metadata["bundle_manifest_index"], 2)
@@ -1094,7 +1148,8 @@ class NoesisCliTests(unittest.TestCase):
             (exports / "01-valid.md").write_text("valid artifact\n", encoding="utf-8")
             (exports / "02-invalid.md").write_text("invalid artifact\n", encoding="utf-8")
             (bundle_path / "noesis-bundle.yaml").write_text(
-                """bundle_id: invalid-metadata-demo
+                """schema_version: 1
+bundle_id: invalid-metadata-demo
 title: Invalid Metadata Demo
 artifacts:
   - path: exports/01-valid.md
@@ -1128,6 +1183,87 @@ artifacts:
             )
             self.assertFalse((vault_path / "raw" / "01-valid.md").exists())
             self.assertFalse((vault_path / "sources" / "source-valid-artifact.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_bundle_ingest_rejects_duplicate_artifact_paths_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-session.md").write_text("artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """schema_version: 1
+bundle_id: duplicate-path-demo
+title: Duplicate Path Demo
+artifacts:
+  - path: exports/01-session.md
+    id: first-session
+  - path: exports/01-session.md
+    id: second-session
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn(
+                "bundle manifest lists artifact path exports/01-session.md more than once",
+                ingest.stderr,
+            )
+            self.assertFalse((vault_path / "raw" / "01-session.md").exists())
+            self.assertFalse((vault_path / "sources" / "source-exports-01-session.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_bundle_ingest_rejects_unsupported_schema_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-session.md").write_text("artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """schema_version: 2
+bundle_id: future-schema-demo
+title: Future Schema Demo
+artifacts:
+  - path: exports/01-session.md
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "bundle",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn("unsupported source bundle schema_version '2'; expected '1'", ingest.stderr)
+            self.assertFalse((vault_path / "raw" / "01-session.md").exists())
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
@@ -1406,7 +1542,7 @@ sources:
         self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
         self.assertIn("Purpose: prepare an agent", payload["content"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", payload["content"])
-        self.assertEqual(payload["available_reviewed_knowledge_count"], 3)
+        self.assertEqual(payload["available_reviewed_knowledge_count"], 4)
         self.assertEqual(payload["selection"]["included"][0]["selection_status"], "included")
 
         with tempfile.TemporaryDirectory() as tmp:

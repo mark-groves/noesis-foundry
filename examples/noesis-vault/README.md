@@ -23,8 +23,10 @@ For realistic project artifact imports, `ingest bundle` reads a local
 artifact-path order. The test fixture at
 `tests/fixtures/codex-session-bundle` demonstrates a Codex session export
 without requiring network access; imported source notes add flat bundle
-metadata such as `bundle_id`, `bundle_artifact_path`,
-`bundle_manifest_hash`, and `bundle_item_index`.
+metadata such as `bundle_schema_version`, `bundle_id`,
+`bundle_artifact_path`, `bundle_artifact_hash`, `bundle_manifest_hash`, and
+`bundle_item_index`. The v1 manifest contract is documented in
+`docs/source-bundle-schema-v1.md`.
 
 The `agent-memory` dogfood extension models a realistic project-session handoff:
 `source -> evidence -> claim -> review -> synthesis -> reviewed knowledge ->
@@ -41,6 +43,16 @@ starts at `sources/source-noesis-roadmap-docs.md`, promotes
 `stale/stale-noesis-roadmap-plugin-first.md` traceable but excluded from active
 roadmap guidance.
 
+The `project-memory-corpus` continuation extension is a larger multi-source
+chain for future agents expanding this repository's own memory. It starts from
+checked-in repo artifacts and the local Codex session bundle fixture at
+`sources/source-project-memory-corpus-repo-artifacts.md` and
+`sources/source-project-memory-corpus-bundle-fixture.md`, promotes
+`knowledge/reviewed-knowledge-project-memory-corpus-continuation.md`, ends at
+`context/operational-context-project-memory-corpus-continuation.md`, and keeps
+`stale/stale-project-memory-corpus-bulk-import-active-context.md` traceable but
+excluded from active context.
+
 The CLI context composer can scope and budget the active package without
 weakening lifecycle safety:
 
@@ -48,6 +60,7 @@ weakening lifecycle safety:
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile codex-handoff
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope project-memory-corpus --purpose "continue expanding Noesis Foundry project memory"
 PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
 ```
 
@@ -69,8 +82,10 @@ checked with:
 ```bash
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-agent-memory-dogfood --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-roadmap-phase-orchestration --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis trace reviewed-knowledge-project-memory-corpus-continuation --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --purpose "continue Noesis Foundry project work"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile codex-handoff
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope project-memory-corpus --purpose "continue expanding Noesis Foundry project memory"
 ```
 
 An MCP client should follow the same lifecycle through `noesis_ingest_source`
@@ -98,6 +113,8 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
   context package for agent-memory work.
 - `context/operational-context-noesis-roadmap-phase-orchestration.md` - a
   scoped context package for next-phase Noesis roadmap work.
+- `context/operational-context-project-memory-corpus-continuation.md` - a
+  scoped continuation package for expanding the project-memory corpus.
 
 The CLI review workbench mirrors the Obsidian view without becoming canonical
 storage:

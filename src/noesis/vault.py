@@ -34,6 +34,32 @@ CONTRACT_VERSION = "1"
 CONTRACT_KIND = "vault"
 CONTRACT_SOURCE_OF_TRUTH = "markdown-flat-yaml"
 NOESIS_VERSION = "0.1.0"
+SOURCE_BUNDLE_SCHEMA_VERSION = "1"
+SOURCE_BUNDLE_SCHEMA_KIND = "noesis-source-bundle"
+SOURCE_BUNDLE_REQUIRED_ARTIFACT_FIELDS = {"path"}
+SOURCE_BUNDLE_TOP_LEVEL_FIELDS = {
+    "schema_version",
+    "bundle_id",
+    "title",
+    "source_type",
+    "original_url",
+    "author",
+    "source_date",
+    "artifacts",
+}
+SOURCE_BUNDLE_ARTIFACT_FIELDS = {
+    "path",
+    "id",
+    "title",
+    "slug",
+    "source_type",
+    "original_url",
+    "author",
+    "source_date",
+    "evidence_title",
+    "evidence",
+    "evidence_slug",
+}
 CONTRACT_REQUIRED_PROPERTIES = {
     "noesis_contract",
     "contract_version",
@@ -322,6 +348,7 @@ class SourceCaptureResult:
 class SourceBundleImportResult:
     bundle_id: str
     title: str
+    schema_version: str
     bundle_path: Path
     manifest_path: Path
     manifest_hash: str
@@ -1031,6 +1058,7 @@ def import_source_bundle(
     manifest_path = resolve_bundle_manifest(bundle_path, manifest_name)
     manifest = read_source_bundle_manifest(manifest_path)
     bundle_root = manifest_path.parent.resolve()
+    schema_version = source_bundle_schema_version(manifest)
     bundle_title = manifest_text(manifest, "title", default=title_from_source_path(bundle_root))
     bundle_id = slugify(manifest_text(manifest, "bundle_id", default=bundle_title))
     bundle_source_type = manifest_text(manifest, "source_type", default="project-artifact-bundle")
@@ -1046,13 +1074,23 @@ def import_source_bundle(
 
     manifest_hash = file_content_hash(manifest_path)
     parsed_items: list[tuple[str, int, Path, dict[str, Any]]] = []
+    seen_artifact_paths: dict[str, int] = {}
     for manifest_index, entry in enumerate(artifacts, start=1):
         item = normalize_bundle_artifact(entry, manifest_index)
         artifact_rel = Path(manifest_text(item, "path"))
         artifact_path = resolve_bundle_artifact(bundle_root, artifact_rel)
+        artifact_key = artifact_rel.as_posix()
+        if artifact_key in seen_artifact_paths:
+            previous_index = seen_artifact_paths[artifact_key]
+            raise ValueError(
+                "bundle manifest lists artifact path "
+                f"{artifact_key} more than once at indexes {previous_index} and {manifest_index}"
+            )
+        seen_artifact_paths[artifact_key] = manifest_index
         parsed_items.append((artifact_rel.as_posix(), manifest_index, artifact_path, item))
 
     prepared_items: list[dict[str, Any]] = []
+    seen_item_ids: dict[str, str] = {}
     for bundle_item_index, (artifact_rel, manifest_index, artifact_path, item) in enumerate(
         sorted(parsed_items, key=lambda parsed: (parsed[0], parsed[1])),
         start=1,
@@ -1073,18 +1111,28 @@ def import_source_bundle(
         source_date = manifest_text(item, "source_date", default=bundle_source_date)
         if not is_date_like(source_date):
             raise ValueError(f"source_date for bundle artifact {artifact_rel} must be YYYY-MM-DD or unknown")
+        item_id = manifest_text(item, "id", default=source_slug)
+        if item_id in seen_item_ids:
+            previous_artifact = seen_item_ids[item_id]
+            raise ValueError(
+                "bundle manifest item id "
+                f"{item_id!r} is used by both {previous_artifact} and {artifact_rel}"
+            )
+        seen_item_ids[item_id] = artifact_rel
 
         prepared_items.append(
             {
                 "artifact_rel": artifact_rel,
                 "artifact_path": artifact_path,
+                "artifact_hash": file_content_hash(artifact_path),
+                "artifact_size_bytes": artifact_path.stat().st_size,
                 "source_title": source_title,
                 "source_slug": source_slug,
                 "source_type": source_type,
                 "original_url": original_url,
                 "author": author,
                 "source_date": source_date,
-                "item_id": manifest_text(item, "id", default=source_slug),
+                "item_id": item_id,
                 "bundle_item_index": bundle_item_index,
                 "manifest_index": manifest_index,
                 "evidence_title": manifest_optional_text(item, "evidence_title"),
@@ -1097,12 +1145,16 @@ def import_source_bundle(
     for item in prepared_items:
         source_metadata = {
             "import_pipeline": "source-bundle",
+            "bundle_schema": SOURCE_BUNDLE_SCHEMA_KIND,
+            "bundle_schema_version": schema_version,
             "bundle_id": bundle_id,
             "bundle_title": bundle_title,
             "bundle_path": bundle_root.as_posix(),
             "bundle_manifest_path": manifest_path.as_posix(),
             "bundle_manifest_hash": manifest_hash,
             "bundle_artifact_path": item["artifact_rel"],
+            "bundle_artifact_hash": item["artifact_hash"],
+            "bundle_artifact_size_bytes": item["artifact_size_bytes"],
             "bundle_item_id": item["item_id"],
             "bundle_item_index": item["bundle_item_index"],
             "bundle_manifest_index": item["manifest_index"],
@@ -1146,6 +1198,7 @@ def import_source_bundle(
     return SourceBundleImportResult(
         bundle_id=bundle_id,
         title=bundle_title,
+        schema_version=schema_version,
         bundle_path=bundle_root,
         manifest_path=manifest_path,
         manifest_hash=manifest_hash,
@@ -1333,11 +1386,23 @@ def read_source_bundle_manifest(manifest_path: Path) -> dict[str, Any]:
     if not isinstance(manifest, dict):
         raise ValueError("source bundle manifest must be a YAML mapping")
     for key, value in manifest.items():
+        if key not in SOURCE_BUNDLE_TOP_LEVEL_FIELDS:
+            raise ValueError(f"bundle manifest field {key!r} is not part of source bundle schema v1")
         if key == "artifacts":
             continue
         if isinstance(value, (dict, list)):
             raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
     return manifest
+
+
+def source_bundle_schema_version(manifest: dict[str, Any]) -> str:
+    schema_version = manifest_text(manifest, "schema_version", default=SOURCE_BUNDLE_SCHEMA_VERSION)
+    if schema_version != SOURCE_BUNDLE_SCHEMA_VERSION:
+        raise ValueError(
+            "unsupported source bundle schema_version "
+            f"{schema_version!r}; expected {SOURCE_BUNDLE_SCHEMA_VERSION!r}"
+        )
+    return schema_version
 
 
 def normalize_bundle_artifact(entry: Any, manifest_index: int) -> dict[str, Any]:
@@ -1346,9 +1411,14 @@ def normalize_bundle_artifact(entry: Any, manifest_index: int) -> dict[str, Any]
     if not isinstance(entry, dict):
         raise ValueError(f"bundle artifact #{manifest_index} must be a path string or mapping")
     for key, value in entry.items():
+        if key not in SOURCE_BUNDLE_ARTIFACT_FIELDS:
+            raise ValueError(
+                f"bundle artifact #{manifest_index} field {key!r} is not part of source bundle schema v1"
+            )
         if isinstance(value, (dict, list)):
             raise ValueError(f"bundle artifact #{manifest_index} field {key!r} must be a scalar value")
-    manifest_text(entry, "path")
+    for key in SOURCE_BUNDLE_REQUIRED_ARTIFACT_FIELDS:
+        manifest_text(entry, key)
     return entry
 
 
