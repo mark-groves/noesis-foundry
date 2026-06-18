@@ -2462,8 +2462,7 @@ views:
     filters:
       and:
         - review_state == "approved" || review_state == "reviewed"
-        - type != "review"
-        - type != "operational-context"
+        - type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"
     groupBy:
       property: type
       direction: ASC
@@ -2527,7 +2526,7 @@ views:
 """,
         Path("_bases/traceability-workbench.base"): """filters:
   and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
     - noesis_id != null
 views:
   - type: table
@@ -2584,7 +2583,7 @@ views:
     name: Context exclusions and superseded memory
     filters:
       and:
-        - excluded_memory != null || superseded_by != null || status == "stale"
+        - excluded_memory != null || superseded_by != null || status == "stale" || status == "archived" || lifecycle_stage == "archive"
     groupBy:
       property: lifecycle_stage
       direction: ASC

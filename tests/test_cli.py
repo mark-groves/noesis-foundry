@@ -413,7 +413,10 @@ class NoesisCliTests(unittest.TestCase):
         scheduled = next(view for view in base["views"] if view["name"] == "Due and scheduled reviews")
         audit_gaps = next(view for view in base["views"] if view["name"] == "Audit trail gaps")
         self.assertIn('review_state != "approved"', open_queue["filters"]["and"])
-        self.assertIn('type != "operational-context"', audit_gaps["filters"]["and"])
+        self.assertIn(
+            'type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"',
+            audit_gaps["filters"]["and"],
+        )
         self.assertEqual(
             scheduled["filters"]["and"],
             ["next_review != null", 'review_state != "none"', 'type != "review"'],
@@ -453,9 +456,12 @@ class NoesisCliTests(unittest.TestCase):
         context_exclusions = next(
             view for view in base["views"] if view["name"] == "Context exclusions and superseded memory"
         )
+        self.assertIn('file.inFolder("archive/history")', base["filters"]["and"][0])
         self.assertEqual(
             context_exclusions["filters"]["and"],
-            ['excluded_memory != null || superseded_by != null || status == "stale"'],
+            [
+                'excluded_memory != null || superseded_by != null || status == "stale" || status == "archived" || lifecycle_stage == "archive"'
+            ],
         )
 
         with tempfile.TemporaryDirectory() as tmp:
