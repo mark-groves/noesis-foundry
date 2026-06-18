@@ -13,6 +13,7 @@ reviewed_at: 2026-06-18
 reviewed_notes:
   - "[[evidence-project-memory-corpus-contract]]"
   - "[[evidence-project-memory-corpus-import-fixture]]"
+  - "[[evidence-project-memory-corpus-review-gate]]"
   - "[[claim-project-memory-corpus-continuation]]"
   - "[[synthesis-project-memory-corpus-continuation]]"
 decision: approved
@@ -35,6 +36,7 @@ approved
 
 - [[evidence-project-memory-corpus-contract]]
 - [[evidence-project-memory-corpus-import-fixture]]
+- [[evidence-project-memory-corpus-review-gate]]
 - [[claim-project-memory-corpus-continuation]]
 - [[synthesis-project-memory-corpus-continuation]]
 
@@ -42,8 +44,10 @@ approved
 
 The repo-artifact evidence is grounded in checked-in README, architecture, and
 skill documentation. The import-fixture evidence is grounded in the checked-in
-Codex session bundle fixture. The claim and synthesis preserve both sources and
-keep raw imported artifacts out of active context until reviewed.
+session bundle fixture. The review-gate evidence is grounded in checked-in
+review and stale-memory examples. The claim and synthesis preserve these sources
+and keep raw imported artifacts and unreviewed evidence drafts out of active
+context until reviewed.
 
 ## Changes Requested
 
