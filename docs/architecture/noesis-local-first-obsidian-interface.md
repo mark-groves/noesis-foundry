@@ -1,9 +1,9 @@
 # Noesis Local-First Obsidian Interface
 
-Status: implemented CLI/MCP baseline with future adapter notes
+Status: implemented CLI/MCP/portable-skill adapter baseline
 Date: 2026-05-29
 Updated: 2026-06-13
-Scope: current local-first Noesis vault contract, CLI, MCP server, and deferred adapters
+Scope: current local-first Noesis vault contract, CLI, MCP server, portable skills, and deferred app adapters
 
 ## Starting Point
 
@@ -18,9 +18,9 @@ while leaving agents a stable file contract they can use without opening
 Obsidian.
 
 The durable source of truth is the vault: ordinary Markdown files with YAML
-properties. Obsidian is the human workbench. The CLI and MCP server are
-implemented agent-facing adapters over the same files. Portable Agent Skills
-remain a future adapter layer unless implemented outside this repo.
+properties. Obsidian is the human workbench. The CLI, MCP server, and
+repo-local portable Agent Skills are implemented agent-facing adapters over the
+same files.
 The V1 contract spine is a root-level `noesis.vault.yaml` metadata file, so
 compatibility can be checked without rewriting every Markdown note.
 
@@ -54,7 +54,7 @@ Agent integration paths:
 
 - direct file access through the implemented local CLI commands;
 - the implemented MCP server that exposes curated vault operations to agents;
-- future portable Agent Skills that describe the lifecycle workflow and can
+- repo-local portable Agent Skills that describe the lifecycle workflow and can
   fall back to direct Markdown edits;
 - optional Obsidian app adapters, such as REST or active-note integrations,
   when the product needs the currently open note or interactive UI state.
@@ -173,13 +173,13 @@ flowchart LR
   L["Vault workflow library\nparser, validator, lineage, lifecycle writes"] --> V
   CLI["noesis CLI"] --> L
   MCP["Noesis MCP server"] --> L
-  Skills["Future portable Agent Skills"] --> CLI
+  Skills["Portable Agent Skills"] --> CLI
   Skills --> V
   Agents["Coding and research agents"] --> MCP
   Agents --> Skills
 ```
 
-The vault is the contract. Obsidian, CLI, MCP, and future skills are
+The vault is the contract. Obsidian, CLI, MCP, and portable skills are
 replaceable interfaces over that contract.
 
 ### CLI Boundary
@@ -226,7 +226,7 @@ Current tools:
 | `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
 | `noesis_get_review_queue` | Return notes that need human or agent review. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
-| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes. The `codex-handoff` profile returns the same structured handoff fields as CLI JSON for launching separate agent threads. |
+| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes, with optional profile-specific formatting for agent handoffs. |
 | `noesis_ingest_source` | Copy immutable raw source material and create a linked source note. |
 | `noesis_import_source_bundle` | Import a local manifest-driven artifact bundle into source notes and optional evidence drafts. |
 | `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
@@ -251,16 +251,17 @@ tool responses are structured objects rather than CLI text.
 
 ### Portable Agent Skills
 
-Portable skills are not part of the implemented repo surface yet. When added,
-they should teach agents how to use the vault contract. They should prefer the
-CLI or MCP tools when available, but remain useful by directly reading and
-editing Markdown if those adapters are unavailable.
+Repo-local portable skills are part of the implemented adapter surface. They
+teach agents how to use the vault contract while keeping the contract in
+Markdown and flat YAML. They should prefer the CLI or MCP tools when available,
+but remain useful by directly reading and editing Markdown if those adapters
+are unavailable.
 Use the Agent Skills pattern of a `SKILL.md` file with YAML frontmatter and
 progressively disclosed instructions, as described in
 [Microsoft's Agent Skills documentation](https://learn.microsoft.com/en-us/agent-framework/agents/skills)
 and compatible SKILL.md ecosystems.
 
-Future skill set:
+Implemented skill set:
 
 | Skill | Trigger | Workflow |
 | --- | --- | --- |
