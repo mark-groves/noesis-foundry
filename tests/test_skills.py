@@ -33,6 +33,7 @@ class SkillPackageTests(unittest.TestCase):
                 self.assertIn("Use when", frontmatter["description"])
                 self.assertLessEqual(set(frontmatter), {"name", "description", "license", "allowed-tools", "metadata"})
 
+                self.assertIn("noesis vault validate", body)
                 self.assertIn("PYTHONPATH=src python -m noesis vault validate", body)
                 self.assertIn("portable Agent Skill", body)
                 self.assertIn("Fallback", body)
@@ -42,10 +43,18 @@ class SkillPackageTests(unittest.TestCase):
                 self.assertIn("README", body)
                 self.assertNotIn("## Required Properties", body)
 
+                concrete_example = body.split("## Concrete Example", 1)[1]
+                self.assertIn("noesis ", concrete_example)
+                self.assertNotIn("PYTHONPATH=src python -m noesis", concrete_example)
+
     def test_skill_readme_links_to_all_skills(self) -> None:
         readme = (SKILLS / "README.md").read_text(encoding="utf-8")
         for skill_name in ["noesis-ingest", "noesis-claim-review", "noesis-context"]:
             self.assertIn(f"./{skill_name}/SKILL.md", readme)
+
+        self.assertIn("noesis vault validate examples/noesis-vault", readme)
+        self.assertIn("From a source checkout without installation", readme)
+        self.assertIn("PYTHONPATH=src python -m noesis", readme)
 
     @staticmethod
     def _read_skill(path: Path) -> tuple[dict[str, object], str]:
