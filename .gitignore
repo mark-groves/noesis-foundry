@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.egg-info/
+
+# Local Obsidian session state for the example vault.
+examples/noesis-vault/.obsidian/workspace.json
