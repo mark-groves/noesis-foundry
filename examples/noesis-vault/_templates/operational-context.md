@@ -8,6 +8,8 @@ review_state: reviewed
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 syntheses:
   - "[[<synthesis-note>]]"
 reviewed_knowledge:

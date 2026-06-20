@@ -109,3 +109,19 @@ Import with evidence drafts and structured output:
 ```bash
 PYTHONPATH=src python -m noesis ingest bundle --vault <vault> <bundle> --evidence-drafts --json
 ```
+
+## Coding-Agent Session Imports
+
+Coding-agent and Codex session exports use the same source-bundle schema. Put
+the raw export files beside a `noesis-bundle.yaml` manifest, set descriptive
+session-oriented `source_type` values such as `codex-session-export` or
+`codex-session-metadata`, and import through the session adapter:
+
+```bash
+PYTHONPATH=src python -m noesis ingest session --vault <vault> <session-export> --evidence-drafts --json
+```
+
+The session command is a first-class CLI/library path over source-bundle
+semantics. It does not introduce a second canonical schema; imported source
+notes still preserve `import_pipeline: source-bundle`, bundle provenance fields,
+raw artifacts, hashes, duplicate handling, and optional evidence drafts.

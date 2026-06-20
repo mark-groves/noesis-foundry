@@ -8,6 +8,8 @@ review_state: reviewed
 confidence: high
 created: 2026-06-15
 updated: 2026-06-15
+memory_space: noesis-foundry-project
+memory_domain: project
 sources:
   - "[[source-noesis-roadmap-docs]]"
 evidence:

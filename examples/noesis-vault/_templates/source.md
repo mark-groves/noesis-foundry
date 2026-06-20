@@ -8,6 +8,8 @@ review_state: none
 confidence: unknown
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 source_type: unknown
 raw_path: "../raw/<raw_filename>"
 original_url: unknown

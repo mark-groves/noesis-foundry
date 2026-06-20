@@ -8,6 +8,8 @@ review_state: ready-for-review
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 sources:
   - "[[<source-note>]]"
 evidence:

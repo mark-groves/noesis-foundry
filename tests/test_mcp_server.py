@@ -71,16 +71,19 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             sorted(server.tools),
             [
                 "noesis_approve_review",
+                "noesis_audit_context_freshness",
                 "noesis_build_context",
                 "noesis_create_claim_draft",
                 "noesis_create_evidence_draft",
                 "noesis_create_synthesis_draft",
+                "noesis_get_knowledge_gaps",
                 "noesis_get_note",
                 "noesis_get_review_queue",
                 "noesis_get_review_summary",
                 "noesis_import_source_bundle",
                 "noesis_ingest_source",
                 "noesis_lint_vault",
+                "noesis_list_memory_spaces",
                 "noesis_mark_memory_stale",
                 "noesis_promote_synthesis",
                 "noesis_renew_review",
@@ -111,6 +114,21 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertEqual(lint["complete"], True)
         self.assertEqual(lint["ready_for_cli_mcp"], True)
 
+        spaces = handlers.list_memory_spaces()
+        self.assertTrue(spaces["ok"], spaces)
+        spaces_by_label = {entry["label"]: entry for entry in spaces["spaces"]}
+        self.assertEqual(spaces_by_label["noesis-foundry-codebase"]["domain_counts"], {"codebase": 2})
+        self.assertEqual(spaces_by_label["noesis-foundry-project"]["current_reviewed_knowledge_count"], 2)
+        self.assertGreater(spaces_by_label["default"]["note_count"], 0)
+
+        search = handlers.search_notes(memory_space="noesis-foundry-codebase")
+        self.assertTrue(search["ok"], search)
+        search_ids = [note["noesis_id"] for note in search["notes"]]
+        self.assertIn("reviewed-knowledge-agent-memory-dogfood", search_ids)
+        self.assertIn("context-agent-memory-dogfood", search_ids)
+        self.assertNotIn("reviewed-knowledge-project-memory-corpus-continuation", search_ids)
+        self.assertEqual(search["memory_filter"]["memory_space"], "noesis-foundry-codebase")
+
         queue = handlers.get_review_queue()
         self.assertTrue(queue["ok"], queue)
         queue_ids = [note["noesis_id"] for note in queue["notes"]]
@@ -140,6 +158,26 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertEqual(summary["audit_gap_count"], 0)
         self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["due_notes"]])
         self.assertIn("stale-custom-plugin-first", [note["noesis_id"] for note in summary["overdue_notes"]])
+
+        gaps = handlers.get_knowledge_gaps(gap_kind="contradiction")
+        self.assertTrue(gaps["ok"], gaps)
+        self.assertEqual(gaps["count"], 1)
+        gap = gaps["notes"][0]
+        self.assertEqual(gap["noesis_id"], "knowledge-gap-noesis-roadmap-plugin-tension")
+        self.assertEqual(gap["gap_kind"], "contradiction")
+        self.assertEqual(gap["gap_state"], "open")
+        self.assertEqual(gap["current"], True)
+        self.assertEqual(
+            [source["noesis_id"] for source in gap["support"]["sources"]],
+            ["source-noesis-readme", "source-noesis-roadmap-docs"],
+        )
+        self.assertEqual(
+            [contradiction["noesis_id"] for contradiction in gap["support"]["contradicts"]],
+            ["stale-noesis-roadmap-plugin-first"],
+        )
+        invalid_gap_filter = handlers.get_knowledge_gaps(gap_kind="ambiguity")
+        self.assertEqual(invalid_gap_filter["ok"], False)
+        self.assertIn("gap_kind must be one of", invalid_gap_filter["error"])
 
         workbench = handlers.show_review("claim-useful-memory-requires-lifecycle", due_on="2026-06-13")
         self.assertTrue(workbench["ok"], workbench)
@@ -213,6 +251,18 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertIn("validation_commands", profiled_context["handoff"])
         self.assertIn("lifecycle_exclusions", profiled_context["handoff"])
 
+        codebase_context = handlers.build_context(scope="agent-memory", memory_domain="codebase")
+        self.assertTrue(codebase_context["ok"], codebase_context)
+        self.assertEqual(codebase_context["memory_filter"], {"memory_space": None, "memory_domain": "codebase"})
+        self.assertEqual(
+            [note["noesis_id"] for note in codebase_context["selection"]["included"]],
+            ["reviewed-knowledge-agent-memory-dogfood"],
+        )
+        self.assertIn(
+            "reviewed-knowledge-noesis-roadmap-phase-orchestration",
+            [note["noesis_id"] for note in codebase_context["selection"]["memory_filtered_out"]],
+        )
+
         handoff_context = handlers.build_context(
             scope="noesis-roadmap",
             purpose="orchestrate next Noesis phases",
@@ -262,6 +312,17 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             codex_handoff_context["content"],
         )
 
+        audit = handlers.audit_context_freshness(due_on="2026-06-29")
+        self.assertTrue(audit["ok"], audit)
+        self.assertEqual(audit["summary"]["context_count"], 4)
+        self.assertGreaterEqual(audit["summary"]["review_needed_count"], 1)
+        audits_by_id = {context["note"]["noesis_id"]: context for context in audit["contexts"]}
+        first_context = audits_by_id["context-first-cli-mcp-workflow"]
+        self.assertEqual(first_context["review_schedule"]["status"], "due")
+        self.assertEqual(first_context["verdict"], "needs_review")
+        self.assertEqual(first_context["reviewed_knowledge"][0]["state"], "current")
+        self.assertEqual(first_context["excluded_memory"][0]["state"], "superseded")
+
         invalid_profile = handlers.build_context(profile="missing-profile")
         self.assertFalse(invalid_profile["ok"])
         self.assertIn("profile must be one of", invalid_profile["error"])
@@ -308,6 +369,10 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         summary = handlers.get_review_summary(due_on="not-a-date")
         self.assertEqual(summary["ok"], False)
         self.assertEqual(summary["error"], "due_on must be YYYY-MM-DD")
+
+        context_audit = handlers.audit_context_freshness(due_on="not-a-date")
+        self.assertEqual(context_audit["ok"], False)
+        self.assertEqual(context_audit["error"], "due_on must be YYYY-MM-DD")
 
         show = handlers.show_review("source-noesis-readme", due_on="not-a-date")
         self.assertEqual(show["ok"], False)
@@ -581,7 +646,7 @@ None.
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "vault validation failed")
-        self.assertEqual(result["issue_count"], 16)
+        self.assertEqual(result["issue_count"], 17)
         self.assertEqual(result["compatible"], False)
         self.assertEqual(result["ready_for_cli_mcp"], False)
         self.assertEqual(result["contract"]["supported"], False)

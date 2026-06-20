@@ -9,11 +9,17 @@ import re
 from typing import Any
 
 from .vault import (
+    ContextFreshnessAudit,
+    ContextFreshnessReport,
+    ContextReferenceAudit,
     ContextLineageSummary,
     ContextPackage,
     ContextSelection,
     CreatedNote,
+    GAP_KINDS,
+    GAP_STATES,
     LIFECYCLE_STAGES,
+    MEMORY_DOMAINS,
     Note,
     REVIEW_STATES,
     SOURCE_BUNDLE_SCHEMA_KIND,
@@ -26,6 +32,7 @@ from .vault import (
     import_source_bundle,
     ingest_source,
     is_excluded,
+    knowledge_gap_current,
     mark_memory_stale,
     note_review_due,
     parse_review_date,
@@ -71,9 +78,16 @@ class NoesisMcpHandlers:
         lifecycle_stage: str | None = None,
         status: str | None = None,
         review_state: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         limit: int = 20,
     ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
+        memory_error = memory_filter_error(vault, memory_space=memory_space, memory_domain=memory_domain)
+        if memory_error:
+            return memory_error
+        memory_space = memory_space.strip() if memory_space is not None else None
+        memory_domain = memory_domain.strip() if memory_domain is not None else None
         needle = query.casefold().strip()
         matches: list[Note] = []
         for note in vault.notes:
@@ -84,6 +98,10 @@ class NoesisMcpHandlers:
             if status and note.status != status:
                 continue
             if review_state and note.review_state != review_state:
+                continue
+            if memory_space is not None and note.memory_space != memory_space:
+                continue
+            if memory_domain is not None and note.memory_domain != memory_domain:
                 continue
             haystack = "\n".join(
                 [
@@ -102,6 +120,7 @@ class NoesisMcpHandlers:
         return {
             "ok": True,
             "vault_path": str(vault.root),
+            **memory_filter_payload(memory_space=memory_space, memory_domain=memory_domain),
             "count": min(len(matches), bounded_limit),
             "total_matches": len(matches),
             "notes": [note_summary(note, vault.root) for note in matches[:bounded_limit]],
@@ -120,6 +139,8 @@ class NoesisMcpHandlers:
         review_state: str | None = None,
         note_type: str | None = None,
         lifecycle_stage: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         due: bool = False,
         due_on: str | None = None,
     ) -> JsonObject:
@@ -132,6 +153,8 @@ class NoesisMcpHandlers:
             review_state=review_state,
             note_type=note_type,
             lifecycle_stage=lifecycle_stage,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
         )
         if filter_error:
             return filter_error
@@ -141,6 +164,8 @@ class NoesisMcpHandlers:
                 review_state=review_state,
                 note_type=note_type,
                 lifecycle_stage=lifecycle_stage,
+                memory_space=memory_space,
+                memory_domain=memory_domain,
                 due=due_filter,
                 due_on=due_on,
             )
@@ -155,21 +180,83 @@ class NoesisMcpHandlers:
                 review_state=review_state,
                 note_type=note_type,
                 lifecycle_stage=lifecycle_stage,
+                memory_space=memory_space,
+                memory_domain=memory_domain,
                 due=due_filter,
                 due_on=due_on,
             ),
         }
 
-    def get_review_summary(self, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+    def get_review_summary(
+        self,
+        vault_path: str | None = None,
+        due_on: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
+    ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
+        filter_error = memory_filter_error(vault, memory_space=memory_space, memory_domain=memory_domain)
+        if filter_error:
+            return filter_error
         try:
-            summary = vault.review_summary(due_on=due_on)
+            summary = vault.review_summary(
+                due_on=due_on,
+                memory_space=memory_space,
+                memory_domain=memory_domain,
+            )
         except ValueError as exc:
             return review_error(vault, exc)
-        return review_summary_to_dict(vault, summary, due_on=due_on)
+        return review_summary_to_dict(
+            vault,
+            summary,
+            due_on=due_on,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
+        )
+
+    def get_knowledge_gaps(
+        self,
+        vault_path: str | None = None,
+        gap_kind: str | None = None,
+        gap_state: str | None = None,
+        include_resolved: bool = False,
+        due: bool = False,
+        due_on: str | None = None,
+    ) -> JsonObject:
+        vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
+        filter_error = knowledge_gap_filter_error(vault, gap_kind=gap_kind, gap_state=gap_state)
+        if filter_error:
+            return filter_error
+        due_filter = due or due_on is not None
+        try:
+            gaps = vault.knowledge_gaps(
+                gap_kind=gap_kind,
+                gap_state=gap_state,
+                include_resolved=include_resolved,
+                due=due_filter,
+                due_on=due_on,
+            )
+        except ValueError as exc:
+            return review_error(vault, exc)
+        return {
+            "ok": True,
+            "vault_path": str(vault.root),
+            "count": len(gaps),
+            "notes": [knowledge_gap_summary(note, vault, due_on=due_on) for note in gaps],
+            "filters": {
+                "gap_kind": gap_kind,
+                "gap_state": gap_state,
+                "include_resolved": include_resolved,
+                "due": due_filter,
+                "due_on": due_on,
+            },
+        }
 
     def show_review(self, note: str, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
@@ -197,6 +284,8 @@ class NoesisMcpHandlers:
         self,
         vault_path: str | None = None,
         scope: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
@@ -210,6 +299,8 @@ class NoesisMcpHandlers:
             package = compose_context(
                 vault,
                 scope=scope,
+                memory_space=memory_space,
+                memory_domain=memory_domain,
                 purpose=purpose,
                 limit=limit,
                 max_chars=max_chars,
@@ -221,6 +312,7 @@ class NoesisMcpHandlers:
             "ok": True,
             "vault_path": str(vault.root),
             "scope": package.scope,
+            **context_memory_filter_payload(package),
             "purpose": package.purpose,
             "profile": package.profile,
             "profile_description": package.profile_description,
@@ -237,6 +329,17 @@ class NoesisMcpHandlers:
             "handoff": context_handoff_payload(package, vault.root),
             "content": package.content,
         }
+
+    def audit_context_freshness(self, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+        vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
+        try:
+            report = vault.context_freshness_audit(due_on=due_on)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "vault_path": str(vault.root)}
+        return context_freshness_report_to_dict(vault, report)
 
     def ingest_source(
         self,
@@ -438,6 +541,8 @@ class NoesisMcpHandlers:
         self,
         vault_path: str | None = None,
         scope: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
@@ -450,6 +555,8 @@ class NoesisMcpHandlers:
             write_context_note,
             self.resolve_vault(vault_path),
             scope=scope,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             purpose=purpose,
             limit=limit,
             max_chars=max_chars,
@@ -473,6 +580,13 @@ class NoesisMcpHandlers:
             "type_counts": dict(sorted(type_counts.items())),
             "review_state_counts": dict(sorted(review_counts.items())),
         }
+
+    def list_memory_spaces(self, vault_path: str | None = None) -> JsonObject:
+        vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
+        return {"ok": True, "vault_path": str(vault.root), **vault.memory_spaces()}
 
     def resolve_vault(self, vault_path: str | None) -> Path:
         if vault_path:
@@ -512,9 +626,11 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         lifecycle_stage: str | None = None,
         status: str | None = None,
         review_state: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         limit: int = 20,
     ) -> JsonObject:
-        """Search Noesis notes by text plus optional lifecycle metadata filters."""
+        """Search Noesis notes by text plus optional lifecycle and memory-space filters."""
         return handlers.search_notes(
             query=query,
             vault_path=vault_path,
@@ -522,6 +638,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             lifecycle_stage=lifecycle_stage,
             status=status,
             review_state=review_state,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             limit=limit,
         )
 
@@ -536,23 +654,56 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         review_state: str | None = None,
         note_type: str | None = None,
         lifecycle_stage: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         due: bool = False,
         due_on: str | None = None,
     ) -> JsonObject:
-        """List notes that still need review, with optional metadata and due-date filters."""
+        """List notes that still need review, with optional metadata, memory-space, and due-date filters."""
         return handlers.get_review_queue(
             vault_path=vault_path,
             review_state=review_state,
             note_type=note_type,
             lifecycle_stage=lifecycle_stage,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             due=due,
             due_on=due_on,
         )
 
     @server.tool()
-    def noesis_get_review_summary(vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
+    def noesis_get_review_summary(
+        vault_path: str | None = None,
+        due_on: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
+    ) -> JsonObject:
         """Summarize review states and scheduled next-review items."""
-        return handlers.get_review_summary(vault_path=vault_path, due_on=due_on)
+        return handlers.get_review_summary(
+            vault_path=vault_path,
+            due_on=due_on,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
+        )
+
+    @server.tool()
+    def noesis_get_knowledge_gaps(
+        vault_path: str | None = None,
+        gap_kind: str | None = None,
+        gap_state: str | None = None,
+        include_resolved: bool = False,
+        due: bool = False,
+        due_on: str | None = None,
+    ) -> JsonObject:
+        """List unresolved questions, weak areas, and contradictions with source lineage."""
+        return handlers.get_knowledge_gaps(
+            vault_path=vault_path,
+            gap_kind=gap_kind,
+            gap_state=gap_state,
+            include_resolved=include_resolved,
+            due=due,
+            due_on=due_on,
+        )
 
     @server.tool()
     def noesis_show_review(note: str, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
@@ -568,6 +719,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
     def noesis_build_context(
         vault_path: str | None = None,
         scope: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
@@ -577,11 +730,21 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         return handlers.build_context(
             vault_path=vault_path,
             scope=scope,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             purpose=purpose,
             limit=limit,
             max_chars=max_chars,
             profile=profile,
         )
+
+    @server.tool()
+    def noesis_audit_context_freshness(
+        vault_path: str | None = None,
+        due_on: str | None = None,
+    ) -> JsonObject:
+        """Audit operational context freshness, lifecycle exclusions, and regeneration needs."""
+        return handlers.audit_context_freshness(vault_path=vault_path, due_on=due_on)
 
     @server.tool()
     def noesis_ingest_source(
@@ -761,6 +924,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
     def noesis_write_context(
         vault_path: str | None = None,
         scope: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         purpose: str | None = None,
         limit: int | None = None,
         max_chars: int | None = None,
@@ -773,6 +938,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         return handlers.write_context(
             vault_path=vault_path,
             scope=scope,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             purpose=purpose,
             limit=limit,
             max_chars=max_chars,
@@ -781,6 +948,11 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             slug=slug,
             next_review=next_review,
         )
+
+    @server.tool()
+    def noesis_list_memory_spaces(vault_path: str | None = None) -> JsonObject:
+        """Report memory spaces and domains in the vault."""
+        return handlers.list_memory_spaces(vault_path=vault_path)
 
     @server.resource("noesis://vault/summary")
     def noesis_vault_summary() -> JsonObject:
@@ -846,6 +1018,41 @@ def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) 
     data["impact"] = review_impact_counts(vault, note)
     data["lifecycle_safety"] = review_lifecycle_safety(note)
     return data
+
+
+def knowledge_gap_summary(note: Note, vault: Vault, *, due_on: str | None = None) -> JsonObject:
+    data = note_summary(note, vault.root)
+    support = {
+        key: [note_summary(support_note, vault.root) for support_note in notes]
+        for key, notes in vault.support_notes_for(note).items()
+    }
+    data.update(
+        {
+            "gap_kind": json_safe(note.metadata.get("gap_kind")),
+            "gap_state": json_safe(note.metadata.get("gap_state")),
+            "current": knowledge_gap_current(note),
+            "review_schedule": review_due_details(note, due_on=due_on),
+            "support": support,
+            "support_counts": {key: len(notes) for key, notes in support.items()},
+        }
+    )
+    return data
+
+
+def knowledge_gap_filter_error(vault: Vault, *, gap_kind: str | None, gap_state: str | None) -> JsonObject | None:
+    if gap_kind is not None and gap_kind not in GAP_KINDS:
+        return {
+            "ok": False,
+            "error": f"gap_kind must be one of {', '.join(sorted(GAP_KINDS))}",
+            "vault_path": str(vault.root),
+        }
+    if gap_state is not None and gap_state not in GAP_STATES:
+        return {
+            "ok": False,
+            "error": f"gap_state must be one of {', '.join(sorted(GAP_STATES))}",
+            "vault_path": str(vault.root),
+        }
+    return None
 
 
 def review_due_details(note: Note, *, due_on: str | None = None) -> JsonObject:
@@ -950,7 +1157,7 @@ def review_triage(
 
 
 def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> JsonObject:
-    return {
+    payload = {
         "included": [context_selection_payload(selection, vault_root) for selection in package.included],
         "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
         "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
@@ -959,6 +1166,22 @@ def context_package_selection_payload(package: ContextPackage, vault_root: Path)
             context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
         ],
         "lifecycle_exclusion_summary": lifecycle_exclusion_summary(package.lifecycle_excluded),
+    }
+    if package.memory_space or package.memory_domain or package.memory_filtered_out:
+        payload["memory_filtered_out"] = [
+            context_selection_payload(selection, vault_root) for selection in package.memory_filtered_out
+        ]
+    return payload
+
+
+def context_memory_filter_payload(package: ContextPackage) -> JsonObject:
+    if not package.memory_space and not package.memory_domain:
+        return {}
+    return {
+        "memory_filter": {
+            "memory_space": package.memory_space,
+            "memory_domain": package.memory_domain,
+        }
     }
 
 
@@ -1008,7 +1231,7 @@ def context_lineage_summary_payload(summary: ContextLineageSummary, vault_root: 
 
 
 def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonObject:
-    return {
+    payload = {
         "task_purpose": package.handoff.task_purpose,
         "assumptions": list(package.handoff.assumptions),
         "validation_commands": list(package.handoff.validation_commands),
@@ -1037,6 +1260,134 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
             ],
         },
     }
+    if package.memory_space or package.memory_domain or package.memory_filtered_out:
+        payload["memory_filtered_out_reviewed_knowledge"] = [
+            context_selection_payload(selection, vault_root) for selection in package.memory_filtered_out
+        ]
+        payload["selection_provenance"]["memory_filtered_out"] = [
+            context_selection_payload(selection, vault_root) for selection in package.memory_filtered_out
+        ]
+    return payload
+
+
+def context_freshness_report_to_dict(vault: Vault, report: ContextFreshnessReport) -> JsonObject:
+    return {
+        "ok": True,
+        "vault_path": str(vault.root),
+        "due_on": report.due_on.isoformat(),
+        "summary": context_freshness_summary(report.contexts),
+        "contexts": [
+            context_freshness_audit_to_dict(audit, vault.root, due_on=report.due_on)
+            for audit in report.contexts
+        ],
+    }
+
+
+def context_freshness_summary(audits: list[ContextFreshnessAudit]) -> JsonObject:
+    lifecycle_exclusion_summary: dict[str, int] = {
+        "stale": 0,
+        "superseded": 0,
+        "archived": 0,
+        "excluded": 0,
+        "missing": 0,
+        "not_excluded": 0,
+    }
+    context_status_counts: dict[str, int] = {}
+    for audit in audits:
+        context_status_counts[audit.note.status] = context_status_counts.get(audit.note.status, 0) + 1
+        for reference in audit.excluded_memory:
+            lifecycle_exclusion_summary[reference.state] = lifecycle_exclusion_summary.get(reference.state, 0) + 1
+    return {
+        "context_count": len(audits),
+        "trustworthy_count": sum(1 for audit in audits if audit.trustworthy),
+        "review_needed_count": sum(1 for audit in audits if audit.needs_review),
+        "regeneration_needed_count": sum(1 for audit in audits if audit.needs_regeneration),
+        "due_count": sum(1 for audit in audits if audit.schedule_status == "due"),
+        "overdue_count": sum(1 for audit in audits if audit.schedule_status == "overdue"),
+        "invalid_date_count": sum(1 for audit in audits if context_audit_has_invalid_dates(audit)),
+        "support_changed_count": sum(
+            1
+            for audit in audits
+            if any(reference.changed_after_context is True for reference in audit.reviewed_knowledge)
+        ),
+        "context_status_counts": dict(sorted(context_status_counts.items())),
+        "lifecycle_exclusion_summary": dict(sorted(lifecycle_exclusion_summary.items())),
+    }
+
+
+def context_audit_has_invalid_dates(audit: ContextFreshnessAudit) -> bool:
+    if audit.invalid_date_fields:
+        return True
+    return any(reference.invalid_date_fields for reference in [*audit.reviewed_knowledge, *audit.excluded_memory])
+
+
+def context_freshness_audit_to_dict(
+    audit: ContextFreshnessAudit,
+    vault_root: Path,
+    *,
+    due_on: date,
+) -> JsonObject:
+    schedule = review_due_details(audit.note, due_on=due_on)
+    schedule["status"] = audit.schedule_status
+    return {
+        "note": note_summary(audit.note, vault_root),
+        "scope": json_safe(audit.note.metadata.get("scope")),
+        "purpose": json_safe(audit.note.metadata.get("purpose")),
+        "review_schedule": schedule,
+        "verdict": context_freshness_verdict(audit),
+        "trustworthy": audit.trustworthy,
+        "needs_review": audit.needs_review,
+        "needs_regeneration": audit.needs_regeneration,
+        "reasons": list(audit.reasons),
+        "invalid_date_fields": list(audit.invalid_date_fields),
+        "reviewed_knowledge": [
+            context_reference_audit_to_dict(reference, vault_root, due_on=due_on)
+            for reference in audit.reviewed_knowledge
+        ],
+        "excluded_memory": [
+            context_reference_audit_to_dict(reference, vault_root, due_on=due_on)
+            for reference in audit.excluded_memory
+        ],
+        "lifecycle_exclusion_summary": context_reference_state_counts(audit.excluded_memory),
+    }
+
+
+def context_freshness_verdict(audit: ContextFreshnessAudit) -> str:
+    if audit.needs_regeneration:
+        return "needs_regeneration"
+    if audit.needs_review:
+        return "needs_review"
+    return "trustworthy"
+
+
+def context_reference_audit_to_dict(
+    reference: ContextReferenceAudit,
+    vault_root: Path,
+    *,
+    due_on: date,
+) -> JsonObject:
+    note = reference.note
+    return {
+        "relationship": reference.relationship,
+        "ref": reference.ref,
+        "state": reference.state,
+        "reason": reference.reason,
+        "changed_after_context": reference.changed_after_context,
+        "comparison": reference.comparison,
+        "invalid_date_fields": list(reference.invalid_date_fields),
+        "lifecycle_exclusion_kind": (
+            context_lifecycle_exclusion_kind(note) if note is not None and is_excluded(note) else None
+        ),
+        "note": note_summary(note, vault_root) if note is not None else None,
+        "review_schedule": review_due_details(note, due_on=due_on) if note is not None else None,
+    }
+
+
+def context_reference_state_counts(references: list[ContextReferenceAudit]) -> JsonObject:
+    counts: dict[str, int] = {"stale": 0, "superseded": 0, "archived": 0, "excluded": 0}
+    for reference in references:
+        counts[reference.state] = counts.get(reference.state, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def note_to_dict(note: Note, vault_root: Path) -> JsonObject:
@@ -1051,16 +1402,22 @@ def review_filters(
     review_state: str | None = None,
     note_type: str | None = None,
     lifecycle_stage: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     due: bool = False,
     due_on: str | None = None,
 ) -> JsonObject:
-    return {
+    filters: JsonObject = {
         "review_state": review_state,
         "type": note_type,
         "lifecycle_stage": lifecycle_stage,
         "due": due,
         "due_on": due_on,
     }
+    if memory_space is not None or memory_domain is not None:
+        filters["memory_space"] = memory_space
+        filters["memory_domain"] = memory_domain
+    return filters
 
 
 def review_filter_error(
@@ -1069,6 +1426,8 @@ def review_filter_error(
     review_state: str | None = None,
     note_type: str | None = None,
     lifecycle_stage: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
 ) -> JsonObject | None:
     allowed_types = TYPES - {"dashboard"}
     checks = (
@@ -1087,11 +1446,61 @@ def review_filter_error(
                 "value": value,
                 "expected": sorted(allowed),
             }
+    return memory_filter_error(vault, memory_space=memory_space, memory_domain=memory_domain)
+
+
+def memory_filter_error(
+    vault: Vault,
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> JsonObject | None:
+    if memory_space is not None:
+        if not memory_space.strip():
+            return invalid_memory_filter(vault, "memory_space", memory_space, "non-blank slug")
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]*", memory_space.strip()) is None:
+            return invalid_memory_filter(vault, "memory_space", memory_space, "lowercase letters, numbers, and hyphens")
+    if memory_domain is not None and memory_domain not in MEMORY_DOMAINS:
+        expected = ", ".join(sorted(MEMORY_DOMAINS))
+        return invalid_memory_filter(vault, "memory_domain", memory_domain, expected)
     return None
 
 
-def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str | None = None) -> JsonObject:
+def invalid_memory_filter(vault: Vault, field: str, value: str | None, expected: str) -> JsonObject:
     return {
+        "ok": False,
+        "error": f"invalid {field}: {value}; expected {expected}",
+        "vault_path": str(vault.root),
+        "field": field,
+        "value": value,
+        "expected": expected,
+    }
+
+
+def memory_filter_payload(
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> JsonObject:
+    if memory_space is None and memory_domain is None:
+        return {}
+    return {
+        "memory_filter": {
+            "memory_space": memory_space,
+            "memory_domain": memory_domain,
+        }
+    }
+
+
+def review_summary_to_dict(
+    vault: Vault,
+    summary: dict[str, Any],
+    *,
+    due_on: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> JsonObject:
+    payload = {
         "ok": True,
         "vault_path": str(vault.root),
         "pending_count": summary["pending_count"],
@@ -1111,6 +1520,9 @@ def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str
             review_note_summary(note, vault, due_on=due_on) for note in summary["next_review_notes"]
         ],
     }
+    if memory_space is not None or memory_domain is not None:
+        payload["filters"] = {"memory_space": memory_space, "memory_domain": memory_domain}
+    return payload
 
 
 def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on: str | None = None) -> JsonObject:

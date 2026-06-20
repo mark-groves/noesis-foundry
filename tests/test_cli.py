@@ -142,6 +142,22 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(incomplete_payload["ready_for_cli_mcp"], False)
             self.assertIn("requires_noesis", incomplete_payload["issues"][0]["message"])
 
+    def test_vault_spaces_reports_explicit_and_default_memory_spaces(self) -> None:
+        result = run_noesis("vault", "spaces", str(EXAMPLE_VAULT), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["ok"], True)
+        self.assertGreater(payload["unscoped_count"], 0)
+        self.assertEqual(payload["explicit_space_count"], 2)
+        self.assertIn("project", payload["domain_counts"])
+        self.assertIn("codebase", payload["domain_counts"])
+        self.assertIn("unassigned", payload["domain_counts"])
+
+        spaces = {entry["label"]: entry for entry in payload["spaces"]}
+        self.assertEqual(spaces["noesis-foundry-codebase"]["domain_counts"], {"codebase": 2})
+        self.assertEqual(spaces["noesis-foundry-project"]["current_reviewed_knowledge_count"], 2)
+        self.assertFalse(spaces["default"]["explicit"])
+
     def test_review_queue_json_matches_text_order(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT), "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -238,6 +254,68 @@ class NoesisCliTests(unittest.TestCase):
             "stale-custom-plugin-first",
             [note["noesis_id"] for note in summary_payload["overdue_notes"]],
         )
+
+    def test_review_queue_and_summary_filter_by_memory_space(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            study_note = vault_path / "evidence" / "evidence-study-session.md"
+            study_note.write_text(
+                """---
+title: Study Session Evidence
+noesis_id: evidence-study-session
+type: evidence
+lifecycle_stage: evidence
+status: extracted
+review_state: ready-for-review
+confidence: medium
+created: 2026-06-20
+updated: 2026-06-20
+memory_space: calculus-study
+memory_domain: study
+tags:
+  - noesis
+  - evidence
+aliases: []
+---
+
+# Study Session Evidence
+
+## Evidence
+
+This note belongs to a separate study memory space.
+""",
+                encoding="utf-8",
+            )
+
+            queue = run_noesis(
+                "review",
+                "queue",
+                "--vault",
+                str(vault_path),
+                "--memory-domain",
+                "study",
+                "--json",
+            )
+            self.assertEqual(queue.returncode, 0, queue.stderr)
+            queue_payload = parse_json_stdout(queue)
+            self.assertEqual(queue_payload["filters"]["memory_domain"], "study")
+            self.assertEqual([note["noesis_id"] for note in queue_payload["notes"]], ["evidence-study-session"])
+
+            summary = run_noesis(
+                "review",
+                "summary",
+                "--vault",
+                str(vault_path),
+                "--memory-space",
+                "calculus-study",
+                "--json",
+            )
+            self.assertEqual(summary.returncode, 0, summary.stderr)
+            summary_payload = parse_json_stdout(summary)
+            self.assertEqual(summary_payload["filters"], {"memory_space": "calculus-study", "memory_domain": None})
+            self.assertEqual(summary_payload["pending_count"], 1)
+            self.assertEqual(summary_payload["review_state_counts"], {"ready-for-review": 1})
 
     def test_review_show_json_reports_support_audit_impact_and_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -475,15 +553,33 @@ class NoesisCliTests(unittest.TestCase):
             view_names,
             {
                 "Lineage support links",
+                "Knowledge gaps and contradictions",
                 "Review audit records",
+                "Trust review schedule",
                 "Active context packages",
+                "Context inclusion map",
                 "Context exclusions and superseded memory",
             },
         )
+        gap_view = next(view for view in base["views"] if view["name"] == "Knowledge gaps and contradictions")
+        lineage = next(view for view in base["views"] if view["name"] == "Lineage support links")
+        self.assertIn("reviewed_at", lineage["order"])
+        schedule = next(view for view in base["views"] if view["name"] == "Trust review schedule")
+        self.assertEqual(schedule["filters"]["and"], ["next_review != null", 'type != "dashboard"'])
+        context_inclusion = next(view for view in base["views"] if view["name"] == "Context inclusion map")
+        self.assertEqual(
+            context_inclusion["filters"]["and"],
+            ['type == "reviewed-knowledge" || type == "operational-context" || excluded_memory != null'],
+        )
+        self.assertIn("scope", context_inclusion["order"])
+        self.assertIn("purpose", context_inclusion["order"])
         context_exclusions = next(
             view for view in base["views"] if view["name"] == "Context exclusions and superseded memory"
         )
+        self.assertIn('file.inFolder("gaps")', base["filters"]["and"][0])
         self.assertIn('file.inFolder("archive/history")', base["filters"]["and"][0])
+        self.assertEqual(gap_view["filters"]["and"], ['type == "knowledge-gap"'])
+        self.assertIn("contradicts", gap_view["order"])
         self.assertEqual(
             context_exclusions["filters"]["and"],
             [
@@ -500,6 +596,38 @@ class NoesisCliTests(unittest.TestCase):
             )
             initialized_view_names = {view["name"] for view in initialized_base["views"]}
             self.assertEqual(initialized_view_names, view_names)
+
+    def test_lifecycle_dashboard_base_surfaces_trust_state_views(self) -> None:
+        base = yaml.safe_load((EXAMPLE_VAULT / "_bases" / "lifecycle-dashboard.base").read_text(encoding="utf-8"))
+        view_names = {view["name"] for view in base["views"]}
+        self.assertIn("Current trusted context candidates", view_names)
+        self.assertIn("Trust lifecycle exceptions", view_names)
+        current_context = next(view for view in base["views"] if view["name"] == "Current trusted context candidates")
+        self.assertEqual(
+            current_context["filters"]["and"],
+            ['type == "reviewed-knowledge" || type == "operational-context"', 'status == "active"', 'review_state == "reviewed"'],
+        )
+        self.assertIn("reviewed_knowledge", current_context["order"])
+        self.assertIn("excluded_memory", current_context["order"])
+        exceptions = next(view for view in base["views"] if view["name"] == "Trust lifecycle exceptions")
+        self.assertEqual(
+            exceptions["filters"]["and"],
+            [
+                'status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "stale" || lifecycle_stage == "archive"'
+            ],
+        )
+        self.assertIn("superseded_by", exceptions["order"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            initialized_base = yaml.safe_load(
+                (vault_path / "_bases" / "lifecycle-dashboard.base").read_text(encoding="utf-8")
+            )
+            initialized_view_names = {view["name"] for view in initialized_base["views"]}
+            self.assertIn("Current trusted context candidates", initialized_view_names)
+            self.assertIn("Trust lifecycle exceptions", initialized_view_names)
 
     def test_review_due_on_rejects_invalid_values(self) -> None:
         for invalid_due_on in ("not-a-date", "2026-02-31"):
@@ -965,6 +1093,8 @@ class NoesisCliTests(unittest.TestCase):
             self.assertTrue((vault_path / "_bases" / "traceability-workbench.base").exists())
             self.assertTrue((vault_path / "_canvas" / "noesis-lifecycle.canvas").exists())
             self.assertTrue((vault_path / "_templates" / "source.md").exists())
+            self.assertTrue((vault_path / "_templates" / "knowledge-gap.md").exists())
+            self.assertTrue((vault_path / "gaps").is_dir())
             self.assertTrue((vault_path / "noesis.vault.yaml").exists())
 
             evidence_template = (vault_path / "_templates" / "evidence.md").read_text(encoding="utf-8")
@@ -973,9 +1103,15 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("## Lineage Checked", review_template)
             context_template = (vault_path / "_templates" / "operational-context.md").read_text(encoding="utf-8")
             self.assertIn("## Context Exclusions", context_template)
+            gap_template = (vault_path / "_templates" / "knowledge-gap.md").read_text(encoding="utf-8")
+            self.assertIn("type: knowledge-gap", gap_template)
+            self.assertIn("gap_kind: open-question", gap_template)
             dashboard = (vault_path / "_dashboards" / "noesis-review-dashboard.md").read_text(encoding="utf-8")
             self.assertIn("Direct audit link checks", dashboard)
+            self.assertIn("knowledge gaps", dashboard)
             self.assertIn("reviewed_notes", dashboard)
+            self.assertIn("context inclusion maps", dashboard)
+            self.assertIn("human inspection", dashboard)
 
     def test_authoring_loop_creates_reviewable_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1237,6 +1373,159 @@ class NoesisCliTests(unittest.TestCase):
 
             validate_after_duplicate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate_after_duplicate.returncode, 0, validate_after_duplicate.stderr)
+
+    def test_session_ingest_imports_codex_artifacts_with_source_bundle_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "session",
+                "--vault",
+                str(vault_path),
+                str(CODEX_SESSION_BUNDLE),
+                "--evidence-drafts",
+                "--json",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            payload = parse_json_stdout(ingest)
+            self.assertEqual(payload["ok"], True)
+            self.assertEqual(payload["import_kind"], "coding-agent-session")
+            self.assertEqual(payload["schema"], "noesis-source-bundle")
+            self.assertEqual(payload["schema_version"], "1")
+            self.assertEqual(payload["bundle_id"], "codex-session-export-demo")
+            self.assertEqual(payload["created_count"], 2)
+            self.assertEqual(payload["skipped_count"], 1)
+            self.assertEqual(
+                [result["source_file"] for result in payload["results"]],
+                [
+                    str(CODEX_SESSION_BUNDLE / "exports" / "01-session.json"),
+                    str(CODEX_SESSION_BUNDLE / "exports" / "02-transcript.md"),
+                    str(CODEX_SESSION_BUNDLE / "exports" / "03-transcript-copy.md"),
+                ],
+            )
+
+            vault = Vault.load(vault_path)
+            metadata_note = vault.find_note("source-codex-session-metadata")
+            transcript_note = vault.find_note("source-codex-session-transcript")
+            self.assertIsNotNone(metadata_note)
+            self.assertIsNotNone(transcript_note)
+            assert metadata_note is not None
+            assert transcript_note is not None
+            self.assertEqual(metadata_note.metadata["import_pipeline"], "source-bundle")
+            self.assertEqual(metadata_note.metadata["bundle_schema"], "noesis-source-bundle")
+            self.assertEqual(metadata_note.metadata["bundle_id"], "codex-session-export-demo")
+            self.assertEqual(metadata_note.metadata["bundle_artifact_path"], "exports/01-session.json")
+            self.assertEqual(metadata_note.metadata["bundle_item_index"], 1)
+            self.assertEqual(metadata_note.metadata["bundle_manifest_index"], 2)
+            self.assertEqual(metadata_note.metadata["source_type"], "codex-session-metadata")
+            self.assertEqual(transcript_note.metadata["bundle_item_index"], 2)
+            self.assertEqual(transcript_note.metadata["bundle_manifest_index"], 1)
+            self.assertTrue((vault_path / "raw" / "01-session.json").exists())
+            self.assertTrue((vault_path / "raw" / "02-transcript.md").exists())
+            self.assertFalse((vault_path / "raw" / "03-transcript-copy.md").exists())
+            self.assertIsNotNone(vault.find_note("evidence-session-metadata"))
+            self.assertIsNotNone(vault.find_note("evidence-session-transcript"))
+
+            duplicate_ingest = run_noesis(
+                "ingest",
+                "session",
+                "--vault",
+                str(vault_path),
+                str(CODEX_SESSION_BUNDLE),
+                "--evidence-drafts",
+                "--json",
+            )
+            self.assertEqual(duplicate_ingest.returncode, 0, duplicate_ingest.stderr)
+            duplicate_payload = parse_json_stdout(duplicate_ingest)
+            self.assertEqual(duplicate_payload["created_count"], 0)
+            self.assertEqual(duplicate_payload["skipped_count"], 3)
+            self.assertEqual(
+                [result["existing_note_id"] for result in duplicate_payload["results"]],
+                [
+                    "source-codex-session-metadata",
+                    "source-codex-session-transcript",
+                    "source-codex-session-transcript",
+                ],
+            )
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_session_ingest_text_output_reports_created_and_skipped_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "session",
+                "--vault",
+                str(vault_path),
+                str(CODEX_SESSION_BUNDLE),
+                "--evidence-drafts",
+            )
+            self.assertEqual(ingest.returncode, 0, ingest.stderr)
+            self.assertIn("session import: codex-session-export-demo", ingest.stdout)
+            self.assertIn("ingest summary: created=2 skipped=1", ingest.stdout)
+            self.assertIn("created source-codex-session-metadata", ingest.stdout)
+            self.assertIn("created evidence-session-metadata", ingest.stdout)
+            self.assertIn("skipped source-codex-session-transcript\tduplicate-content", ingest.stdout)
+
+    def test_session_ingest_rejects_invalid_manifest_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "session-export"
+            exports = bundle_path / "exports"
+            exports.mkdir(parents=True)
+            (exports / "01-valid.md").write_text("valid artifact\n", encoding="utf-8")
+            (exports / "02-invalid.md").write_text("invalid artifact\n", encoding="utf-8")
+            (bundle_path / "noesis-bundle.yaml").write_text(
+                """schema_version: 1
+bundle_id: invalid-session-demo
+title: Invalid Session Demo
+source_type: codex-session-export
+artifacts:
+  - path: exports/01-valid.md
+    title: Valid Session Artifact
+    slug: valid-session-artifact
+    source_date: 2026-06-15
+  - path: exports/02-invalid.md
+    title: Invalid Session Artifact
+    slug: invalid-session-artifact
+    source_date: not-a-date
+""",
+                encoding="utf-8",
+            )
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis(
+                "ingest",
+                "session",
+                "--vault",
+                str(vault_path),
+                str(bundle_path),
+                "--json",
+            )
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn(
+                "source_date for bundle artifact exports/02-invalid.md must be YYYY-MM-DD or unknown",
+                ingest.stderr,
+            )
+            self.assertFalse((vault_path / "raw" / "01-valid.md").exists())
+            self.assertFalse((vault_path / "sources" / "source-valid-session-artifact.md").exists())
+
+            validate = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(validate.returncode, 0, validate.stderr)
 
     def test_bundle_ingest_rejects_invalid_item_metadata_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1638,6 +1927,7 @@ sources:
         self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
         self.assertEqual(payload["scope"], "lifecycle")
         self.assertEqual(payload["purpose"], "prepare an agent")
+        self.assertNotIn("memory_filter", payload)
         self.assertEqual(payload["reviewed_knowledge_count"], len(knowledge_ids))
         self.assertIn("reviewed-knowledge-noesis-lifecycle", knowledge_ids)
         self.assertIn("Purpose: prepare an agent", payload["content"])
@@ -1652,6 +1942,56 @@ sources:
             self.assertEqual(invalid_payload["ok"], False)
             self.assertEqual(invalid_payload["error"], "vault validation failed")
             self.assertGreater(invalid_payload["issue_count"], 0)
+
+    def test_context_build_filters_by_memory_space_and_domain(self) -> None:
+        result = run_noesis(
+            "context",
+            "build",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--scope",
+            "agent-memory",
+            "--memory-domain",
+            "codebase",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["memory_filter"], {"memory_space": None, "memory_domain": "codebase"})
+        self.assertEqual(payload["available_reviewed_knowledge_count"], 1)
+        self.assertEqual(
+            [note["noesis_id"] for note in payload["reviewed_knowledge"]],
+            ["reviewed-knowledge-agent-memory-dogfood"],
+        )
+        self.assertIn("Memory domain: codebase", payload["content"])
+        self.assertIn(
+            "reviewed-knowledge-project-memory-corpus-continuation",
+            [note["noesis_id"] for note in payload["selection"]["memory_filtered_out"]],
+        )
+
+        project = run_noesis(
+            "context",
+            "explain",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--memory-space",
+            "noesis-foundry-project",
+            "--json",
+        )
+        self.assertEqual(project.returncode, 0, project.stderr)
+        project_payload = parse_json_stdout(project)
+        self.assertEqual(project_payload["memory_filter"]["memory_space"], "noesis-foundry-project")
+        self.assertEqual(
+            [note["noesis_id"] for note in project_payload["selection"]["included"]],
+            [
+                "reviewed-knowledge-noesis-roadmap-phase-orchestration",
+                "reviewed-knowledge-project-memory-corpus-continuation",
+            ],
+        )
+        self.assertIn(
+            "reviewed-knowledge-agent-memory-dogfood",
+            [note["noesis_id"] for note in project_payload["selection"]["memory_filtered_out"]],
+        )
 
     def test_context_build_limit_reports_budgeted_provenance(self) -> None:
         result = run_noesis(
@@ -1966,6 +2306,128 @@ This archived note is provenance, not active guidance.
             self.assertEqual(len(archived), 1)
             self.assertEqual(archived[0]["selection_status"], "lifecycle_excluded")
             self.assertIn("archived-history has status 'archived'", archived[0]["selection_reason"])
+
+    def test_context_audit_reports_context_freshness_json_and_text(self) -> None:
+        result = run_noesis(
+            "context",
+            "audit",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "2026-06-29",
+            "--json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["due_on"], "2026-06-29")
+        self.assertEqual(payload["summary"]["context_count"], 4)
+        self.assertGreaterEqual(payload["summary"]["trustworthy_count"], 1)
+        self.assertGreaterEqual(payload["summary"]["review_needed_count"], 1)
+        self.assertGreaterEqual(payload["summary"]["lifecycle_exclusion_summary"]["superseded"], 1)
+
+        contexts = {audit["note"]["noesis_id"]: audit for audit in payload["contexts"]}
+        first_context = contexts["context-first-cli-mcp-workflow"]
+        self.assertEqual(first_context["note"]["status"], "active")
+        self.assertEqual(first_context["review_schedule"]["status"], "due")
+        self.assertEqual(first_context["verdict"], "needs_review")
+        self.assertEqual(first_context["reviewed_knowledge"][0]["state"], "current")
+        self.assertEqual(first_context["reviewed_knowledge"][0]["changed_after_context"], False)
+        self.assertEqual(first_context["excluded_memory"][0]["state"], "superseded")
+
+        text = run_noesis(
+            "context",
+            "audit",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "2026-06-29",
+        )
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertIn("# Noesis Context Freshness Audit", text.stdout)
+        self.assertIn("context-first-cli-mcp-workflow [needs_review]", text.stdout)
+        self.assertIn("stale-custom-plugin-first: superseded", text.stdout)
+
+    def test_context_audit_flags_rot_changed_support_and_invalid_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+
+            context_path = vault_path / "context" / "operational-context-agent-memory-dogfood.md"
+            context_path.write_text(
+                context_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-07-13",
+                    "next_review: 2026-06-13",
+                ),
+                encoding="utf-8",
+            )
+            knowledge_path = vault_path / "knowledge" / "reviewed-knowledge-agent-memory-dogfood.md"
+            knowledge_path.write_text(
+                knowledge_path.read_text(encoding="utf-8").replace(
+                    "updated: 2026-06-13",
+                    "updated: 2026-08-01",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            stale_path = vault_path / "stale" / "stale-agent-memory-global-summary.md"
+            stale_path.write_text(
+                stale_path.read_text(encoding="utf-8").replace(
+                    "status: superseded",
+                    "status: stale",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            invalid_context_path = vault_path / "context" / "operational-context-noesis-roadmap-phase-orchestration.md"
+            invalid_context_path.write_text(
+                invalid_context_path.read_text(encoding="utf-8").replace(
+                    "next_review: 2026-07-15",
+                    'next_review: "2026-02-31"',
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_noesis(
+                "context",
+                "audit",
+                "--vault",
+                str(vault_path),
+                "--due-on",
+                "2026-06-13",
+                "--json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = parse_json_stdout(result)
+            contexts = {audit["note"]["noesis_id"]: audit for audit in payload["contexts"]}
+
+            agent_context = contexts["context-agent-memory-dogfood"]
+            self.assertEqual(agent_context["review_schedule"]["status"], "due")
+            self.assertEqual(agent_context["verdict"], "needs_regeneration")
+            self.assertEqual(agent_context["reviewed_knowledge"][0]["changed_after_context"], True)
+            self.assertEqual(agent_context["excluded_memory"][0]["state"], "stale")
+            self.assertIn("changed after this context was written", " ".join(agent_context["reasons"]))
+
+            invalid_context = contexts["context-noesis-roadmap-phase-orchestration"]
+            self.assertEqual(invalid_context["review_schedule"]["status"], "invalid")
+            self.assertIn("next_review", invalid_context["invalid_date_fields"])
+            self.assertEqual(payload["summary"]["invalid_date_count"], 1)
+            self.assertEqual(payload["summary"]["support_changed_count"], 1)
+
+    def test_context_audit_rejects_invalid_due_on(self) -> None:
+        result = run_noesis(
+            "context",
+            "audit",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--due-on",
+            "not-a-date",
+            "--json",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        payload = parse_json_stdout(result)
+        self.assertEqual(payload["ok"], False)
+        self.assertEqual(payload["error"], "due_on must be YYYY-MM-DD")
 
     def test_review_request_changes_keeps_note_in_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2918,6 +3380,61 @@ This legacy evidence note does not link to a source.
         self.assertIn("reviewed-knowledge-noesis-lifecycle", result.stdout)
         self.assertNotIn("Build Custom Obsidian Plugin First", result.stdout)
         self.assertNotIn("stale-custom-plugin-first", result.stdout)
+        self.assertNotIn("knowledge-gap-noesis-roadmap-plugin-tension", result.stdout)
+        self.assertNotIn("Noesis Roadmap Plugin-First Tension", result.stdout)
+
+    def test_knowledge_gaps_report_lists_source_backed_tension(self) -> None:
+        result = run_noesis("knowledge", "gaps", "--vault", str(EXAMPLE_VAULT))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("knowledge-gap-noesis-roadmap-plugin-tension", result.stdout)
+        self.assertIn("contradiction", result.stdout)
+        self.assertIn("open", result.stdout)
+        self.assertIn("current:yes", result.stdout)
+        self.assertIn("sources:source-noesis-readme,source-noesis-roadmap-docs", result.stdout)
+        self.assertIn("contradicts:stale-noesis-roadmap-plugin-first", result.stdout)
+
+        filtered = run_noesis(
+            "knowledge",
+            "gaps",
+            "--vault",
+            str(EXAMPLE_VAULT),
+            "--kind",
+            "contradiction",
+            "--json",
+        )
+        self.assertEqual(filtered.returncode, 0, filtered.stderr)
+        payload = parse_json_stdout(filtered)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["count"], 1)
+        note = payload["notes"][0]
+        self.assertEqual(note["noesis_id"], "knowledge-gap-noesis-roadmap-plugin-tension")
+        self.assertEqual(note["gap_kind"], "contradiction")
+        self.assertEqual(note["gap_state"], "open")
+        self.assertEqual(note["current"], True)
+        self.assertEqual(
+            [source["noesis_id"] for source in note["support"]["sources"]],
+            ["source-noesis-readme", "source-noesis-roadmap-docs"],
+        )
+        self.assertEqual(
+            [contradiction["noesis_id"] for contradiction in note["support"]["contradicts"]],
+            ["stale-noesis-roadmap-plugin-first"],
+        )
+
+    def test_validator_rejects_invalid_knowledge_gap_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            gap_path = vault_path / "gaps" / "knowledge-gap-noesis-roadmap-plugin-tension.md"
+            gap_path.write_text(
+                gap_path.read_text(encoding="utf-8").replace(
+                    "gap_kind: contradiction",
+                    "gap_kind: ambiguity",
+                ),
+                encoding="utf-8",
+            )
+
+            issues = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("gap_kind must be one of contradiction, open-question, weak-area", issues)
 
     def test_context_build_filters_reviewed_knowledge_by_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
