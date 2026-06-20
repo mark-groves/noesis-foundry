@@ -170,6 +170,22 @@ and demonstrates the complete Noesis lifecycle from source to operational
 context. Initialized V1 vaults also include `noesis.vault.yaml`, a small
 root-level compatibility artifact that records the vault contract version
 without requiring every note to carry version metadata.
+The example vault starts at a human review workbench that embeds Obsidian Base
+views for traceability, review freshness, active context inclusion/exclusion,
+and stale or superseded lifecycle trust state. Those Bases and dashboards are
+views over Markdown plus flat YAML, not canonical storage.
+
+The V1 vault contract also supports optional scoped memory spaces through flat
+YAML fields:
+
+```yaml
+memory_space: noesis-foundry-codebase
+memory_domain: codebase
+```
+
+`memory_space` is a local slug for a bounded knowledge space. `memory_domain`
+is one of `project`, `research`, `study`, or `codebase`. Notes without these
+fields remain valid and continue to behave as default unscoped memory.
 
 ### First CLI Slice
 
@@ -185,24 +201,30 @@ and run `noesis ...` or `noesis-mcp ...` from that environment.
 PYTHONPATH=src python -m noesis vault doctor examples/noesis-vault
 PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
 PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
+PYTHONPATH=src python -m noesis vault spaces examples/noesis-vault
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --directory /path/to/sources --recursive --evidence-drafts
 PYTHONPATH=src python -m noesis ingest bundle --vault examples/noesis-vault /path/to/source-bundle --evidence-drafts
+PYTHONPATH=src python -m noesis ingest session --vault examples/noesis-vault /path/to/session-export --evidence-drafts
 PYTHONPATH=src python -m noesis extract evidence --vault examples/noesis-vault --source source-id --title "Evidence Title"
 PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --evidence evidence-id --title "Claim Title"
 PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer"
 PYTHONPATH=src python -m noesis synthesize --vault examples/noesis-vault --claim claim-id --title "Synthesis Title"
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --review-state ready-for-review --due --due-on 2026-06-13
+PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --memory-domain codebase
 PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review show claim-id --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review approve synthesis-id --vault examples/noesis-vault --reviewer "Reviewer"
 PYTHONPATH=src python -m noesis knowledge promote --vault examples/noesis-vault --synthesis synthesis-id --title "Reviewed Knowledge Title"
+PYTHONPATH=src python -m noesis knowledge gaps --vault examples/noesis-vault --kind contradiction
 PYTHONPATH=src python -m noesis memory stale reviewed-knowledge-id --vault examples/noesis-vault --reason "Superseded by newer evidence"
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-lifecycle --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --purpose "prepare the next agent"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare the next agent"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --memory-domain codebase --scope agent-memory
 PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
+PYTHONPATH=src python -m noesis context audit --vault examples/noesis-vault --due-on 2026-06-29
 PYTHONPATH=src python -m noesis context write --vault examples/noesis-vault --purpose "prepare the next agent"
 ```
 
@@ -213,23 +235,35 @@ Supported commands:
 | `noesis vault doctor <path>` | Report contract compatibility, validation completeness, and CLI/MCP readiness. |
 | `noesis vault validate <path>` | Validate required frontmatter, lifecycle stage/status values, wikilinks, Base YAML, Canvas JSON, and active-context exclusions. |
 | `noesis vault init <path>` | Create the V1 contract metadata file, folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
+| `noesis vault spaces <path>` | Report explicit memory spaces, unscoped/default notes, domain counts, current reviewed knowledge, and review-queue counts. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/`, add source provenance and a SHA-256 content hash, skip already-captured content unless `--allow-duplicates` is set, and create a linked source note in `sources/`. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order, report created/skipped summaries, and optionally create one reviewable evidence draft for each new source. |
 | `noesis ingest bundle --vault <path> <bundle-path> --evidence-drafts` | Import a local manifest-driven artifact bundle in deterministic artifact-path order, preserve raw artifacts, record bundle provenance, skip duplicate content, and optionally create reviewable evidence drafts. |
+| `noesis ingest session --vault <path> <session-export> --evidence-drafts` | Import coding-agent or Codex session artifacts using the same `noesis-bundle.yaml` contract as source bundles, preserving raw exports as source-backed project memory with optional evidence drafts. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create a reviewable evidence draft linked back to a source note. |
 | `noesis propose claim --vault <path> --evidence <evidence-id>` | Create a review-ready claim draft grounded in one or more evidence notes. |
 | `noesis synthesize --vault <path> --claim <claim-id>` | Create a review-ready synthesis draft grounded in claim, evidence, and source links. |
-| `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention, with optional `--review-state`, `--type`, `--stage`, `--due`, and `--due-on` filters. |
-| `noesis review summary --vault <path>` | Summarize review-state counts, pending items, due reviews, and upcoming `next_review` dates. |
+| `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention, with optional `--review-state`, `--type`, `--stage`, `--memory-space`, `--memory-domain`, `--due`, and `--due-on` filters. |
+| `noesis review summary --vault <path>` | Summarize review-state counts, pending items, due reviews, and upcoming `next_review` dates, optionally scoped by `--memory-space` or `--memory-domain`. |
 | `noesis review show <note-id> --vault <path>` | Inspect one note's current state, support links, audit records, requested changes, dependent reviewed knowledge/context impact, and lineage. |
 | `noesis review approve <note-id> --vault <path>` | Write an audit review note and mark the reviewed note approved. |
 | `noesis review request-changes <note-id> --vault <path>` | Write an audit review note and keep the reviewed note in the review queue. |
 | `noesis knowledge promote --vault <path> --synthesis <synthesis-id>` | Promote an approved synthesis with a review audit into active reviewed knowledge. |
+| `noesis knowledge gaps --vault <path>` | List unresolved questions, weak areas, and contradictions with source/evidence/claim support, review state, current state, and optional `--kind`, `--state`, `--due`, and `--json` filters. |
 | `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded, create a stale-memory trace note, and update affected context exclusions. |
 | `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
-| `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. Supports `--scope`, `--purpose`, `--profile agent-handoff`, `--limit`, `--max-chars`, and `--json` for agent-sized packages. |
+| `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. Supports `--scope`, `--memory-space`, `--memory-domain`, `--purpose`, `--profile agent-handoff`, `--limit`, `--max-chars`, and `--json` for agent-sized packages. |
 | `noesis context explain --vault <path>` | Explain which current reviewed knowledge was included, scoped out, or budgeted out, and list stale/superseded/archive notes as background provenance only. |
+| `noesis context audit --vault <path>` | Audit operational context notes for due reviews, stale or superseded exclusions, invalid dates, and reviewed-knowledge changes that may require regeneration. |
 | `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge, using the same scope and budget controls as `context build`. |
+
+Knowledge gaps are ordinary Markdown notes under `gaps/` with flat YAML:
+`type: knowledge-gap`, `lifecycle_stage: gap`, `gap_kind` set to
+`open-question`, `weak-area`, or `contradiction`, and `gap_state` set to
+`open`, `monitoring`, or `resolved`. They use the same wikilink relationship
+fields as other lifecycle notes, plus `contradicts` for explicit tensions.
+They remain reportable through `knowledge gaps` but are not selected by
+`context build`, which still starts from current reviewed knowledge only.
 
 The vault files are the source of truth. The CLI, MCP server, and repo-local
 portable Agent Skills are adapters over the same parser, validator, lineage
@@ -287,6 +321,12 @@ ends at `context/operational-context-agent-memory-dogfood.md`. It also keeps
 `stale/stale-agent-memory-global-summary.md` traceable but excluded from active
 context.
 
+The example vault also includes
+`gaps/knowledge-gap-noesis-roadmap-plugin-tension.md`, a source-backed
+contradiction gap. It ties current adapter-first roadmap evidence to a stale
+plugin-first assumption so users and agents can inspect the tension through
+`knowledge gaps` without loading the stale assumption into active context.
+
 ### MCP MVP
 
 The MCP server is an implemented adapter layer over the same vault contract. It
@@ -317,6 +357,7 @@ Read tools:
 | `noesis_search_notes` | Search notes by text with optional `type`, lifecycle, status, review state, and limit filters. |
 | `noesis_get_note` | Return one parsed note by `noesis_id`, filename stem, path, alias, or wikilink target. |
 | `noesis_get_review_queue` | Return notes whose `review_state` still needs attention. |
+| `noesis_get_knowledge_gaps` | Return source-backed open questions, weak areas, and contradictions with support links, review schedule, and current/resolved state. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, and stale-memory lineage. |
 | `noesis_build_context` | Build operational context from current reviewed knowledge only, excluding stale, superseded, and archived memory, with optional scope and budget controls plus selection provenance. Use `profile: "agent-handoff"` for harness-agnostic handoff packs; `codex-handoff` is the Codex dogfood adapter over the same Markdown/YAML contract. |
 

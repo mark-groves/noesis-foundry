@@ -1,6 +1,6 @@
 filters:
   and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("gaps") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
     - noesis_id != null
 views:
   - type: table
@@ -14,6 +14,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - confidence
       - updated
   - type: table
@@ -27,6 +29,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - superseded_by
       - next_review
       - updated
@@ -44,5 +48,47 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - confidence
       - next_review
+  - type: table
+    name: Current trusted context candidates
+    filters:
+      and:
+        - type == "reviewed-knowledge" || type == "operational-context"
+        - status == "active"
+        - review_state == "reviewed"
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - status
+      - confidence
+      - reviewed_at
+      - reviewed_by
+      - reviewed_knowledge
+      - excluded_memory
+      - next_review
+      - updated
+  - type: table
+    name: Trust lifecycle exceptions
+    filters:
+      and:
+        - status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "stale" || lifecycle_stage == "archive"
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - supersedes
+      - superseded_by
+      - next_review
+      - updated

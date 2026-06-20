@@ -18,6 +18,7 @@ FOLDERS = [
     "evidence",
     "claims",
     "syntheses",
+    "gaps",
     "review",
     "knowledge",
     "context",
@@ -74,6 +75,7 @@ NOTE_FOLDERS = {
     "evidence",
     "claims",
     "syntheses",
+    "gaps",
     "review",
     "knowledge",
     "context",
@@ -101,6 +103,7 @@ TYPES = {
     "evidence",
     "claim",
     "synthesis",
+    "knowledge-gap",
     "review",
     "reviewed-knowledge",
     "operational-context",
@@ -114,6 +117,7 @@ LIFECYCLE_STAGES = {
     "evidence",
     "claim",
     "synthesis",
+    "gap",
     "review",
     "knowledge",
     "context",
@@ -144,6 +148,14 @@ REVIEW_STATES = {
 }
 
 CONFIDENCE = {"unknown", "low", "medium", "high"}
+MEMORY_DOMAINS = {"codebase", "project", "research", "study"}
+MEMORY_UNASSIGNED = "unassigned"
+MEMORY_DEFAULT_SPACE = "default"
+MEMORY_SPACE_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+GAP_KINDS = {"open-question", "weak-area", "contradiction"}
+GAP_STATES = {"open", "monitoring", "resolved"}
+CURRENT_GAP_STATES = {"open", "monitoring"}
 
 REVIEW_DONE = {"none", "approved", "reviewed"}
 CURRENT_KNOWLEDGE_STATUSES = {"active", "reviewed"}
@@ -161,6 +173,17 @@ RELATIONSHIP_FIELDS = {
     "superseded_by",
     "related_notes",
     "excluded_memory",
+    "contradicts",
+}
+
+GAP_SUPPORT_FIELDS = {
+    "sources",
+    "evidence",
+    "claims",
+    "syntheses",
+    "reviewed_knowledge",
+    "related_notes",
+    "contradicts",
 }
 
 WIKILINK_RE = re.compile(r"!\[\[([^\]]+)\]\]|\[\[([^\]]+)\]\]")
@@ -210,6 +233,14 @@ class Note:
     @property
     def review_state(self) -> str:
         return str(self.metadata.get("review_state", ""))
+
+    @property
+    def memory_space(self) -> str:
+        return metadata_string(self.metadata.get("memory_space"))
+
+    @property
+    def memory_domain(self) -> str:
+        return metadata_string(self.metadata.get("memory_domain"))
 
 
 @dataclass(frozen=True)
@@ -293,6 +324,8 @@ class ContextPackage:
     profile: str | None
     profile_description: str | None
     scope: str | None
+    memory_space: str | None
+    memory_domain: str | None
     purpose: str | None
     limit: int | None
     max_chars: int | None
@@ -302,6 +335,7 @@ class ContextPackage:
     available_count: int
     included: list[ContextSelection]
     excluded: list[ContextSelection]
+    memory_filtered_out: list[ContextSelection]
     scoped_out: list[ContextSelection]
     budgeted_out: list[ContextSelection]
     lifecycle_excluded: list[ContextSelection]
@@ -312,6 +346,37 @@ class ContextPackage:
     @property
     def reviewed_knowledge(self) -> list[Note]:
         return [selection.note for selection in self.included]
+
+
+@dataclass(frozen=True)
+class ContextReferenceAudit:
+    relationship: str
+    ref: str
+    note: Note | None
+    state: str
+    reason: str
+    changed_after_context: bool | None = None
+    comparison: str | None = None
+    invalid_date_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ContextFreshnessAudit:
+    note: Note
+    reviewed_knowledge: list[ContextReferenceAudit]
+    excluded_memory: list[ContextReferenceAudit]
+    invalid_date_fields: tuple[str, ...]
+    schedule_status: str
+    trustworthy: bool
+    needs_review: bool
+    needs_regeneration: bool
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ContextFreshnessReport:
+    due_on: date
+    contexts: list[ContextFreshnessAudit]
 
 
 @dataclass(frozen=True)
@@ -438,9 +503,15 @@ class Vault:
         review_state: str | None = None,
         note_type: str | None = None,
         lifecycle_stage: str | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
         due: bool = False,
         due_on: str | date | None = None,
     ) -> list[Note]:
+        memory_space, memory_domain = validate_memory_filters(
+            memory_space=memory_space,
+            memory_domain=memory_domain,
+        )
         if due:
             review_cutoff_date(due_on)
         notes: list[Note] = []
@@ -461,14 +532,39 @@ class Vault:
                 continue
             if lifecycle_stage is not None and note.lifecycle_stage != lifecycle_stage:
                 continue
+            if not note_matches_memory_filters(
+                note,
+                memory_space=memory_space,
+                memory_domain=memory_domain,
+            ):
+                continue
             if due and not note_review_due(note, due_on=due_on):
                 continue
             notes.append(note)
         return sort_review_notes(notes)
 
-    def review_summary(self, *, due_on: str | date | None = None) -> dict[str, Any]:
+    def review_summary(
+        self,
+        *,
+        due_on: str | date | None = None,
+        memory_space: str | None = None,
+        memory_domain: str | None = None,
+    ) -> dict[str, Any]:
+        memory_space, memory_domain = validate_memory_filters(
+            memory_space=memory_space,
+            memory_domain=memory_domain,
+        )
         cutoff = review_cutoff_date(due_on)
-        reviewable_notes = [note for note in self.notes if note.type != "dashboard"]
+        reviewable_notes = [
+            note
+            for note in self.notes
+            if note.type != "dashboard"
+            and note_matches_memory_filters(
+                note,
+                memory_space=memory_space,
+                memory_domain=memory_domain,
+            )
+        ]
         review_counts: dict[str, int] = {}
         for note in reviewable_notes:
             review_counts[note.review_state] = review_counts.get(note.review_state, 0) + 1
@@ -503,7 +599,12 @@ class Vault:
         )
         return {
             "review_state_counts": dict(sorted(review_counts.items())),
-            "pending_count": len(self.review_queue()),
+            "pending_count": len(
+                self.review_queue(
+                    memory_space=memory_space,
+                    memory_domain=memory_domain,
+                )
+            ),
             "due_count": len(due_notes),
             "overdue_count": len(overdue_notes),
             "requested_changes_count": len(requested_changes_notes),
@@ -513,6 +614,79 @@ class Vault:
             "requested_changes_notes": requested_changes_notes,
             "audit_gap_notes": audit_gap_notes,
             "next_review_notes": scheduled_notes[:10],
+        }
+
+    def knowledge_gaps(
+        self,
+        *,
+        gap_kind: str | None = None,
+        gap_state: str | None = None,
+        include_resolved: bool = False,
+        due: bool = False,
+        due_on: str | date | None = None,
+    ) -> list[Note]:
+        if due:
+            review_cutoff_date(due_on)
+        gaps: list[Note] = []
+        for note in self.notes:
+            if note.type != "knowledge-gap":
+                continue
+            if gap_kind is not None and note.metadata.get("gap_kind") != gap_kind:
+                continue
+            if gap_state is not None and note.metadata.get("gap_state") != gap_state:
+                continue
+            if gap_state is None and not include_resolved and note.metadata.get("gap_state") == "resolved":
+                continue
+            if due and not note_review_due(note, due_on=due_on):
+                continue
+            gaps.append(note)
+        return sort_gap_notes(gaps)
+
+    def memory_spaces(self) -> dict[str, Any]:
+        spaces: dict[str, dict[str, Any]] = {}
+        domain_counts: dict[str, int] = {}
+        current_reviewed_ids = {note.noesis_id for note in self.current_reviewed_knowledge()}
+        for note in self.notes:
+            space = note.memory_space
+            domain = note.memory_domain or MEMORY_UNASSIGNED
+            label = space or MEMORY_DEFAULT_SPACE
+            entry = spaces.setdefault(
+                label,
+                {
+                    "label": label,
+                    "memory_space": space or None,
+                    "explicit": bool(space),
+                    "note_count": 0,
+                    "current_reviewed_knowledge_count": 0,
+                    "review_queue_count": 0,
+                    "domain_counts": {},
+                    "type_counts": {},
+                    "review_state_counts": {},
+                },
+            )
+            entry["note_count"] += 1
+            if note.noesis_id in current_reviewed_ids:
+                entry["current_reviewed_knowledge_count"] += 1
+            if note.type != "dashboard" and note.review_state not in REVIEW_DONE:
+                entry["review_queue_count"] += 1
+            entry["domain_counts"][domain] = entry["domain_counts"].get(domain, 0) + 1
+            entry["type_counts"][note.type] = entry["type_counts"].get(note.type, 0) + 1
+            entry["review_state_counts"][note.review_state] = (
+                entry["review_state_counts"].get(note.review_state, 0) + 1
+            )
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+
+        for entry in spaces.values():
+            entry["domain_counts"] = dict(sorted(entry["domain_counts"].items()))
+            entry["type_counts"] = dict(sorted(entry["type_counts"].items()))
+            entry["review_state_counts"] = dict(sorted(entry["review_state_counts"].items()))
+
+        return {
+            "note_count": len(self.notes),
+            "explicit_space_count": sum(1 for entry in spaces.values() if entry["explicit"]),
+            "unscoped_count": sum(1 for note in self.notes if not note.memory_space),
+            "domain_counts": dict(sorted(domain_counts.items())),
+            "spaces": sorted(spaces.values(), key=lambda entry: (not entry["explicit"], entry["label"])),
         }
 
     def review_audits_for(self, target: Note) -> list[Note]:
@@ -670,6 +844,9 @@ class Vault:
             key=lambda note: note.title.lower(),
         )
 
+    def context_freshness_audit(self, *, due_on: str | date | None = None) -> ContextFreshnessReport:
+        return audit_context_freshness(self, due_on=due_on)
+
 
 def is_template(rel_path: Path) -> bool:
     return rel_path.parts and rel_path.parts[0] == "_templates"
@@ -823,6 +1000,7 @@ def validate_notes(vault: Vault) -> list[Issue]:
         issues.extend(validate_enum(note, "status", STATUSES))
         issues.extend(validate_enum(note, "review_state", REVIEW_STATES))
         issues.extend(validate_enum(note, "confidence", CONFIDENCE))
+        issues.extend(validate_memory_metadata(note))
 
         if "tags" in metadata and not isinstance(metadata["tags"], list):
             issues.append(Issue(note.path, "tags must be a YAML list"))
@@ -833,6 +1011,7 @@ def validate_notes(vault: Vault) -> list[Issue]:
 
         issues.extend(validate_type_stage(note))
         issues.extend(validate_relationship_syntax(note))
+        issues.extend(validate_gap_metadata(note))
         issues.extend(validate_context_exclusions(vault, note))
 
     return issues
@@ -845,12 +1024,30 @@ def validate_enum(note: Note, key: str, allowed: set[str]) -> list[Issue]:
     return []
 
 
+def validate_memory_metadata(note: Note) -> list[Issue]:
+    issues: list[Issue] = []
+    if "memory_space" in note.metadata:
+        value = note.metadata["memory_space"]
+        if not isinstance(value, str) or is_blank(value):
+            issues.append(Issue(note.path, "memory_space must be a non-blank slug string"))
+        elif not MEMORY_SPACE_RE.fullmatch(value.strip()):
+            issues.append(Issue(note.path, "memory_space must use lowercase letters, numbers, and hyphens"))
+    if "memory_domain" in note.metadata:
+        value = note.metadata["memory_domain"]
+        if not isinstance(value, str) or is_blank(value):
+            issues.append(Issue(note.path, "memory_domain must be a non-blank string"))
+        elif value.strip() not in MEMORY_DOMAINS:
+            issues.append(Issue(note.path, f"memory_domain must be one of {', '.join(sorted(MEMORY_DOMAINS))}"))
+    return issues
+
+
 def validate_type_stage(note: Note) -> list[Issue]:
     expected = {
         "source": "source",
         "evidence": "evidence",
         "claim": "claim",
         "synthesis": "synthesis",
+        "knowledge-gap": "gap",
         "review": "review",
         "reviewed-knowledge": "knowledge",
         "operational-context": "context",
@@ -860,6 +1057,30 @@ def validate_type_stage(note: Note) -> list[Issue]:
     if note.type in expected and note.lifecycle_stage != expected[note.type]:
         return [Issue(note.path, f"type {note.type!r} must use lifecycle_stage {expected[note.type]!r}")]
     return []
+
+
+def validate_gap_metadata(note: Note) -> list[Issue]:
+    if note.type != "knowledge-gap":
+        return []
+    issues: list[Issue] = []
+    for key, allowed in (("gap_kind", GAP_KINDS), ("gap_state", GAP_STATES)):
+        value = note.metadata.get(key)
+        if is_blank(value):
+            issues.append(Issue(note.path, f"{key} must not be blank for knowledge-gap notes"))
+        elif value not in allowed:
+            issues.append(Issue(note.path, f"{key} must be one of {', '.join(sorted(allowed))}"))
+
+    has_support = any(as_list(note.metadata.get(key)) for key in GAP_SUPPORT_FIELDS)
+    if not has_support:
+        issues.append(
+            Issue(
+                note.path,
+                "knowledge-gap notes must link at least one source, evidence, claim, synthesis, reviewed_knowledge, related_notes, or contradicts item",
+            )
+        )
+    if note.metadata.get("gap_kind") == "contradiction" and not as_list(note.metadata.get("contradicts")):
+        issues.append(Issue(note.path, "contradiction knowledge-gap notes must include contradicts links"))
+    return issues
 
 
 def validate_relationship_syntax(note: Note) -> list[Issue]:
@@ -1232,6 +1453,25 @@ def import_source_bundle(
         manifest_path=manifest_path,
         manifest_hash=manifest_hash,
         results=results,
+    )
+
+
+def import_session_bundle(
+    vault_path: Path | str,
+    session_path: Path | str,
+    *,
+    manifest_name: str = "noesis-bundle.yaml",
+    create_evidence: bool = False,
+    allow_duplicates: bool = False,
+    today: str | None = None,
+) -> SourceBundleImportResult:
+    return import_source_bundle(
+        vault_path,
+        session_path,
+        manifest_name=manifest_name,
+        create_evidence=create_evidence,
+        allow_duplicates=allow_duplicates,
+        today=today,
     )
 
 
@@ -2169,6 +2409,8 @@ Keep this note so future context builders can explain why {target_link} no longe
             remaining_knowledge,
             sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
             scope=context_scope(context_note),
+            memory_space=context_memory_space(context_note),
+            memory_domain=context_memory_domain(context_note),
             purpose=context_purpose(context_note),
         )
         writes.append((context_note.path, context_metadata, context_body))
@@ -2181,6 +2423,8 @@ def write_context_note(
     vault_path: Path | str,
     *,
     scope: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     purpose: str | None = None,
     limit: int | None = None,
     max_chars: int | None = None,
@@ -2195,11 +2439,17 @@ def write_context_note(
     if next_review is not None and not is_date_like(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     validate_context_budget(limit=limit, max_chars=max_chars)
+    memory_space, memory_domain = validate_memory_filters(
+        memory_space=memory_space,
+        memory_domain=memory_domain,
+    )
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
     package = compose_context(
         vault,
         scope=scope,
+        memory_space=memory_space,
+        memory_domain=memory_domain,
         purpose=purpose,
         limit=limit,
         max_chars=max_chars,
@@ -2237,6 +2487,10 @@ def write_context_note(
         metadata["next_review"] = next_review
     if scope:
         metadata["scope"] = scope
+    if package.memory_space:
+        metadata["memory_space"] = package.memory_space
+    if package.memory_domain:
+        metadata["memory_domain"] = package.memory_domain
     if purpose:
         metadata["purpose"] = purpose
     if package.profile is not None:
@@ -2281,7 +2535,7 @@ created: {today}
 updated: {today}
 """,
         Path("_dashboards/noesis-review-dashboard.md"): f"""---
-title: Noesis Review Dashboard
+title: Noesis Review Workbench
 noesis_id: dashboard-review
 type: dashboard
 lifecycle_stage: review
@@ -2295,11 +2549,19 @@ tags:
   - dashboard
 ---
 
-# Noesis Review Dashboard
+# Noesis Review Workbench
+
+Start here when deciding what the vault remembers, whether it is current, and
+what should still guide active work. The embedded Bases are human inspection
+views over Markdown notes and flat YAML properties; they do not store canonical
+state.
 
 ## Review Queue
 
 ![[review-queue.base]]
+
+Use this Base to triage open review work, scheduled `next_review` dates,
+requested changes, downstream impact cues, and direct frontmatter audit gaps.
 
 ## CLI Review Workbench
 
@@ -2310,11 +2572,15 @@ closer inspection:
 PYTHONPATH=src python -m noesis review summary --vault <vault-path>
 PYTHONPATH=src python -m noesis review queue --vault <vault-path> --due --due-on {today}
 PYTHONPATH=src python -m noesis review show <note-id> --vault <vault-path>
+PYTHONPATH=src python -m noesis knowledge gaps --vault <vault-path>
 ```
 
 `review summary`, `review queue`, and `review show` report overdue review
 status, audit gaps, requested changes, downstream reviewed-knowledge/context
 impact, and complete lineage.
+
+`knowledge gaps` reports unresolved questions, weak areas, and contradictions
+from source-backed gap notes without including them in active context.
 
 Use this write action after a scheduled review confirms the note still fits
 its current lifecycle role:
@@ -2334,13 +2600,18 @@ can also link targets through `reviewed_notes`.
 
 ![[lifecycle-dashboard.base]]
 
+Use the lifecycle views to compare stage, status, review state, confidence,
+current trusted context candidates, and stale/superseded/archive exceptions
+before letting memory guide new work.
+
 ## Traceability Workbench
 
 ![[traceability-workbench.base]]
 
-Use this Base to inspect lineage links, review audit notes, active context
-packages, and excluded memory before changing lifecycle state. It is a view over
-frontmatter and wikilinks only; notes remain canonical.
+Use this Base to inspect source-to-context lineage links, review audit notes,
+trust review schedules, active context packages, context inclusion maps, and
+excluded memory before changing lifecycle state. It is a view over frontmatter
+and wikilinks only; notes remain canonical.
 
 ## Visual Map
 
@@ -2393,7 +2664,7 @@ note with support links, `reviewed_knowledge`, `excluded_memory`, or
 """,
         Path("_bases/review-queue.base"): """filters:
   and:
-    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
+    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("gaps") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
 views:
   - type: table
     name: Open review queue
@@ -2411,6 +2682,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - confidence
       - next_review
       - updated
@@ -2431,6 +2704,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - reviewed_by
       - superseded_by
   - type: table
@@ -2447,6 +2722,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - reviewed_by
       - updated
   - type: table
@@ -2488,7 +2765,7 @@ views:
 """,
         Path("_bases/lifecycle-dashboard.base"): """filters:
   and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("gaps") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
     - noesis_id != null
 views:
   - type: table
@@ -2502,6 +2779,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - confidence
       - updated
   - type: table
@@ -2515,6 +2794,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - superseded_by
       - next_review
       - updated
@@ -2532,12 +2813,54 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - confidence
       - next_review
+  - type: table
+    name: Current trusted context candidates
+    filters:
+      and:
+        - type == "reviewed-knowledge" || type == "operational-context"
+        - status == "active"
+        - review_state == "reviewed"
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - status
+      - confidence
+      - reviewed_at
+      - reviewed_by
+      - reviewed_knowledge
+      - excluded_memory
+      - next_review
+      - updated
+  - type: table
+    name: Trust lifecycle exceptions
+    filters:
+      and:
+        - status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "stale" || lifecycle_stage == "archive"
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - supersedes
+      - superseded_by
+      - next_review
+      - updated
 """,
         Path("_bases/traceability-workbench.base"): """filters:
   and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("gaps") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
     - noesis_id != null
 views:
   - type: table
@@ -2557,8 +2880,33 @@ views:
       - sources
       - evidence
       - claims
+      - contradicts
       - syntheses
       - reviewed_knowledge
+      - supersedes
+      - superseded_by
+      - reviewed_by
+      - reviewed_at
+      - next_review
+  - type: table
+    name: Knowledge gaps and contradictions
+    filters:
+      and:
+        - type == "knowledge-gap"
+    groupBy:
+      property: gap_kind
+      direction: ASC
+    order:
+      - file.name
+      - gap_kind
+      - gap_state
+      - status
+      - review_state
+      - sources
+      - evidence
+      - claims
+      - contradicts
+      - next_review
   - type: table
     name: Review audit records
     filters:
@@ -2576,6 +2924,25 @@ views:
       - reviewed_notes
       - next_review
   - type: table
+    name: Trust review schedule
+    filters:
+      and:
+        - next_review != null
+        - type != "dashboard"
+    groupBy:
+      property: next_review
+      direction: ASC
+    order:
+      - next_review
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - reviewed_at
+      - reviewed_by
+  - type: table
     name: Active context packages
     filters:
       and:
@@ -2588,6 +2955,25 @@ views:
       - file.name
       - reviewed_knowledge
       - excluded_memory
+      - next_review
+      - updated
+  - type: table
+    name: Context inclusion map
+    filters:
+      and:
+        - type == "reviewed-knowledge" || type == "operational-context" || excluded_memory != null
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - status
+      - scope
+      - purpose
+      - reviewed_knowledge
+      - excluded_memory
+      - syntheses
       - next_review
       - updated
   - type: table
@@ -2762,6 +3148,8 @@ review_state: none
 confidence: unknown
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 source_type: unknown
 raw_path: "../raw/<raw_filename>"
 original_url: unknown
@@ -2800,6 +3188,8 @@ review_state: none
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 sources:
   - "[[<source-note>]]"
 tags:
@@ -2828,6 +3218,8 @@ review_state: ready-for-review
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 sources:
   - "[[<source-note>]]"
 evidence:
@@ -2862,6 +3254,8 @@ review_state: ready-for-review
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 sources:
   - "[[<source-note>]]"
 evidence:
@@ -2886,6 +3280,44 @@ aliases: []
 
 ## Context Safety
 """,
+        "knowledge-gap": """---
+title: "{{title}}"
+noesis_id: "knowledge-gap-<slug>"
+type: knowledge-gap
+lifecycle_stage: gap
+status: needs-review
+review_state: ready-for-review
+confidence: medium
+created: "{{date}}"
+updated: "{{date}}"
+gap_kind: open-question
+gap_state: open
+sources:
+  - "[[<source-note>]]"
+evidence:
+  - "[[<evidence-note>]]"
+claims:
+  - "[[<claim-note>]]"
+contradicts: []
+next_review: "{{date}}"
+tags:
+  - noesis
+  - gap
+aliases: []
+---
+
+# {{title}}
+
+## Gap
+
+## Why It Exists
+
+## Source And Evidence Lineage
+
+## Current State
+
+## Review Need
+""",
         "review": """---
 title: "{{title}}"
 noesis_id: "review-<slug>"
@@ -2896,6 +3328,8 @@ review_state: approved
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 reviewer: unknown
 reviewed_at: "{{date}}"
 reviewed_notes:
@@ -2931,6 +3365,8 @@ review_state: reviewed
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 syntheses:
   - "[[<synthesis-note>]]"
 reviewed_knowledge:
@@ -2962,6 +3398,8 @@ aliases: []
 def build_context(
     vault: Vault,
     scope: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     purpose: str | None = None,
     *,
     limit: int | None = None,
@@ -2971,6 +3409,8 @@ def build_context(
     return compose_context(
         vault,
         scope=scope,
+        memory_space=memory_space,
+        memory_domain=memory_domain,
         purpose=purpose,
         limit=limit,
         max_chars=max_chars,
@@ -2981,6 +3421,8 @@ def build_context(
 def compose_context(
     vault: Vault,
     scope: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     purpose: str | None = None,
     *,
     limit: int | None = None,
@@ -2988,6 +3430,10 @@ def compose_context(
     profile: str | None = None,
 ) -> ContextPackage:
     validate_context_budget(limit=limit, max_chars=max_chars)
+    memory_space, memory_domain = validate_memory_filters(
+        memory_space=memory_space,
+        memory_domain=memory_domain,
+    )
     profile_definition = resolve_context_profile(profile)
     effective_limit, effective_max_chars, applied_profile_defaults = apply_context_profile_defaults(
         profile_definition,
@@ -2995,7 +3441,12 @@ def compose_context(
         max_chars=max_chars,
     )
     validate_context_budget(limit=effective_limit, max_chars=effective_max_chars)
-    available = vault.current_reviewed_knowledge()
+    all_available = vault.current_reviewed_knowledge()
+    available, memory_filtered_out = select_notes_by_memory(
+        all_available,
+        memory_space=memory_space,
+        memory_domain=memory_domain,
+    )
     selected, scoped_out = select_knowledge_for_context(
         available,
         scope,
@@ -3008,7 +3459,7 @@ def compose_context(
         max_chars=effective_max_chars,
     )
     excluded = sorted(
-        scoped_out + budgeted_out,
+        memory_filtered_out + scoped_out + budgeted_out,
         key=lambda selection: (selection.status, selection.note.title.lower()),
     )
     lifecycle_excluded = explain_lifecycle_exclusions(vault)
@@ -3016,6 +3467,8 @@ def compose_context(
     handoff = context_handoff_guidance(
         vault_path=vault.root,
         scope=scope,
+        memory_space=memory_space,
+        memory_domain=memory_domain,
         purpose=purpose,
         profile=profile_definition,
         limit=effective_limit,
@@ -3031,6 +3484,8 @@ def compose_context(
             lifecycle_excluded,
             handoff,
             scope=scope,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             profile=profile_definition,
             limit=effective_limit,
             max_chars=effective_max_chars,
@@ -3041,6 +3496,8 @@ def compose_context(
         content = render_context(
             [selection.note for selection in included],
             scope=scope,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
             purpose=purpose,
             profile=profile_definition,
             limit=effective_limit,
@@ -3052,6 +3509,8 @@ def compose_context(
         profile=profile_definition.name if profile_definition else None,
         profile_description=profile_definition.description if profile_definition else None,
         scope=scope,
+        memory_space=memory_space,
+        memory_domain=memory_domain,
         purpose=purpose,
         limit=effective_limit,
         max_chars=effective_max_chars,
@@ -3061,6 +3520,7 @@ def compose_context(
         available_count=len(available),
         included=included,
         excluded=excluded,
+        memory_filtered_out=memory_filtered_out,
         scoped_out=scoped_out,
         budgeted_out=budgeted_out,
         lifecycle_excluded=lifecycle_excluded,
@@ -3305,6 +3765,8 @@ def context_handoff_guidance(
     *,
     vault_path: Path,
     scope: str | None,
+    memory_space: str | None,
+    memory_domain: str | None,
     purpose: str | None,
     profile: ContextProfile | None,
     limit: int | None,
@@ -3315,6 +3777,8 @@ def context_handoff_guidance(
 ) -> ContextHandoffGuidance:
     vault_flag = f" --vault {shell_quote(str(vault_path))}"
     scope_flag = f" --scope {shell_quote(scope)}" if scope else ""
+    memory_space_flag = f" --memory-space {shell_quote(memory_space)}" if memory_space else ""
+    memory_domain_flag = f" --memory-domain {shell_quote(memory_domain)}" if memory_domain else ""
     purpose_flag = f" --purpose {shell_quote(purpose)}" if purpose else ""
     profile_flag = f" --profile {profile.name}" if profile is not None else ""
     limit_flag = f" --limit {limit}" if limit is not None else ""
@@ -3333,6 +3797,17 @@ def context_handoff_guidance(
             f"The requested scope is {scope!r}; "
             "scoped-out reviewed notes need a separate handoff if they matter."
         )
+    if memory_space or memory_domain:
+        filters = []
+        if memory_space:
+            filters.append(f"memory_space={memory_space!r}")
+        if memory_domain:
+            filters.append(f"memory_domain={memory_domain!r}")
+        assumptions.append(
+            "The requested memory filter is "
+            + ", ".join(filters)
+            + "; notes outside it remain separate connected memory."
+        )
     if excluded:
         assumptions.append(
             "Some current reviewed notes were omitted by scope or budget; "
@@ -3349,12 +3824,14 @@ def context_handoff_guidance(
         (
             "PYTHONPATH=src python -m noesis context build"
             f"{vault_flag}"
-            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
+            f"{scope_flag}{memory_space_flag}{memory_domain_flag}"
+            f"{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
         ),
         (
             "PYTHONPATH=src python -m noesis context explain"
             f"{vault_flag}"
-            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
+            f"{scope_flag}{memory_space_flag}{memory_domain_flag}"
+            f"{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
         ),
         "PYTHONPATH=src python -m unittest discover -s tests -v",
     ]
@@ -3394,6 +3871,8 @@ def render_context_handoff(
     handoff: ContextHandoffGuidance,
     *,
     scope: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     profile: ContextProfile | None = None,
     limit: int | None = None,
     max_chars: int | None = None,
@@ -3404,6 +3883,10 @@ def render_context_handoff(
     lines = [f"# {title}", ""]
     if scope:
         lines.extend([f"Scope: {scope}", ""])
+    if memory_space:
+        lines.extend([f"Memory space: {memory_space}", ""])
+    if memory_domain:
+        lines.extend([f"Memory domain: {memory_domain}", ""])
     lines.extend([f"Purpose: {handoff.task_purpose}", ""])
     if profile is not None:
         lines.extend([f"Profile: {profile.name}", ""])
@@ -3463,7 +3946,18 @@ def render_context_handoff(
         lines.append("No selection provenance available.")
 
     scoped_out = [selection for selection in excluded or [] if selection.status == "scoped_out"]
+    memory_filtered_out = [
+        selection for selection in excluded or [] if selection.status == "memory_filtered_out"
+    ]
     budgeted_out = [selection for selection in excluded or [] if selection.status == "budgeted_out"]
+    if memory_space or memory_domain or memory_filtered_out:
+        lines.extend(["", "## Memory-Filtered Reviewed Knowledge", ""])
+        if memory_filtered_out:
+            for selection in memory_filtered_out:
+                lines.append(format_handoff_selection(selection))
+        else:
+            lines.append("No current reviewed knowledge was excluded by memory-space filters.")
+
     lines.extend(["", "## Scoped-Out Reviewed Knowledge", ""])
     if scoped_out:
         for selection in scoped_out:
@@ -3538,6 +4032,8 @@ def format_handoff_note_ids(notes: list[Note]) -> str:
 def render_context(
     knowledge: list[Note],
     scope: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     purpose: str | None = None,
     *,
     profile: ContextProfile | None = None,
@@ -3550,6 +4046,10 @@ def render_context(
     lines = [f"# {title}", ""]
     if scope:
         lines.extend([f"Scope: {scope}", ""])
+    if memory_space:
+        lines.extend([f"Memory space: {memory_space}", ""])
+    if memory_domain:
+        lines.extend([f"Memory domain: {memory_domain}", ""])
     if purpose:
         lines.extend([f"Purpose: {purpose}", ""])
     if profile is not None:
@@ -3574,7 +4074,10 @@ def render_context(
         lines.append(f"- Current reviewed knowledge available: {total_candidates if total_candidates is not None else len(knowledge)}")
         lines.append(f"- Included in active context: {len(knowledge)}")
         if excluded:
-            lines.append(f"- Excluded by scope or budget: {len(excluded)}")
+            if memory_space or memory_domain:
+                lines.append(f"- Excluded by memory filter, scope, or budget: {len(excluded)}")
+            else:
+                lines.append(f"- Excluded by scope or budget: {len(excluded)}")
         lines.append("")
 
     if not knowledge:
@@ -3606,11 +4109,22 @@ def build_context_body(
     excluded_links: list[str],
     *,
     scope: str | None = None,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
     purpose: str | None = None,
 ) -> str:
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
-    body = render_context(knowledge, scope=scope, purpose=purpose).rstrip() + "\n\n## Traceability\n\n"
+    body = (
+        render_context(
+            knowledge,
+            scope=scope,
+            memory_space=memory_space,
+            memory_domain=memory_domain,
+            purpose=purpose,
+        ).rstrip()
+        + "\n\n## Traceability\n\n"
+    )
     body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
     if synthesis_links:
         body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
@@ -3655,6 +4169,8 @@ def append_dependent_memory_review_changes(
             remaining_knowledge,
             sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
             scope=context_scope(context_note),
+            memory_space=context_memory_space(context_note),
+            memory_domain=context_memory_domain(context_note),
             purpose=context_purpose(context_note),
         )
         writes.append((context_note.path, context_metadata, context_body))
@@ -3665,6 +4181,20 @@ def context_scope(context_note: Note) -> str | None:
     if isinstance(scope, str) and not is_blank(scope):
         return scope
     return context_body_field(context_note, "Scope")
+
+
+def context_memory_space(context_note: Note) -> str | None:
+    memory_space = context_note.metadata.get("memory_space")
+    if isinstance(memory_space, str) and not is_blank(memory_space):
+        return memory_space
+    return context_body_field(context_note, "Memory space")
+
+
+def context_memory_domain(context_note: Note) -> str | None:
+    memory_domain = context_note.metadata.get("memory_domain")
+    if isinstance(memory_domain, str) and not is_blank(memory_domain):
+        return memory_domain
+    return context_body_field(context_note, "Memory domain")
 
 
 def context_purpose(context_note: Note) -> str | None:
@@ -3728,6 +4258,240 @@ def context_reviewed_knowledge(vault: Vault, context_metadata: dict[str, Any]) -
     return notes
 
 
+def audit_context_freshness(vault: Vault, *, due_on: str | date | None = None) -> ContextFreshnessReport:
+    cutoff = review_cutoff_date(due_on)
+    contexts = sorted(
+        (note for note in vault.notes if note.type == "operational-context"),
+        key=lambda note: (
+            context_schedule_sort_key(note, cutoff),
+            note.title.lower(),
+            note.rel_path.as_posix(),
+        ),
+    )
+    return ContextFreshnessReport(
+        due_on=cutoff,
+        contexts=[audit_context_note(vault, note, due_on=cutoff) for note in contexts],
+    )
+
+
+def audit_context_note(vault: Vault, context_note: Note, *, due_on: date) -> ContextFreshnessAudit:
+    context_invalid_dates = invalid_context_date_fields(context_note)
+    schedule_status = context_schedule_status(context_note, due_on=due_on)
+    reviewed_knowledge = context_reference_audits(
+        vault,
+        context_note,
+        "reviewed_knowledge",
+        compare_to_context=True,
+    )
+    excluded_memory = context_reference_audits(vault, context_note, "excluded_memory")
+
+    reasons: list[str] = []
+    needs_review = False
+    needs_regeneration = False
+
+    if is_excluded(context_note):
+        needs_review = True
+        reasons.append(
+            "context package is lifecycle-excluded "
+            f"as {context_lifecycle_exclusion_kind(context_note)} memory"
+        )
+    if schedule_status in {"due", "overdue"}:
+        needs_review = True
+        reasons.append(f"context review is {schedule_status}")
+    if schedule_status == "invalid":
+        needs_review = True
+        reasons.append("context next_review is not a real calendar date")
+    if context_invalid_dates:
+        needs_review = True
+        reasons.append("context metadata has invalid date fields")
+    if not reviewed_knowledge:
+        needs_regeneration = True
+        reasons.append("context has no reviewed_knowledge inputs")
+
+    for reference in reviewed_knowledge:
+        if reference.state != "current":
+            needs_regeneration = True
+            reasons.append(f"{reference.ref} is {reference.state}: {reference.reason}")
+        if reference.note is not None:
+            support_schedule_status = context_schedule_status(reference.note, due_on=due_on)
+            if support_schedule_status in {"due", "overdue"}:
+                needs_review = True
+                reasons.append(f"{reference.ref} review is {support_schedule_status}")
+            if support_schedule_status == "invalid":
+                needs_review = True
+                reasons.append(f"{reference.ref} next_review is not a real calendar date")
+        if reference.changed_after_context is True:
+            needs_regeneration = True
+            reasons.append(f"{reference.ref} changed after this context was written")
+        if reference.invalid_date_fields:
+            needs_review = True
+            reasons.append(f"{reference.ref} has invalid date metadata")
+
+    for reference in excluded_memory:
+        if reference.state in {"missing", "not_excluded"}:
+            needs_review = True
+            reasons.append(f"excluded_memory {reference.ref} is {reference.state}: {reference.reason}")
+        if reference.invalid_date_fields:
+            needs_review = True
+            reasons.append(f"excluded_memory {reference.ref} has invalid date metadata")
+
+    deduped_reasons = tuple(dict.fromkeys(reasons))
+    return ContextFreshnessAudit(
+        note=context_note,
+        reviewed_knowledge=reviewed_knowledge,
+        excluded_memory=excluded_memory,
+        invalid_date_fields=context_invalid_dates,
+        schedule_status=schedule_status,
+        trustworthy=not needs_review and not needs_regeneration,
+        needs_review=needs_review,
+        needs_regeneration=needs_regeneration,
+        reasons=deduped_reasons,
+    )
+
+
+def context_reference_audits(
+    vault: Vault,
+    context_note: Note,
+    relationship: str,
+    *,
+    compare_to_context: bool = False,
+) -> list[ContextReferenceAudit]:
+    references: list[ContextReferenceAudit] = []
+    seen: set[tuple[str, str]] = set()
+    for item in as_list(context_note.metadata.get(relationship)):
+        if not isinstance(item, str):
+            continue
+        for target in sorted(extract_wikilinks(item)):
+            dedupe_key = (relationship, target)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            references.append(
+                context_reference_audit(
+                    vault,
+                    context_note,
+                    relationship,
+                    target,
+                    compare_to_context=compare_to_context,
+                )
+            )
+    return references
+
+
+def context_reference_audit(
+    vault: Vault,
+    context_note: Note,
+    relationship: str,
+    ref: str,
+    *,
+    compare_to_context: bool,
+) -> ContextReferenceAudit:
+    note = vault.find_note(ref)
+    state, reason = context_reference_state(note, relationship)
+    changed_after_context: bool | None = None
+    comparison: str | None = None
+    invalid_date_fields: tuple[str, ...] = ()
+    if note is not None:
+        invalid_date_fields = invalid_context_support_date_fields(note)
+    if note is not None and compare_to_context:
+        changed_after_context, comparison = context_support_changed_after_context(context_note, note)
+    return ContextReferenceAudit(
+        relationship=relationship,
+        ref=ref,
+        note=note,
+        state=state,
+        reason=reason,
+        changed_after_context=changed_after_context,
+        comparison=comparison,
+        invalid_date_fields=invalid_date_fields,
+    )
+
+
+def context_reference_state(note: Note | None, relationship: str) -> tuple[str, str]:
+    if note is None:
+        return "missing", "referenced note was not found"
+    if relationship == "reviewed_knowledge":
+        if note.type != "reviewed-knowledge":
+            return "not_reviewed_knowledge", f"expected reviewed-knowledge, found {note.type}"
+        if is_excluded(note):
+            kind = context_lifecycle_exclusion_kind(note)
+            return kind, f"reviewed knowledge is lifecycle-excluded as {kind}"
+        if (
+            note.lifecycle_stage != "knowledge"
+            or note.review_state not in {"reviewed", "approved"}
+            or note.status not in CURRENT_KNOWLEDGE_STATUSES
+        ):
+            return "not_current", "reviewed knowledge is not active reviewed knowledge"
+        return "current", "active reviewed knowledge"
+    if relationship == "excluded_memory":
+        if not is_excluded(note):
+            return "not_excluded", "excluded_memory target is not stale, superseded, or archived"
+        kind = context_lifecycle_exclusion_kind(note)
+        return kind, f"excluded as {kind} memory"
+    return "linked", "linked relationship"
+
+
+def context_support_changed_after_context(context_note: Note, support_note: Note) -> tuple[bool | None, str]:
+    context_written = metadata_best_date(context_note, ("updated", "created"))
+    support_changed = metadata_best_date(support_note, ("updated", "reviewed_at", "created"))
+    if context_written is None:
+        return None, "unknown because context updated/created date is missing or invalid"
+    if support_changed is None:
+        return None, "unknown because support updated/reviewed_at date is missing or invalid"
+    if support_changed > context_written:
+        return True, f"support date {support_changed.isoformat()} is after context date {context_written.isoformat()}"
+    return False, f"support date {support_changed.isoformat()} is not after context date {context_written.isoformat()}"
+
+
+def metadata_best_date(note: Note, keys: Sequence[str]) -> date | None:
+    dates = [parsed for key in keys if (parsed := parse_review_date(note.metadata.get(key))) is not None]
+    return max(dates) if dates else None
+
+
+def invalid_context_date_fields(note: Note) -> tuple[str, ...]:
+    return invalid_metadata_date_fields(note, ("updated", "created", "next_review"))
+
+
+def invalid_context_support_date_fields(note: Note) -> tuple[str, ...]:
+    return invalid_metadata_date_fields(note, ("updated", "reviewed_at", "next_review"))
+
+
+def invalid_metadata_date_fields(note: Note, keys: Sequence[str]) -> tuple[str, ...]:
+    invalid: list[str] = []
+    for key in keys:
+        if key not in note.metadata:
+            continue
+        value = note.metadata.get(key)
+        if value in {"unknown", "{{date}}"}:
+            continue
+        if parse_review_date(value) is None:
+            invalid.append(key)
+    return tuple(invalid)
+
+
+def context_schedule_status(note: Note, *, due_on: date) -> str:
+    if "next_review" not in note.metadata:
+        return "unscheduled"
+    value = note.metadata.get("next_review")
+    if value in {"unknown", "{{date}}"}:
+        return "unscheduled"
+    next_review = parse_review_date(value)
+    if next_review is None:
+        return "invalid"
+    if next_review < due_on:
+        return "overdue"
+    if next_review == due_on:
+        return "due"
+    return "scheduled"
+
+
+def context_schedule_sort_key(note: Note, due_on: date) -> tuple[int, str]:
+    status_order = {"overdue": 0, "due": 1, "invalid": 2, "scheduled": 3, "unscheduled": 4}
+    status = context_schedule_status(note, due_on=due_on)
+    parsed = parse_review_date(note.metadata.get("next_review"))
+    return status_order.get(status, 9), parsed.isoformat() if parsed is not None else ""
+
+
 def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> bool:
     if note.noesis_id == target_noesis_id:
         return True
@@ -3745,13 +4509,114 @@ def filter_knowledge_by_scope(knowledge: list[Note], scope: str | None) -> list[
     return [note for note in knowledge if context_scope_score(note, scope_terms) > 0]
 
 
+def filter_notes_by_memory(
+    notes: list[Note],
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> list[Note]:
+    memory_space, memory_domain = validate_memory_filters(
+        memory_space=memory_space,
+        memory_domain=memory_domain,
+    )
+    return [
+        note
+        for note in notes
+        if note_matches_memory_filters(note, memory_space=memory_space, memory_domain=memory_domain)
+    ]
+
+
+def select_notes_by_memory(
+    notes: list[Note],
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> tuple[list[Note], list[ContextSelection]]:
+    memory_space, memory_domain = validate_memory_filters(
+        memory_space=memory_space,
+        memory_domain=memory_domain,
+    )
+    selected: list[Note] = []
+    filtered_out: list[ContextSelection] = []
+    for note in notes:
+        if note_matches_memory_filters(note, memory_space=memory_space, memory_domain=memory_domain):
+            selected.append(note)
+            continue
+        filtered_out.append(
+            ContextSelection(
+                note=note,
+                status="memory_filtered_out",
+                reason=memory_filtered_out_reason(memory_space=memory_space, memory_domain=memory_domain),
+                score=0,
+                content_chars=len(note.body.strip()),
+            )
+        )
+    return selected, filtered_out
+
+
+def note_matches_memory_filters(
+    note: Note,
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> bool:
+    if memory_space is not None and note.memory_space != memory_space:
+        return False
+    if memory_domain is not None and note.memory_domain != memory_domain:
+        return False
+    return True
+
+
+def validate_memory_filters(
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> tuple[str | None, str | None]:
+    normalized_space = normalize_memory_filter(memory_space, field="memory_space")
+    normalized_domain = normalize_memory_filter(memory_domain, field="memory_domain")
+    if normalized_space is not None and not MEMORY_SPACE_RE.fullmatch(normalized_space):
+        raise ValueError("memory_space must use lowercase letters, numbers, and hyphens")
+    if normalized_domain is not None and normalized_domain not in MEMORY_DOMAINS:
+        expected = ", ".join(sorted(MEMORY_DOMAINS))
+        raise ValueError(f"memory_domain must be one of: {expected}")
+    return normalized_space, normalized_domain
+
+
+def normalize_memory_filter(value: str | None, *, field: str) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field} must not be blank")
+    return normalized
+
+
+def memory_filtered_out_reason(
+    *,
+    memory_space: str | None = None,
+    memory_domain: str | None = None,
+) -> str:
+    filters = []
+    if memory_space is not None:
+        filters.append(f"memory_space {memory_space!r}")
+    if memory_domain is not None:
+        filters.append(f"memory_domain {memory_domain!r}")
+    if not filters:
+        return "included because no memory-space filter was requested"
+    return "does not match " + " and ".join(filters)
+
+
+def metadata_string(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
 def searchable_note_text(note: Note) -> str:
     metadata_values = [
         note.noesis_id,
         note.title,
         note.rel_path.as_posix(),
     ]
-    for key in ("tags", "aliases"):
+    for key in ("tags", "aliases", "memory_space", "memory_domain"):
         for value in as_list(note.metadata.get(key)):
             metadata_values.append(str(value))
     metadata_values.append(note.body)
@@ -3760,6 +4625,14 @@ def searchable_note_text(note: Note) -> str:
 
 def is_excluded(note: Note) -> bool:
     return note.lifecycle_stage in {"stale", "archive"} or note.status in EXCLUDED_STATUSES
+
+
+def knowledge_gap_current(note: Note) -> bool:
+    return (
+        note.type == "knowledge-gap"
+        and note.metadata.get("gap_state") in CURRENT_GAP_STATES
+        and not is_excluded(note)
+    )
 
 
 def review_requires_audit(note: Note) -> bool:
@@ -3775,6 +4648,20 @@ def sort_review_notes(notes: Iterable[Note]) -> list[Note]:
         key=lambda note: (
             review_date_sort_key(note.metadata.get("next_review")),
             note.lifecycle_stage,
+            note.title.lower(),
+            note.rel_path.as_posix(),
+        ),
+    )
+
+
+def sort_gap_notes(notes: Iterable[Note]) -> list[Note]:
+    gap_state_order = {"open": 0, "monitoring": 1, "resolved": 2}
+    return sorted(
+        notes,
+        key=lambda note: (
+            gap_state_order.get(str(note.metadata.get("gap_state", "")), 99),
+            review_date_sort_key(note.metadata.get("next_review")),
+            str(note.metadata.get("gap_kind", "")),
             note.title.lower(),
             note.rel_path.as_posix(),
         ),

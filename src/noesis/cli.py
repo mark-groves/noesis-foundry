@@ -7,8 +7,10 @@ import sys
 from typing import Any
 
 from .mcp_server import (
+    context_freshness_report_to_dict,
     issue_to_dict,
     json_safe,
+    knowledge_gap_summary,
     note_summary,
     review_filters,
     review_note_summary,
@@ -20,7 +22,10 @@ from .vault import (
     ContextPackage,
     ContextLineageSummary,
     ContextSelection,
+    GAP_KINDS,
+    GAP_STATES,
     LIFECYCLE_STAGES,
+    MEMORY_DOMAINS,
     REVIEW_STATES,
     SOURCE_BUNDLE_SCHEMA_KIND,
     TYPES,
@@ -32,6 +37,7 @@ from .vault import (
     extract_evidence,
     filter_knowledge_by_scope,
     import_source_bundle,
+    import_session_bundle,
     ingest_sources,
     init_vault,
     mark_memory_stale,
@@ -72,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="Write structured JSON")
     doctor.set_defaults(func=cmd_vault_doctor)
 
+    spaces = vault_commands.add_parser("spaces", help="Report memory spaces and domains")
+    spaces.add_argument("path", type=Path)
+    spaces.add_argument("--json", action="store_true", help="Write structured JSON")
+    spaces.set_defaults(func=cmd_vault_spaces)
+
     ingest = subcommands.add_parser("ingest", help="Ingest source material")
     ingest_commands = ingest.add_subparsers(dest="ingest_command", required=True)
     source = ingest_commands.add_parser("source", help="Copy a raw source and create a source note")
@@ -104,6 +115,22 @@ def build_parser() -> argparse.ArgumentParser:
     bundle.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
     bundle.add_argument("--json", action="store_true", help="Write structured JSON")
     bundle.set_defaults(func=cmd_ingest_bundle)
+
+    session = ingest_commands.add_parser(
+        "session",
+        help="Import coding-agent session artifacts through the source-bundle contract",
+    )
+    session.add_argument("--vault", type=Path, required=True)
+    session.add_argument("path", type=Path, help="Session export directory or manifest file")
+    session.add_argument(
+        "--manifest",
+        default="noesis-bundle.yaml",
+        help="Manifest filename when path is a directory",
+    )
+    session.add_argument("--allow-duplicates", action="store_true")
+    session.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
+    session.add_argument("--json", action="store_true", help="Write structured JSON")
+    session.set_defaults(func=cmd_ingest_session)
 
     extract = subcommands.add_parser("extract", help="Extract lifecycle drafts")
     extract_commands = extract.add_subparsers(dest="extract_command", required=True)
@@ -140,6 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--review-state", choices=sorted(REVIEW_STATES), default=None)
     queue.add_argument("--type", dest="note_type", choices=sorted(TYPES - {"dashboard"}), default=None)
     queue.add_argument("--stage", dest="lifecycle_stage", choices=sorted(LIFECYCLE_STAGES), default=None)
+    queue.add_argument("--memory-space", default=None)
+    queue.add_argument("--memory-domain", choices=sorted(MEMORY_DOMAINS), default=None)
     queue.add_argument("--due", action="store_true", help="Only include notes with next_review on or before today")
     queue.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for --due")
     queue.add_argument("--json", action="store_true", help="Write structured JSON")
@@ -148,6 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
     summary = review_commands.add_parser("summary", help="Summarize review states and scheduled reviews")
     summary.add_argument("--vault", type=Path, required=True)
     summary.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for due review counts")
+    summary.add_argument("--memory-space", default=None)
+    summary.add_argument("--memory-domain", choices=sorted(MEMORY_DOMAINS), default=None)
     summary.add_argument("--json", action="store_true", help="Write structured JSON")
     summary.set_defaults(func=cmd_review_summary)
 
@@ -202,6 +233,16 @@ def build_parser() -> argparse.ArgumentParser:
     promote.add_argument("--next-review", default=None)
     promote.set_defaults(func=cmd_knowledge_promote)
 
+    gaps = knowledge_commands.add_parser("gaps", help="List unresolved questions, weak areas, and contradictions")
+    gaps.add_argument("--vault", type=Path, required=True)
+    gaps.add_argument("--kind", dest="gap_kind", choices=sorted(GAP_KINDS), default=None)
+    gaps.add_argument("--state", dest="gap_state", choices=sorted(GAP_STATES), default=None)
+    gaps.add_argument("--include-resolved", action="store_true", help="Include resolved gap notes")
+    gaps.add_argument("--due", action="store_true", help="Only include gaps with next_review on or before today")
+    gaps.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for --due")
+    gaps.add_argument("--json", action="store_true", help="Write structured JSON")
+    gaps.set_defaults(func=cmd_knowledge_gaps)
+
     memory = subcommands.add_parser("memory", help="Memory lifecycle workflows")
     memory_commands = memory.add_subparsers(dest="memory_command", required=True)
     stale = memory_commands.add_parser("stale", help="Mark memory stale or superseded")
@@ -224,6 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
     build = context_commands.add_parser("build", help="Build context from reviewed knowledge")
     build.add_argument("--vault", type=Path, required=True)
     build.add_argument("--scope", default=None)
+    build.add_argument("--memory-space", default=None)
+    build.add_argument("--memory-domain", choices=sorted(MEMORY_DOMAINS), default=None)
     build.add_argument("--purpose", default=None)
     build.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     build.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
@@ -235,6 +278,8 @@ def build_parser() -> argparse.ArgumentParser:
     explain = context_commands.add_parser("explain", help="Explain context selection and lifecycle exclusions")
     explain.add_argument("--vault", type=Path, required=True)
     explain.add_argument("--scope", default=None)
+    explain.add_argument("--memory-space", default=None)
+    explain.add_argument("--memory-domain", choices=sorted(MEMORY_DOMAINS), default=None)
     explain.add_argument("--purpose", default=None)
     explain.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     explain.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
@@ -242,9 +287,17 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument("--json", action="store_true", help="Write structured JSON")
     explain.set_defaults(func=cmd_context_explain)
 
+    audit = context_commands.add_parser("audit", help="Audit context freshness and context rot")
+    audit.add_argument("--vault", type=Path, required=True)
+    audit.add_argument("--due-on", default=None, help="Use this YYYY-MM-DD cutoff for due context reviews")
+    audit.add_argument("--json", action="store_true", help="Write structured JSON")
+    audit.set_defaults(func=cmd_context_audit)
+
     write = context_commands.add_parser("write", help="Write an operational context note")
     write.add_argument("--vault", type=Path, required=True)
     write.add_argument("--scope", default=None)
+    write.add_argument("--memory-space", default=None)
+    write.add_argument("--memory-domain", choices=sorted(MEMORY_DOMAINS), default=None)
     write.add_argument("--purpose", default=None)
     write.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     write.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
@@ -317,6 +370,44 @@ def cmd_vault_doctor(args: argparse.Namespace) -> int:
             print(f"ERROR {issue.format(doctor.root)}", file=sys.stderr)
         return 1
     print("issues: 0")
+    return 0
+
+
+def cmd_vault_spaces(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.path)
+    issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        payload = {"ok": True, "vault_path": str(vault.root), **vault.memory_spaces()}
+        write_json(payload)
+        return 0
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
+        return 1
+
+    report = vault.memory_spaces()
+    print(f"vault: {vault.root}")
+    print(f"notes: {report['note_count']}")
+    print(f"explicit_spaces: {report['explicit_space_count']}")
+    print(f"unscoped_notes: {report['unscoped_count']}")
+    print("spaces:")
+    for entry in report["spaces"]:
+        domains = ", ".join(f"{key}={value}" for key, value in entry["domain_counts"].items())
+        print(
+            "\t".join(
+                [
+                    entry["label"],
+                    f"notes:{entry['note_count']}",
+                    f"current_reviewed_knowledge:{entry['current_reviewed_knowledge_count']}",
+                    f"review_queue:{entry['review_queue_count']}",
+                    f"domains:{domains}",
+                ]
+            )
+        )
     return 0
 
 
@@ -407,6 +498,38 @@ def cmd_ingest_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_session(args: argparse.Namespace) -> int:
+    try:
+        imported = import_session_bundle(
+            args.vault,
+            args.path,
+            manifest_name=args.manifest,
+            create_evidence=args.evidence_drafts,
+            allow_duplicates=args.allow_duplicates,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        write_json(source_bundle_import_payload(imported, args.vault, import_kind="coding-agent-session"))
+        return 0
+
+    created_count = sum(1 for result in imported.results if result.status == "created")
+    skipped_count = sum(1 for result in imported.results if result.status == "skipped")
+    print(f"session import: {imported.bundle_id}")
+    print(f"manifest: {imported.manifest_path}")
+    print(f"ingest summary: created={created_count} skipped={skipped_count}")
+    for result in imported.results:
+        if result.note is not None:
+            print(f"created {result.note.note_id}\t{result.note.path}\t{result.source_file}")
+            if result.evidence_note is not None:
+                print(f"created {result.evidence_note.note_id}\t{result.evidence_note.path}\tevidence")
+        else:
+            print(f"skipped {result.existing_note_id}\t{result.reason}\t{result.source_file}")
+    return 0
+
+
 def collect_ingest_source_files(args: argparse.Namespace) -> list[Path]:
     if args.file:
         if args.recursive:
@@ -456,8 +579,13 @@ def source_capture_result_payload(result: Any) -> dict[str, Any]:
     return payload
 
 
-def source_bundle_import_payload(imported: Any, vault_path: Path | str) -> dict[str, Any]:
-    return {
+def source_bundle_import_payload(
+    imported: Any,
+    vault_path: Path | str,
+    *,
+    import_kind: str | None = None,
+) -> dict[str, Any]:
+    payload = {
         "ok": True,
         "vault_path": str(Path(vault_path).expanduser().resolve()),
         "bundle_id": imported.bundle_id,
@@ -472,6 +600,9 @@ def source_bundle_import_payload(imported: Any, vault_path: Path | str) -> dict[
         "skipped_count": sum(1 for result in imported.results if result.status == "skipped"),
         "results": [source_capture_result_payload(result) for result in imported.results],
     }
+    if import_kind is not None:
+        payload["import_kind"] = import_kind
+    return payload
 
 
 def cmd_extract_evidence(args: argparse.Namespace) -> int:
@@ -535,6 +666,8 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
                 review_state=args.review_state,
                 note_type=args.note_type,
                 lifecycle_stage=args.lifecycle_stage,
+                memory_space=args.memory_space,
+                memory_domain=args.memory_domain,
                 due=due_filter,
                 due_on=args.due_on,
             )
@@ -551,6 +684,8 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
                     review_state=args.review_state,
                     note_type=args.note_type,
                     lifecycle_stage=args.lifecycle_stage,
+                    memory_space=args.memory_space,
+                    memory_domain=args.memory_domain,
                     due=due_filter,
                     due_on=args.due_on,
                 ),
@@ -567,6 +702,8 @@ def cmd_review_queue(args: argparse.Namespace) -> int:
             review_state=args.review_state,
             note_type=args.note_type,
             lifecycle_stage=args.lifecycle_stage,
+            memory_space=args.memory_space,
+            memory_domain=args.memory_domain,
             due=due_filter,
             due_on=args.due_on,
         )
@@ -606,11 +743,23 @@ def cmd_review_summary(args: argparse.Namespace) -> int:
             write_json(validation_error_payload(vault, issues))
             return 1
         try:
-            summary = vault.review_summary(due_on=args.due_on)
+            summary = vault.review_summary(
+                due_on=args.due_on,
+                memory_space=args.memory_space,
+                memory_domain=args.memory_domain,
+            )
         except ValueError as exc:
             write_json(review_error_payload(vault, exc))
             return 1
-        write_json(review_summary_to_dict(vault, summary, due_on=args.due_on))
+        write_json(
+            review_summary_to_dict(
+                vault,
+                summary,
+                due_on=args.due_on,
+                memory_space=args.memory_space,
+                memory_domain=args.memory_domain,
+            )
+        )
         return 0
     if issues:
         for issue in issues:
@@ -618,7 +767,11 @@ def cmd_review_summary(args: argparse.Namespace) -> int:
         print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
         return 1
     try:
-        summary = vault.review_summary(due_on=args.due_on)
+        summary = vault.review_summary(
+            due_on=args.due_on,
+            memory_space=args.memory_space,
+            memory_domain=args.memory_domain,
+        )
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
@@ -846,6 +999,101 @@ def cmd_knowledge_promote(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_knowledge_gaps(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    issues = vault.validate()
+    due_filter = args.due or args.due_on is not None
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        try:
+            gaps = vault.knowledge_gaps(
+                gap_kind=args.gap_kind,
+                gap_state=args.gap_state,
+                include_resolved=args.include_resolved,
+                due=due_filter,
+                due_on=args.due_on,
+            )
+        except ValueError as exc:
+            write_json(review_error_payload(vault, exc))
+            return 1
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "count": len(gaps),
+                "notes": [knowledge_gap_summary(note, vault, due_on=args.due_on) for note in gaps],
+                "filters": {
+                    "gap_kind": args.gap_kind,
+                    "gap_state": args.gap_state,
+                    "include_resolved": args.include_resolved,
+                    "due": due_filter,
+                    "due_on": args.due_on,
+                },
+            }
+        )
+        return 0
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
+        return 1
+    try:
+        gaps = vault.knowledge_gaps(
+            gap_kind=args.gap_kind,
+            gap_state=args.gap_state,
+            include_resolved=args.include_resolved,
+            due=due_filter,
+            due_on=args.due_on,
+        )
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    if not gaps:
+        print("knowledge gaps empty")
+        return 0
+    for note in gaps:
+        summary = knowledge_gap_summary(note, vault, due_on=args.due_on)
+        support = format_gap_support(summary["support"])
+        schedule = summary["review_schedule"]
+        print(
+            "\t".join(
+                [
+                    note.noesis_id,
+                    note.rel_path.as_posix(),
+                    str(summary["gap_kind"]),
+                    str(summary["gap_state"]),
+                    f"current:{format_bool(bool(summary['current']))}",
+                    note.review_state,
+                    schedule["status"],
+                    str(note.metadata.get("next_review", "")),
+                    support,
+                    note.title,
+                ]
+            )
+        )
+    return 0
+
+
+def format_gap_support(support: object) -> str:
+    if not isinstance(support, dict):
+        return "support:none"
+    parts: list[str] = []
+    for key in ("sources", "evidence", "claims", "syntheses", "reviewed_knowledge", "related_notes", "contradicts"):
+        values = support.get(key)
+        if not isinstance(values, list) or not values:
+            continue
+        ids = [
+            str(value.get("noesis_id"))
+            for value in values
+            if isinstance(value, dict) and value.get("noesis_id")
+        ]
+        if ids:
+            parts.append(f"{key}:{','.join(ids)}")
+    return " ".join(parts) if parts else "support:none"
+
+
 def cmd_memory_stale(args: argparse.Namespace) -> int:
     try:
         created = mark_memory_stale(
@@ -918,6 +1166,8 @@ def cmd_context_build(args: argparse.Namespace) -> int:
             package = compose_context(
                 vault,
                 scope=args.scope,
+                memory_space=args.memory_space,
+                memory_domain=args.memory_domain,
                 purpose=args.purpose,
                 limit=args.limit,
                 max_chars=args.max_chars,
@@ -936,6 +1186,7 @@ def cmd_context_build(args: argparse.Namespace) -> int:
                 "ok": True,
                 "vault_path": str(vault.root),
                 "scope": package.scope,
+                **context_memory_filter_payload(package),
                 "purpose": package.purpose,
                 "profile": package.profile,
                 "profile_description": package.profile_description,
@@ -963,6 +1214,8 @@ def cmd_context_build(args: argparse.Namespace) -> int:
         content = build_context(
             vault,
             scope=args.scope,
+            memory_space=args.memory_space,
+            memory_domain=args.memory_domain,
             purpose=args.purpose,
             limit=args.limit,
             max_chars=args.max_chars,
@@ -990,6 +1243,8 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
             package = compose_context(
                 vault,
                 scope=args.scope,
+                memory_space=args.memory_space,
+                memory_domain=args.memory_domain,
                 purpose=args.purpose,
                 limit=args.limit,
                 max_chars=args.max_chars,
@@ -1003,6 +1258,7 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
                 "ok": True,
                 "vault_path": str(vault.root),
                 "scope": package.scope,
+                **context_memory_filter_payload(package),
                 "purpose": package.purpose,
                 "profile": package.profile,
                 "profile_description": package.profile_description,
@@ -1027,6 +1283,8 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
         package = compose_context(
             vault,
             scope=args.scope,
+            memory_space=args.memory_space,
+            memory_domain=args.memory_domain,
             purpose=args.purpose,
             limit=args.limit,
             max_chars=args.max_chars,
@@ -1039,11 +1297,41 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_context_audit(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if args.json:
+        if issues:
+            write_json(validation_error_payload(vault, issues))
+            return 1
+        try:
+            report = vault.context_freshness_audit(due_on=args.due_on)
+        except ValueError as exc:
+            write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
+            return 1
+        write_json(context_freshness_report_to_dict(vault, report))
+        return 0
+    if issues:
+        for issue in issues:
+            print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        return 1
+    try:
+        report = vault.context_freshness_audit(due_on=args.due_on)
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    payload = context_freshness_report_to_dict(vault, report)
+    print(render_context_freshness_audit(payload), end="")
+    return 0
+
+
 def cmd_context_write(args: argparse.Namespace) -> int:
     try:
         created = write_context_note(
             args.vault,
             scope=args.scope,
+            memory_space=args.memory_space,
+            memory_domain=args.memory_domain,
             purpose=args.purpose,
             limit=args.limit,
             max_chars=args.max_chars,
@@ -1060,7 +1348,7 @@ def cmd_context_write(args: argparse.Namespace) -> int:
 
 
 def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> dict[str, Any]:
-    return {
+    payload = {
         "included": [context_selection_payload(selection, vault_root) for selection in package.included],
         "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
         "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
@@ -1069,6 +1357,22 @@ def context_package_selection_payload(package: ContextPackage, vault_root: Path)
             context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
         ],
         "lifecycle_exclusion_summary": lifecycle_exclusion_summary(package.lifecycle_excluded),
+    }
+    if package.memory_space or package.memory_domain or package.memory_filtered_out:
+        payload["memory_filtered_out"] = [
+            context_selection_payload(selection, vault_root) for selection in package.memory_filtered_out
+        ]
+    return payload
+
+
+def context_memory_filter_payload(package: ContextPackage) -> dict[str, Any]:
+    if not package.memory_space and not package.memory_domain:
+        return {}
+    return {
+        "memory_filter": {
+            "memory_space": package.memory_space,
+            "memory_domain": package.memory_domain,
+        }
     }
 
 
@@ -1118,7 +1422,7 @@ def context_lineage_summary_payload(summary: ContextLineageSummary, vault_root: 
 
 
 def context_handoff_payload(package: ContextPackage, vault_root: Path) -> dict[str, Any]:
-    return {
+    payload = {
         "task_purpose": package.handoff.task_purpose,
         "assumptions": list(package.handoff.assumptions),
         "validation_commands": list(package.handoff.validation_commands),
@@ -1147,12 +1451,24 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> dict[s
             ],
         },
     }
+    if package.memory_space or package.memory_domain or package.memory_filtered_out:
+        payload["memory_filtered_out_reviewed_knowledge"] = [
+            context_selection_payload(selection, vault_root) for selection in package.memory_filtered_out
+        ]
+        payload["selection_provenance"]["memory_filtered_out"] = [
+            context_selection_payload(selection, vault_root) for selection in package.memory_filtered_out
+        ]
+    return payload
 
 
 def render_context_explanation(package: ContextPackage, vault_root: Path) -> str:
     lines = ["# Noesis Context Explanation", ""]
     if package.scope:
         lines.extend([f"Scope: {package.scope}", ""])
+    if package.memory_space:
+        lines.extend([f"Memory space: {package.memory_space}", ""])
+    if package.memory_domain:
+        lines.extend([f"Memory domain: {package.memory_domain}", ""])
     if package.purpose:
         lines.extend([f"Purpose: {package.purpose}", ""])
     if package.profile:
@@ -1196,6 +1512,14 @@ def render_context_explanation(package: ContextPackage, vault_root: Path) -> str
     else:
         lines.append("No included reviewed knowledge lineage to summarize.")
 
+    if package.memory_space or package.memory_domain or package.memory_filtered_out:
+        lines.extend(["", "## Memory Filtered Out", ""])
+        if package.memory_filtered_out:
+            for selection in package.memory_filtered_out:
+                lines.append(format_selection_line(selection, vault_root))
+        else:
+            lines.append("No current reviewed knowledge was excluded by memory-space filters.")
+
     lines.extend(["", "## Scoped Out", ""])
     if package.scoped_out:
         for selection in package.scoped_out:
@@ -1226,6 +1550,80 @@ def render_context_explanation(package: ContextPackage, vault_root: Path) -> str
     else:
         lines.append("No stale, superseded, or archived reviewed memory found.")
 
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_context_freshness_audit(payload: dict[str, Any]) -> str:
+    summary = payload["summary"]
+    lines = [
+        "# Noesis Context Freshness Audit",
+        "",
+        f"Due on: {payload['due_on']}",
+        "",
+        "## Summary",
+        "",
+        (
+            f"- Contexts: {summary['context_count']}; "
+            f"trustworthy={summary['trustworthy_count']}; "
+            f"needs_review={summary['review_needed_count']}; "
+            f"needs_regeneration={summary['regeneration_needed_count']}"
+        ),
+        (
+            f"- Schedule: due={summary['due_count']}; "
+            f"overdue={summary['overdue_count']}; "
+            f"invalid_dates={summary['invalid_date_count']}; "
+            f"support_changed={summary['support_changed_count']}"
+        ),
+        (
+            "- Exclusions: "
+            + ", ".join(
+                f"{key}={value}"
+                for key, value in summary["lifecycle_exclusion_summary"].items()
+            )
+        ),
+        "",
+        "## Context Packages",
+        "",
+    ]
+    if not payload["contexts"]:
+        lines.append("No operational context notes found.")
+        return "\n".join(lines).rstrip() + "\n"
+    for audit in payload["contexts"]:
+        note = audit["note"]
+        schedule = audit["review_schedule"]
+        next_review = schedule.get("next_review") or "not scheduled"
+        lines.append(f"- {note['noesis_id']} [{audit['verdict']}]")
+        lines.append(f"  path: {note['path']}")
+        if audit.get("scope"):
+            lines.append(f"  scope: {audit['scope']}")
+        if audit.get("purpose"):
+            lines.append(f"  purpose: {audit['purpose']}")
+        lines.append(f"  review: {schedule['status']} next_review={next_review}")
+        if audit["reasons"]:
+            lines.append("  reasons:")
+            lines.extend(f"    - {reason}" for reason in audit["reasons"])
+        lines.append("  reviewed_knowledge:")
+        if audit["reviewed_knowledge"]:
+            for reference in audit["reviewed_knowledge"]:
+                changed = reference["changed_after_context"]
+                if changed is True:
+                    change_label = "changed"
+                elif changed is False:
+                    change_label = "unchanged"
+                else:
+                    change_label = "unknown"
+                note_id = reference["note"]["noesis_id"] if reference["note"] else reference["ref"]
+                lines.append(f"    - {note_id}: {reference['state']} ({change_label})")
+        else:
+            lines.append("    - none")
+        lines.append("  excluded_memory:")
+        if audit["excluded_memory"]:
+            for reference in audit["excluded_memory"]:
+                note_id = reference["note"]["noesis_id"] if reference["note"] else reference["ref"]
+                lines.append(f"    - {note_id}: {reference['state']}")
+        else:
+            lines.append("    - none")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

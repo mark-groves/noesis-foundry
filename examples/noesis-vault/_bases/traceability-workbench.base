@@ -1,6 +1,6 @@
 filters:
   and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
+    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("gaps") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
     - noesis_id != null
 views:
   - type: table
@@ -20,8 +20,33 @@ views:
       - sources
       - evidence
       - claims
+      - contradicts
       - syntheses
       - reviewed_knowledge
+      - supersedes
+      - superseded_by
+      - reviewed_by
+      - reviewed_at
+      - next_review
+  - type: table
+    name: Knowledge gaps and contradictions
+    filters:
+      and:
+        - type == "knowledge-gap"
+    groupBy:
+      property: gap_kind
+      direction: ASC
+    order:
+      - file.name
+      - gap_kind
+      - gap_state
+      - status
+      - review_state
+      - sources
+      - evidence
+      - claims
+      - contradicts
+      - next_review
   - type: table
     name: Review audit records
     filters:
@@ -39,6 +64,25 @@ views:
       - reviewed_notes
       - next_review
   - type: table
+    name: Trust review schedule
+    filters:
+      and:
+        - next_review != null
+        - type != "dashboard"
+    groupBy:
+      property: next_review
+      direction: ASC
+    order:
+      - next_review
+      - file.name
+      - type
+      - lifecycle_stage
+      - status
+      - review_state
+      - confidence
+      - reviewed_at
+      - reviewed_by
+  - type: table
     name: Active context packages
     filters:
       and:
@@ -51,6 +95,25 @@ views:
       - file.name
       - reviewed_knowledge
       - excluded_memory
+      - next_review
+      - updated
+  - type: table
+    name: Context inclusion map
+    filters:
+      and:
+        - type == "reviewed-knowledge" || type == "operational-context" || excluded_memory != null
+    groupBy:
+      property: type
+      direction: ASC
+    order:
+      - file.name
+      - type
+      - status
+      - scope
+      - purpose
+      - reviewed_knowledge
+      - excluded_memory
+      - syntheses
       - next_review
       - updated
   - type: table

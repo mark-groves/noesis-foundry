@@ -1,5 +1,5 @@
 ---
-title: Noesis Review Dashboard
+title: Noesis Review Workbench
 noesis_id: dashboard-review
 type: dashboard
 lifecycle_stage: review
@@ -7,17 +7,25 @@ status: active
 review_state: none
 confidence: unknown
 created: 2026-05-29
-updated: 2026-06-18
+updated: 2026-06-20
 tags:
   - noesis
   - dashboard
 ---
 
-# Noesis Review Dashboard
+# Noesis Review Workbench
+
+Start here when deciding what the vault remembers, whether it is current, and
+what should still guide active work. The embedded Bases are human inspection
+views over Markdown notes and flat YAML properties; they do not store canonical
+state.
 
 ## Review Queue
 
 ![[review-queue.base]]
+
+Use this Base to triage open review work, scheduled `next_review` dates,
+requested changes, downstream impact cues, and direct frontmatter audit gaps.
 
 ## CLI Review Workbench
 
@@ -28,11 +36,15 @@ closer inspection:
 PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --due --due-on 2026-06-13
 PYTHONPATH=src python -m noesis review show stale-custom-plugin-first --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis knowledge gaps --vault examples/noesis-vault
 ```
 
 `review summary`, `review queue`, and `review show` report overdue review
 status, audit gaps, requested changes, downstream reviewed-knowledge/context
 impact, and complete lineage.
+
+`knowledge gaps` reports unresolved questions, weak areas, and contradictions
+from source-backed gap notes without including them in active context.
 
 Use this write action after a scheduled review confirms the note still fits
 its current lifecycle role:
@@ -55,13 +67,18 @@ also link targets through `reviewed_notes`.
 
 ![[lifecycle-dashboard.base]]
 
+Use the lifecycle views to compare stage, status, review state, confidence,
+current trusted context candidates, and stale/superseded/archive exceptions
+before letting memory guide new work.
+
 ## Traceability Workbench
 
 ![[traceability-workbench.base]]
 
-Use this Base to inspect lineage links, review audit notes, active context
-packages, and excluded memory before changing lifecycle state. It is a view over
-frontmatter and wikilinks only; notes remain canonical.
+Use this Base to inspect source-to-context lineage links, review audit notes,
+trust review schedules, knowledge gaps, active context packages, context
+inclusion maps, and excluded memory before changing lifecycle state. It is a
+view over frontmatter and wikilinks only; notes remain canonical.
 
 ## Current Complete Lineage
 

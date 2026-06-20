@@ -8,6 +8,8 @@ review_state: reviewed
 confidence: high
 created: 2026-06-18
 updated: 2026-06-18
+memory_space: noesis-foundry-project
+memory_domain: project
 sources:
   - "[[source-project-memory-corpus-repo-artifacts]]"
   - "[[source-project-memory-corpus-bundle-fixture]]"

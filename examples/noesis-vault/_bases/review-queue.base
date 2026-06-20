@@ -1,6 +1,6 @@
 filters:
   and:
-    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
+    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("gaps") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
 views:
   - type: table
     name: Open review queue
@@ -18,6 +18,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - confidence
       - next_review
       - updated
@@ -38,6 +40,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - reviewed_by
       - superseded_by
   - type: table
@@ -54,6 +58,8 @@ views:
       - lifecycle_stage
       - status
       - review_state
+      - memory_space
+      - memory_domain
       - reviewed_by
       - updated
   - type: table

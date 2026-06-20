@@ -8,6 +8,8 @@ review_state: approved
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 reviewer: unknown
 reviewed_at: "{{date}}"
 reviewed_notes:

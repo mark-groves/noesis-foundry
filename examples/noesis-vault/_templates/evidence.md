@@ -8,6 +8,8 @@ review_state: none
 confidence: medium
 created: "{{date}}"
 updated: "{{date}}"
+memory_space: "<space-slug>"
+memory_domain: project
 sources:
   - "[[<source-note>]]"
 tags:

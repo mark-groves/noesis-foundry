@@ -2,7 +2,7 @@
 
 Status: implemented CLI/MCP/portable-skill adapter baseline
 Date: 2026-05-29
-Updated: 2026-06-13
+Updated: 2026-06-20
 Scope: current local-first Noesis vault contract, CLI, MCP server, portable skills, and deferred app adapters
 
 ## Starting Point
@@ -91,6 +91,7 @@ sources/                one source note per raw source or external source
 evidence/               atomic evidence extracted from sources
 claims/                 source-backed interpretations built from evidence
 syntheses/              cross-claim summaries and arguments
+gaps/                   open questions, weak areas, and contradictions
 review/                 review queue, review decisions, reviewer notes
 knowledge/              reviewed knowledge that can guide future work
 context/                focused operational context packages for agents
@@ -127,8 +128,8 @@ Every Noesis note should have these YAML properties:
 | --- | --- | --- |
 | `title` | text | Human-readable title. |
 | `noesis_id` | text | Stable local identifier, usually `type-slug`. |
-| `type` | text | One of `source`, `evidence`, `claim`, `synthesis`, `review`, `reviewed-knowledge`, `operational-context`, `stale-memory`, `archived-history`, or `dashboard`. |
-| `lifecycle_stage` | text | One of `source`, `evidence`, `claim`, `synthesis`, `review`, `knowledge`, `context`, `stale`, `archive`. |
+| `type` | text | One of `source`, `evidence`, `claim`, `synthesis`, `knowledge-gap`, `review`, `reviewed-knowledge`, `operational-context`, `stale-memory`, `archived-history`, or `dashboard`. |
+| `lifecycle_stage` | text | One of `source`, `evidence`, `claim`, `synthesis`, `gap`, `review`, `knowledge`, `context`, `stale`, `archive`. |
 | `status` | text | Current lifecycle status, such as `captured`, `extracted`, `draft`, `needs-review`, `reviewed`, `active`, `stale`, `superseded`, `archived`. |
 | `review_state` | text | `none`, `ready-for-review`, `in-review`, `changes-requested`, `approved`, or `reviewed`. |
 | `confidence` | text | `unknown`, `low`, `medium`, or `high`. |
@@ -143,6 +144,47 @@ Dashboard notes are interface notes, not lifecycle memory items. They can use
 `type: dashboard` with `review_state: none` so they remain inspectable while
 staying out of lifecycle and review Base results.
 
+Knowledge-gap notes are lifecycle memory items for uncertainty, weak areas, and
+contradictions. They use `type: knowledge-gap`, `lifecycle_stage: gap`,
+`gap_kind` (`open-question`, `weak-area`, or `contradiction`), and `gap_state`
+(`open`, `monitoring`, or `resolved`). They remain reportable through CLI and
+MCP gap reports, but active context still starts from `reviewed-knowledge`
+notes only.
+
+### Optional Memory Space Properties
+
+Noesis V1 notes may also carry two optional flat YAML properties for connected
+but separate knowledge spaces:
+
+| Property | Type | Purpose |
+| --- | --- | --- |
+| `memory_space` | text | Local slug for a bounded memory space, such as `noesis-foundry-codebase` or `calculus-study`. |
+| `memory_domain` | text | One of `project`, `research`, `study`, or `codebase`. |
+
+These fields are optional for backward compatibility. A note without
+`memory_space` or `memory_domain` remains valid default memory. A note with
+these fields still uses the same lifecycle, review, lineage, and context
+mechanics; the fields only make separation explicit for reports and filters.
+
+### Human Workbench Surface
+
+The example vault's review dashboard is the human entry point for inspecting
+what the system remembers and whether it should still be trusted. It embeds
+core Obsidian Base files that answer four workbench questions:
+
+- `review-queue.base`: what still needs review, what is scheduled, what has
+  requested changes, and where downstream context may be affected.
+- `lifecycle-dashboard.base`: which notes are active, reviewed, stale,
+  superseded, archived, or plausible current context candidates.
+- `traceability-workbench.base`: where source-to-context support links, review
+  audits, review schedules, context inclusion, and context exclusions meet.
+- `noesis-review-dashboard.md`: the navigable human surface that links the
+  views and points back to CLI inspection when a row needs deeper explanation.
+
+These Bases and dashboards are views only. Markdown notes, raw files, and flat
+YAML properties remain the durable contract, and no Dataview query, community
+plugin, or custom Obsidian plugin is required for the canonical storage model.
+
 ### Relationship Properties
 
 Use wikilinks in list properties so humans can inspect provenance in Obsidian
@@ -156,13 +198,14 @@ and agents can parse links mechanically.
 | `sources` | evidence and above | Supporting source notes. |
 | `evidence` | claim and above | Supporting evidence notes. |
 | `claims` | synthesis and above | Supporting claim notes. |
+| `contradicts` | knowledge gap | Notes that conflict with or create tension for this gap. |
 | `syntheses` | reviewed knowledge and context | Supporting synthesis notes. |
 | `reviewed_knowledge` | operational context | Knowledge notes used as current context. |
 | `supersedes` | stale, knowledge, context | Older notes this note replaces. |
 | `superseded_by` | stale, old knowledge | Newer notes that replace this note. |
 | `reviewer` | review | Human or agent reviewer. |
 | `reviewed_at` | review and knowledge | Review date. |
-| `next_review` | review, knowledge, context | Date for staleness check. |
+| `next_review` | review, gap, knowledge, context | Date for staleness or uncertainty check. |
 
 ## Architecture
 
@@ -193,18 +236,20 @@ Current commands:
 | --- | --- |
 | `noesis vault init <path>` | Create the folder schema, Bases, dashboard, and templates. |
 | `noesis vault doctor <path>` | Report V1 contract compatibility, validation completeness, and CLI/MCP readiness. |
+| `noesis vault spaces <path>` | Report explicit memory spaces, default/unscoped notes, domain counts, current reviewed knowledge counts, and review-queue counts. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source, record provenance and content hash metadata, skip duplicate content by default, and create a source note. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order and optionally create one evidence draft per new source. |
 | `noesis ingest bundle --vault <path> <bundle-path> --evidence-drafts` | Import a local manifest-driven v1 artifact bundle in deterministic artifact-path order, preserve raw artifacts, record flat bundle provenance, and optionally create evidence drafts. |
 | `noesis extract evidence --vault <path> --source <source-id>` | Create draft evidence notes from a source note. |
 | `noesis propose claim --vault <path> --evidence <id...>` | Create a claim note grounded in evidence. |
 | `noesis synthesize --vault <path> --claim <id...>` | Create a synthesis note from claims. |
-| `noesis review queue --vault <path>` | List notes where `review_state` requires attention. |
+| `noesis review queue --vault <path>` | List notes where `review_state` requires attention, optionally filtered by memory space or domain. |
 | `noesis review approve <note-id> --vault <path>` | Write a review note and update reviewed state. |
 | `noesis review request-changes <note-id> --vault <path>` | Write a review note and keep the reviewed note in the queue. |
 | `noesis knowledge promote --vault <path> --synthesis <id>` | Promote an approved synthesis to reviewed knowledge. |
+| `noesis knowledge gaps --vault <path>` | List open questions, weak areas, and contradictions with source/evidence/claim support, current state, review schedule, and optional filters. |
 | `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded and update affected context exclusions. |
-| `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context from reviewed knowledge only, with stale/superseded exclusions. |
+| `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context from reviewed knowledge only, with stale/superseded exclusions and optional memory-space/domain filters. |
 | `noesis context write --vault <path> --purpose <purpose>` | Write an operational context note from reviewed knowledge. |
 | `noesis trace <note-id> --vault <path>` | Print source -> evidence -> claim -> synthesis -> knowledge lineage. |
 | `noesis vault validate <path>` | Validate V1 contract metadata, frontmatter, links, lifecycle values, Base YAML, Canvas JSON, and context exclusions. |
@@ -226,11 +271,13 @@ Current tools:
 | Tool | Purpose |
 | --- | --- |
 | `noesis_lint_vault` | Validate V1 contract metadata, required folders, flat YAML properties, lifecycle values, wikilinks, Base files, Canvas files, and context exclusions. |
-| `noesis_search_notes` | Search notes by text, type, lifecycle stage, status, and review state. |
+| `noesis_list_memory_spaces` | Report memory spaces, domains, current reviewed knowledge counts, and review-queue counts. |
+| `noesis_search_notes` | Search notes by text, type, lifecycle stage, status, review state, memory space, and memory domain. |
 | `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
-| `noesis_get_review_queue` | Return notes that need human or agent review. |
+| `noesis_get_review_queue` | Return notes that need human or agent review, optionally filtered by memory space or domain. |
+| `noesis_get_knowledge_gaps` | Return source-backed open questions, weak areas, and contradictions with support links, current state, and review schedule. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
-| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes, with optional profile-specific formatting for agent handoffs. |
+| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes, with optional memory-space/domain filters and profile-specific formatting for agent handoffs. |
 | `noesis_ingest_source` | Copy immutable raw source material and create a linked source note. |
 | `noesis_import_source_bundle` | Import a local manifest-driven artifact bundle into source notes and optional evidence drafts. |
 | `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |

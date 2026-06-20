@@ -56,22 +56,41 @@ excluded from active context, and preserves
 `evidence/evidence-project-memory-corpus-unreviewed-import-draft.md` as a
 review-queued input that must not bypass promotion.
 
+The `gaps/knowledge-gap-noesis-roadmap-plugin-tension.md` fixture demonstrates
+a source-backed contradiction gap. It links current roadmap source/evidence and
+claims to the stale plugin-first assumption so users and agents can inspect why
+the tension exists without loading stale memory into active context.
+
+The checked-in fixture now demonstrates scoped memory spaces without making
+space metadata mandatory. `reviewed-knowledge-agent-memory-dogfood.md` and its
+context package use `memory_space: noesis-foundry-codebase` with
+`memory_domain: codebase`. The roadmap and project-memory-corpus context use
+`memory_space: noesis-foundry-project` with `memory_domain: project`. Older
+notes without those fields remain valid default memory and continue to appear
+when no memory-space filter is requested.
+
 The CLI context composer can scope and budget the active package without
 weakening lifecycle safety:
 
 ```bash
+PYTHONPATH=src python -m noesis vault spaces examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --memory-domain codebase --scope agent-memory
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile agent-handoff
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile codex-handoff
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope project-memory-corpus --purpose "continue expanding Noesis Foundry project memory"
+PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --memory-space noesis-foundry-project
 PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
+PYTHONPATH=src python -m noesis knowledge gaps --vault examples/noesis-vault
 ```
 
 `context build` prints active guidance from current reviewed knowledge only.
 `context explain` shows why reviewed notes were included, scoped out, or
 budgeted out, and labels stale/superseded/archive notes as background
 provenance only.
+`knowledge gaps` reports open questions, weak areas, and contradictions from
+source-backed gap notes without adding them to active context.
 
 Use `--profile agent-handoff` when launching parallel work in any capable agent
 harness. That profile renders a handoff pack with the task purpose, selected
@@ -100,20 +119,26 @@ or `noesis_import_source_bundle`, `noesis_create_evidence_draft`,
 tools are adapters over these vault files, not a separate source of truth.
 
 Open this folder as a vault in Obsidian, then start at
-`_dashboards/noesis-review-dashboard.md`.
+`_dashboards/noesis-review-dashboard.md`. The dashboard is the human workbench
+for four review questions: what supports this memory, when should it be
+reviewed again, which reviewed knowledge feeds active context, and which stale
+or superseded provenance must remain visible without guiding current work.
 
 The durable source of truth is Markdown plus YAML properties. The `_bases`,
 `_canvas`, and `_dashboards` folders are human views over those notes.
 
 ## Important Files
 
-- `_dashboards/noesis-review-dashboard.md` - human review entry point.
+- `_dashboards/noesis-review-dashboard.md` - human review workbench entry
+  point.
 - `_bases/review-queue.base` - Base views for notes needing review and
   scheduled `next_review` dates.
 - `_bases/lifecycle-dashboard.base` - Base views grouped by lifecycle and
-  status.
+  status, including active trusted context candidates and stale/superseded
+  lifecycle exceptions.
 - `_bases/traceability-workbench.base` - Base views for lineage links, review
-  audit records, active context, and excluded or superseded memory.
+  audit records, trust review schedules, context inclusion/exclusion, and
+  knowledge gaps, active context, and excluded or superseded memory.
 - `_canvas/noesis-lifecycle.canvas` - visual map of the example lifecycle and
   human workbench views.
 - `_templates/` - note templates for humans and agents.
@@ -125,6 +150,8 @@ The durable source of truth is Markdown plus YAML properties. The `_bases`,
   scoped context package for next-phase Noesis roadmap work.
 - `context/operational-context-project-memory-corpus-continuation.md` - a
   scoped continuation package for expanding the project-memory corpus.
+- `gaps/knowledge-gap-noesis-roadmap-plugin-tension.md` - a source-backed
+  contradiction gap that remains reportable but excluded from active context.
 
 The CLI review workbench mirrors the Obsidian view without becoming canonical
 storage:
@@ -132,7 +159,9 @@ storage:
 ```bash
 PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --due --due-on 2026-06-13
+PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --memory-domain codebase
 PYTHONPATH=src python -m noesis review show stale-custom-plugin-first --vault examples/noesis-vault
+PYTHONPATH=src python -m noesis knowledge gaps --vault examples/noesis-vault
 ```
 
 Use `review summary` and `review queue` to triage overdue scheduled reviews,

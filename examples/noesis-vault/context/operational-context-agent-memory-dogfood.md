@@ -8,6 +8,8 @@ review_state: reviewed
 confidence: high
 created: 2026-06-13
 updated: 2026-06-13
+memory_space: noesis-foundry-codebase
+memory_domain: codebase
 scope: agent-memory
 purpose: prepare a future agent to continue Noesis project work
 syntheses:
