@@ -10,7 +10,7 @@ import unittest
 
 import yaml
 
-from noesis.vault import Vault
+from noesis.vault import Vault, wikilink, write_note
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1968,6 +1968,15 @@ This archived note is provenance, not active guidance.
 """,
                 encoding="utf-8",
             )
+            vault = Vault.load(vault_path)
+            for context in vault.notes:
+                if context.type != "operational-context":
+                    continue
+                metadata = dict(context.metadata)
+                metadata["excluded_memory"] = sorted(
+                    [*metadata["excluded_memory"], wikilink("archived-context-note")]
+                )
+                write_note(context.path, metadata, context.body)
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)

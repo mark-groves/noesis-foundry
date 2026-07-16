@@ -396,6 +396,27 @@ class ContractV2Tests(unittest.TestCase):
                 messages,
             )
 
+    def test_validator_requires_complete_context_lifecycle_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata["excluded_memory"] = metadata["excluded_memory"][1:]
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertTrue(
+                any(
+                    message.startswith(
+                        "excluded_memory must match the complete lifecycle exclusion set"
+                    )
+                    for message in messages
+                ),
+                messages,
+            )
+
     def test_validator_requires_every_review_note_to_record_a_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -619,6 +640,48 @@ class ContractV2Tests(unittest.TestCase):
             metadata = dict(knowledge.metadata)
             metadata["reviewed_by"] = ["[[review-agent-memory-dogfood]]"]
             write_note(knowledge.path, metadata, knowledge.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                messages,
+            )
+
+    def test_validator_requires_every_lineage_support_audit_to_be_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            audit = vault.find_note("review-local-first-lifecycle")
+            synthesis = vault.find_note("synthesis-local-first-lifecycle-interface")
+            self.assertIsNotNone(audit)
+            self.assertIsNotNone(synthesis)
+            assert audit is not None and synthesis is not None
+
+            split_audit_id = "review-split-lifecycle-synthesis"
+            split_audit_metadata = dict(audit.metadata)
+            split_audit_metadata.update(
+                {
+                    "title": "Review - Split Lifecycle Synthesis",
+                    "noesis_id": split_audit_id,
+                    "reviewed_notes": [wikilink(synthesis.noesis_id)],
+                    "aliases": [],
+                }
+            )
+            write_note(
+                vault_path / "review" / f"{split_audit_id}.md",
+                split_audit_metadata,
+                audit.body,
+            )
+            audit_metadata = dict(audit.metadata)
+            audit_metadata["reviewed_notes"] = [
+                link
+                for link in audit_metadata["reviewed_notes"]
+                if link != wikilink(synthesis.noesis_id)
+            ]
+            write_note(audit.path, audit_metadata, audit.body)
+            synthesis_metadata = dict(synthesis.metadata)
+            synthesis_metadata["reviewed_by"] = [wikilink(split_audit_id)]
+            write_note(synthesis.path, synthesis_metadata, synthesis.body)
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
@@ -1527,6 +1590,55 @@ Not scheduled.
             )
             self.assertEqual(vault.validate(), [])
 
+    def test_handoff_rewrite_refreshes_lifecycle_exclusion_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-noesis-lifecycle"
+            created = write_context_note(
+                vault_path,
+                scope="lifecycle",
+                profile="codex-handoff",
+                as_of="2026-06-18",
+                title="Lifecycle Rewrite Handoff",
+                slug="lifecycle-rewrite-handoff",
+            )
+
+            write_review_decision(
+                vault_path,
+                target_id,
+                decision="changes-requested",
+                reviewer="test-human",
+                basis="The lifecycle guidance needs revision.",
+                changes_requested="Revise the lifecycle guidance.",
+                today="2026-06-18",
+            )
+            blocked_context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(blocked_context)
+            assert blocked_context is not None
+            blocked_section = blocked_context.body.split("## Lifecycle Exclusions", 1)[1].split(
+                "\n## ", 1
+            )[0]
+            self.assertIn(target_id, blocked_section)
+
+            write_review_decision(
+                vault_path,
+                target_id,
+                decision="approved",
+                reviewer="test-human",
+                basis="The revised lifecycle guidance is ready for use.",
+                today="2026-06-19",
+            )
+            approved_vault = Vault.load(vault_path)
+            approved_context = approved_vault.find_note(created.note_id)
+            self.assertIsNotNone(approved_context)
+            assert approved_context is not None
+            approved_section = approved_context.body.split("## Lifecycle Exclusions", 1)[1].split(
+                "\n## ", 1
+            )[0]
+            self.assertNotIn(target_id, approved_section)
+            self.assertIn(wikilink(target_id), approved_context.metadata["reviewed_knowledge"])
+            self.assertEqual(approved_vault.validate(), [])
+
     def test_approval_does_not_restore_review_exclusion_outside_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -1608,7 +1720,7 @@ Not scheduled.
             self.assertIn(wikilink(stale.note_id), context.metadata["excluded_memory"])
             self.assertEqual(stale_vault.validate(), [])
 
-    def test_mark_stale_excludes_only_context_referenced_dependents(self) -> None:
+    def test_mark_stale_records_all_lifecycle_exclusions_in_every_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
             vault = Vault.load(vault_path)
@@ -1639,7 +1751,7 @@ Not scheduled.
             self.assertIsNotNone(context)
             assert context is not None
             self.assertIn(wikilink(original.noesis_id), context.metadata["excluded_memory"])
-            self.assertNotIn(wikilink(duplicate_id), context.metadata["excluded_memory"])
+            self.assertIn(wikilink(duplicate_id), context.metadata["excluded_memory"])
             self.assertEqual(stale_vault.validate(), [])
 
     def test_renewal_updates_selected_context_input_hash(self) -> None:

@@ -15,7 +15,11 @@ syntheses:
 reviewed_knowledge:
   - "[[reviewed-knowledge-agent-memory-dogfood]]"
 excluded_memory:
+  - "[[archive-2026-05-29-first-lifecycle]]"
   - "[[stale-agent-memory-global-summary]]"
+  - "[[stale-custom-plugin-first]]"
+  - "[[stale-noesis-roadmap-plugin-first]]"
+  - "[[stale-project-memory-corpus-bulk-import-active-context]]"
 freshness_excluded: []
 as_of: 2026-06-13
 freshness_policy: balanced
@@ -80,4 +84,4 @@ reviewed-knowledge promotion step.
 
 - Reviewed knowledge: [[reviewed-knowledge-agent-memory-dogfood]]
 - Syntheses: [[synthesis-agent-memory-dogfood]]
-- Excluded memory: [[stale-agent-memory-global-summary]]
+- Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]

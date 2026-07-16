@@ -15,7 +15,11 @@ syntheses:
 reviewed_knowledge:
   - "[[reviewed-knowledge-noesis-roadmap-phase-orchestration]]"
 excluded_memory:
+  - "[[archive-2026-05-29-first-lifecycle]]"
+  - "[[stale-agent-memory-global-summary]]"
+  - "[[stale-custom-plugin-first]]"
   - "[[stale-noesis-roadmap-plugin-first]]"
+  - "[[stale-project-memory-corpus-bulk-import-active-context]]"
 freshness_excluded: []
 as_of: 2026-06-15
 freshness_policy: balanced
@@ -93,4 +97,4 @@ for the basic review and context workflow.
 
 - Reviewed knowledge: [[reviewed-knowledge-noesis-roadmap-phase-orchestration]]
 - Syntheses: [[synthesis-noesis-roadmap-phase-orchestration]]
-- Excluded memory: [[stale-noesis-roadmap-plugin-first]]
+- Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]

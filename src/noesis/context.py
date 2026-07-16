@@ -302,7 +302,17 @@ def render_context_snapshot(
         selection.note.noesis_id: selection for selection in explain_lifecycle_exclusions(vault)
     }
     for note in lifecycle_excluded_notes or []:
-        lifecycle_excluded_by_id[note.noesis_id] = lifecycle_exclusion_selection(note)
+        if is_context_excluded(note):
+            lifecycle_excluded_by_id[note.noesis_id] = lifecycle_exclusion_selection(note)
+        else:
+            lifecycle_excluded_by_id.pop(note.noesis_id, None)
+    for note in pending_notes or []:
+        if is_context_excluded(note):
+            lifecycle_excluded_by_id[note.noesis_id] = lifecycle_exclusion_selection(note)
+        else:
+            lifecycle_excluded_by_id.pop(note.noesis_id, None)
+    for selection in included:
+        lifecycle_excluded_by_id.pop(selection.note.noesis_id, None)
     lifecycle_excluded = sorted(
         lifecycle_excluded_by_id.values(),
         key=lambda selection: selection.note.title.lower(),

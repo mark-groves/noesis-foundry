@@ -15,7 +15,11 @@ syntheses:
 reviewed_knowledge:
   - "[[reviewed-knowledge-noesis-lifecycle]]"
 excluded_memory:
+  - "[[archive-2026-05-29-first-lifecycle]]"
+  - "[[stale-agent-memory-global-summary]]"
   - "[[stale-custom-plugin-first]]"
+  - "[[stale-noesis-roadmap-plugin-first]]"
+  - "[[stale-project-memory-corpus-bulk-import-active-context]]"
 freshness_excluded: []
 as_of: 2026-05-29
 freshness_policy: balanced
@@ -57,4 +61,4 @@ Use this note when implementing the first Noesis CLI and MCP workflow.
 - Reviewed knowledge: [[reviewed-knowledge-noesis-lifecycle]]
 - Synthesis: [[synthesis-local-first-lifecycle-interface]]
 - Review: [[review-local-first-lifecycle]]
-- Superseded memory excluded from context: [[stale-custom-plugin-first]]
+- Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]

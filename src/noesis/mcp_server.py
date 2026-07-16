@@ -26,6 +26,7 @@ from .vault import (
     Note,
     REVIEW_STATES,
     SOURCE_BUNDLE_SCHEMA_KIND,
+    STATUSES,
     TYPES,
     Vault,
     approve_review,
@@ -97,6 +98,15 @@ class NoesisMcpHandlers:
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
+        filter_error = search_filter_error(
+            vault,
+            note_type=note_type,
+            lifecycle_stage=lifecycle_stage,
+            status=status,
+            review_state=review_state,
+        )
+        if filter_error is not None:
+            return filter_error
         candidates: list[Note] = []
         for note in vault.notes:
             if note_type and note.type != note_type:
@@ -1045,6 +1055,34 @@ def review_filter_error(
         ("review_state", review_state, REVIEW_STATES),
         ("type", note_type, allowed_types),
         ("lifecycle_stage", lifecycle_stage, LIFECYCLE_STAGES),
+    )
+    for field, value, allowed in checks:
+        if value is not None and value not in allowed:
+            expected = ", ".join(sorted(allowed))
+            return {
+                "ok": False,
+                "error": f"invalid {field}: {value}; expected one of: {expected}",
+                "vault_path": str(vault.root),
+                "field": field,
+                "value": value,
+                "expected": sorted(allowed),
+            }
+    return None
+
+
+def search_filter_error(
+    vault: Vault,
+    *,
+    note_type: str | None = None,
+    lifecycle_stage: str | None = None,
+    status: str | None = None,
+    review_state: str | None = None,
+) -> JsonObject | None:
+    checks = (
+        ("type", note_type, TYPES),
+        ("lifecycle_stage", lifecycle_stage, LIFECYCLE_STAGES),
+        ("status", status, STATUSES),
+        ("review_state", review_state, REVIEW_STATES),
     )
     for field, value, allowed in checks:
         if value is not None and value not in allowed:

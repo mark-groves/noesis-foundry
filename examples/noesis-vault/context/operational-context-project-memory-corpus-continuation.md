@@ -16,6 +16,10 @@ syntheses:
 reviewed_knowledge:
   - "[[reviewed-knowledge-project-memory-corpus-continuation]]"
 excluded_memory:
+  - "[[archive-2026-05-29-first-lifecycle]]"
+  - "[[stale-agent-memory-global-summary]]"
+  - "[[stale-custom-plugin-first]]"
+  - "[[stale-noesis-roadmap-plugin-first]]"
   - "[[stale-project-memory-corpus-bulk-import-active-context]]"
 freshness_excluded: []
 as_of: 2026-06-18
@@ -91,4 +95,4 @@ unreviewed evidence drafts to appear as active operational context.
 
 - Reviewed knowledge: [[reviewed-knowledge-project-memory-corpus-continuation]]
 - Syntheses: [[synthesis-project-memory-corpus-continuation]]
-- Excluded memory: [[stale-project-memory-corpus-bulk-import-active-context]]
+- Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]
