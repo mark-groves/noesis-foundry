@@ -144,6 +144,52 @@ class ContractV2Tests(unittest.TestCase):
                     messages,
                 )
 
+    def test_validator_requires_default_context_to_include_all_selected_knowledge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-06-13",
+                title="Default Selection Contract Context",
+                slug="default-selection-contract-context",
+            )
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata["reviewed_knowledge"] = metadata["reviewed_knowledge"][1:]
+            metadata["input_hashes"] = metadata["input_hashes"][1:]
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertTrue(
+                any(message.startswith("reviewed_knowledge must match stored context selection") for message in messages),
+                messages,
+            )
+
+    def test_validator_requires_ranked_context_selection_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-06-13",
+                title="Ranked Selection Contract Context",
+                slug="ranked-selection-contract-context",
+            )
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata["reviewed_knowledge"] = list(reversed(metadata["reviewed_knowledge"]))
+            metadata["input_hashes"] = list(reversed(metadata["input_hashes"]))
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertTrue(
+                any(message.startswith("reviewed_knowledge must match stored context selection") for message in messages),
+                messages,
+            )
+
     def test_validator_rejects_incorrect_context_input_hash_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -206,6 +252,30 @@ class ContractV2Tests(unittest.TestCase):
                 f"freshness_excluded reference {wikilink(target_id)!r} is fresh as of "
                 "2026-06-13 under 'balanced' freshness policy",
                 messages,
+            )
+
+    def test_validator_requires_complete_freshness_exclusion_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-07-16",
+                freshness_policy="strict",
+                title="Strict Freshness Contract Context",
+                slug="strict-freshness-contract-context",
+            )
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            omitted = metadata["freshness_excluded"][0]
+            metadata["freshness_excluded"] = metadata["freshness_excluded"][1:]
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertTrue(
+                any(message.startswith("freshness_excluded must match stored freshness selection") for message in messages),
+                (omitted, messages),
             )
 
     def test_validator_rejects_unknown_stored_context_profile(self) -> None:
@@ -582,6 +652,92 @@ Revise the operational guidance before reuse.
                     f"active reviewed knowledge depends on {expected_state} evidence {nested.noesis_id!r}",
                     messages,
                 )
+
+    def test_nested_support_dependency_invalidates_knowledge_and_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            evidence_template = vault.find_note("evidence-memory-lifecycle")
+            claim_template = vault.find_note("claim-useful-memory-requires-lifecycle")
+            synthesis = vault.find_note("synthesis-local-first-lifecycle-interface")
+            audit = vault.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(evidence_template)
+            self.assertIsNotNone(claim_template)
+            self.assertIsNotNone(synthesis)
+            self.assertIsNotNone(audit)
+            assert evidence_template is not None
+            assert claim_template is not None
+            assert synthesis is not None
+            assert audit is not None
+
+            evidence_id = "evidence-nested-context-impact"
+            evidence_metadata = dict(evidence_template.metadata)
+            evidence_metadata.update(
+                {
+                    "title": "Nested Context Impact Evidence",
+                    "noesis_id": evidence_id,
+                    "aliases": [],
+                }
+            )
+            write_note(
+                vault_path / "evidence" / f"{evidence_id}.md",
+                evidence_metadata,
+                "# Nested Context Impact Evidence\n\nThis approved evidence is reachable only through a nested claim.\n",
+            )
+
+            claim_id = "claim-nested-context-impact"
+            claim_metadata = dict(claim_template.metadata)
+            claim_metadata.update(
+                {
+                    "title": "Nested Context Impact Claim",
+                    "noesis_id": claim_id,
+                    "evidence": [wikilink(evidence_id)],
+                    "aliases": [],
+                }
+            )
+            write_note(
+                vault_path / "claims" / f"{claim_id}.md",
+                claim_metadata,
+                "# Nested Context Impact Claim\n\nThis approved claim connects a synthesis to nested evidence.\n",
+            )
+
+            synthesis_metadata = dict(synthesis.metadata)
+            synthesis_metadata["claims"] = [*synthesis_metadata["claims"], wikilink(claim_id)]
+            write_note(synthesis.path, synthesis_metadata, synthesis.body)
+            audit_metadata = dict(audit.metadata)
+            audit_metadata["reviewed_notes"] = [
+                *audit_metadata["reviewed_notes"],
+                wikilink(evidence_id),
+                wikilink(claim_id),
+            ]
+            write_note(audit.path, audit_metadata, audit.body)
+
+            nested_vault = Vault.load(vault_path)
+            nested_evidence = nested_vault.find_note(evidence_id)
+            self.assertIsNotNone(nested_evidence)
+            assert nested_evidence is not None
+            self.assertEqual(nested_vault.validate(), [])
+            self.assertIn(
+                "context-first-cli-mcp-workflow",
+                [note.noesis_id for note in nested_vault.dependent_contexts_for(nested_evidence)],
+            )
+
+            mark_memory_stale(
+                vault_path,
+                evidence_id,
+                reason="The nested evidence is no longer current.",
+                today="2026-07-16",
+            )
+
+            stale_vault = Vault.load(vault_path)
+            knowledge = stale_vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            context = stale_vault.find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(knowledge)
+            self.assertIsNotNone(context)
+            assert knowledge is not None and context is not None
+            self.assertEqual(knowledge.status, "stale")
+            self.assertNotIn(wikilink(knowledge.noesis_id), context.metadata["reviewed_knowledge"])
+            self.assertEqual(stale_vault.validate(), [])
 
     def test_validator_requires_requested_change_audit_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1286,6 +1286,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                 issues.append(Issue(note.path, "input_hashes must not contain duplicate noesis_id entries"))
             input_hash_digests = dict(parsed_input_hashes)
 
+    reviewed_knowledge_id_order: list[str] = []
     reviewed_knowledge_ids: set[str] = set()
     reviewed_knowledge_hashes: dict[str, str] = {}
     for ref in as_list(note.metadata.get("reviewed_knowledge")):
@@ -1295,6 +1296,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             target = vault.find_note(target_ref)
             if target is None:
                 continue
+            reviewed_knowledge_id_order.append(target.noesis_id)
             reviewed_knowledge_ids.add(target.noesis_id)
             reviewed_knowledge_hashes[target.noesis_id] = file_content_hash(target.path)
             if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
@@ -1314,12 +1316,8 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                         )
                     )
 
-    selection_contract_recorded = any(
-        key in note.metadata
-        for key in ("scope", "context_profile", "context_limit", "context_max_chars")
-    )
-    if selection_contract_recorded and selection_contract_valid:
-        expected_knowledge_ids = {
+    if selection_contract_valid:
+        expected_knowledge_id_order = [
             selected.noesis_id
             for selected in context_selected_knowledge(
                 vault.current_reviewed_knowledge(),
@@ -1330,10 +1328,10 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                 as_of=as_of,
                 freshness_policy=freshness_policy,
             )
-        }
-        if reviewed_knowledge_ids != expected_knowledge_ids:
-            expected = ", ".join(sorted(expected_knowledge_ids)) or "none"
-            found = ", ".join(sorted(reviewed_knowledge_ids)) or "none"
+        ]
+        if reviewed_knowledge_id_order != expected_knowledge_id_order:
+            expected = ", ".join(expected_knowledge_id_order) or "none"
+            found = ", ".join(reviewed_knowledge_id_order) or "none"
             issues.append(
                 Issue(
                     note.path,
@@ -1346,6 +1344,22 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
         target.noesis_id
         for target in context_linked_notes(vault, note.metadata, "freshness_excluded")
     }
+    if selection_contract_valid:
+        expected_freshness_excluded_ids = {
+            candidate.noesis_id
+            for candidate in vault.current_reviewed_knowledge()
+            if not context_freshness_eligible(note_freshness(candidate, as_of=as_of)[0], policy=freshness_policy)
+        }
+        if freshness_excluded_ids != expected_freshness_excluded_ids:
+            expected = ", ".join(sorted(expected_freshness_excluded_ids)) or "none"
+            found = ", ".join(sorted(freshness_excluded_ids)) or "none"
+            issues.append(
+                Issue(
+                    note.path,
+                    f"freshness_excluded must match stored freshness selection "
+                    f"(expected: {expected}; found: {found})",
+                )
+            )
     for target in context_linked_notes(vault, note.metadata, "freshness_excluded"):
         if (
             target.type != "reviewed-knowledge"
@@ -2971,7 +2985,6 @@ Keep this note so future context builders can explain why {target_link} no longe
             vault,
             context_note,
             blocked_knowledge_ids,
-            fallback_target_id=target.noesis_id,
         )
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
         if "input_hashes" in context_metadata:
@@ -3377,7 +3390,6 @@ def append_dependent_memory_review_changes(
             vault,
             context_note,
             blocked_knowledge_ids,
-            fallback_target_id=target.noesis_id,
         )
         remaining_knowledge_ids = {note.noesis_id for note in remaining_knowledge}
         removed_knowledge = [
@@ -3503,43 +3515,34 @@ def append_updated_reviewed_knowledge_contexts(
                 str(context_metadata.get("freshness_policy", "balanced"))
             )
             freshness_state, _, _ = note_freshness(projected_target, as_of=context_as_of)
+            available = [
+                projected_target if note.noesis_id == projected_target.noesis_id else note
+                for note in vault.current_reviewed_knowledge()
+            ]
+            if all(note.noesis_id != projected_target.noesis_id for note in available):
+                available.append(projected_target)
             if context_freshness_eligible(freshness_state, policy=freshness_policy):
-                restore_target = included_target
-                if not included_target:
-                    available = [
-                        projected_target if note.noesis_id == projected_target.noesis_id else note
-                        for note in vault.current_reviewed_knowledge()
-                    ]
-                    if all(note.noesis_id != projected_target.noesis_id for note in available):
-                        available.append(projected_target)
-                    restore_target = context_selection_includes(
-                        available,
-                        projected_target.noesis_id,
-                        scope=context_scope(context_note),
-                        profile=context_profile(context_note),
-                        limit=context_budget(context_note, "context_limit"),
-                        max_chars=context_budget(context_note, "context_max_chars"),
-                        as_of=context_metadata.get("as_of", context_metadata.get("created")),
-                        freshness_policy=freshness_policy,
-                    )
                 remove_relationship_link(
                     vault,
                     context_metadata,
                     "freshness_excluded",
                     target.noesis_id,
                 )
-                if restore_target:
-                    if all(note.noesis_id != projected_target.noesis_id for note in knowledge):
-                        knowledge.append(projected_target)
             else:
-                knowledge = [
-                    note for note in knowledge if note.noesis_id != projected_target.noesis_id
-                ]
                 add_relationship_link(
                     context_metadata,
                     "freshness_excluded",
                     wikilink(projected_target.noesis_id),
                 )
+            knowledge = context_selected_knowledge(
+                available,
+                scope=context_scope(context_note),
+                profile=context_profile(context_note),
+                limit=context_budget(context_note, "context_limit"),
+                max_chars=context_budget(context_note, "context_max_chars"),
+                as_of=context_metadata.get("as_of", context_metadata.get("created")),
+                freshness_policy=freshness_policy,
+            )
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in knowledge]
         context_metadata["input_hashes"] = [
             f"{note.noesis_id}="
@@ -3603,14 +3606,7 @@ def context_knowledge_after_exclusions(
     vault: Vault,
     context_note: Note,
     excluded_ids: set[str],
-    *,
-    fallback_target_id: str,
 ) -> list[Note]:
-    if not any(
-        key in context_note.metadata
-        for key in ("scope", "context_profile", "context_limit", "context_max_chars")
-    ):
-        return remaining_context_knowledge(vault, context_note.metadata, fallback_target_id)
     candidates = [
         note
         for note in vault.current_reviewed_knowledge()
@@ -3665,18 +3661,6 @@ def context_references_memory(vault: Vault, context_note: Note, target_noesis_id
     )
 
 
-def remaining_context_knowledge(
-    vault: Vault,
-    context_metadata: dict[str, Any],
-    stale_noesis_id: str,
-) -> list[Note]:
-    return [
-        note
-        for note in context_reviewed_knowledge(vault, context_metadata)
-        if not note_references_memory(vault, note, stale_noesis_id)
-    ]
-
-
 def context_reviewed_knowledge(vault: Vault, context_metadata: dict[str, Any]) -> list[Note]:
     notes: list[Note] = []
     seen: set[str] = set()
@@ -3707,16 +3691,22 @@ def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> b
         if target_note is not None and target_note.noesis_id == target_noesis_id:
             return True
     if note.type == "reviewed-knowledge":
-        for key, expected_type in (
-            ("evidence", "evidence"),
-            ("claims", "claim"),
-            ("syntheses", "synthesis"),
-        ):
-            if any(
-                note_references_memory(vault, support, target_noesis_id)
-                for support in relationship_notes(vault, note, key, expected_type=expected_type)
-            ):
+        direct_supports = [
+            support
+            for key, expected_type in (
+                ("evidence", "evidence"),
+                ("claims", "claim"),
+                ("syntheses", "synthesis"),
+            )
+            for support in relationship_notes(vault, note, key, expected_type=expected_type)
+        ]
+        for support in review_support_lineage(vault, direct_supports):
+            if support.noesis_id == target_noesis_id:
                 return True
+            for target in iter_metadata_wikilinks(support.metadata):
+                target_note = vault.find_note(target)
+                if target_note is not None and target_note.noesis_id == target_noesis_id:
+                    return True
     return False
 
 

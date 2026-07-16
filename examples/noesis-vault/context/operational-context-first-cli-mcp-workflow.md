@@ -8,6 +8,8 @@ review_state: reviewed
 confidence: high
 created: 2026-05-29
 updated: 2026-05-29
+scope: lifecycle
+context_limit: 1
 syntheses:
   - "[[synthesis-local-first-lifecycle-interface]]"
 reviewed_knowledge:

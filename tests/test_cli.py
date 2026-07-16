@@ -292,6 +292,27 @@ class NoesisCliTests(unittest.TestCase):
             self.assertIn("source-noesis-readme", [note["noesis_id"] for note in payload["lineage"]])
             self.assertIn("Clarify the claim", payload["changes_requested"][0]["changes_requested"])
 
+    def test_review_show_rejects_invalid_vault(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "legacy-vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            (vault_path / "noesis.vault.yaml").unlink()
+
+            show = run_noesis(
+                "review",
+                "show",
+                "claim-useful-memory-requires-lifecycle",
+                "--vault",
+                str(vault_path),
+                "--json",
+            )
+            self.assertNotEqual(show.returncode, 0)
+            payload = parse_json_stdout(show)
+            self.assertEqual(payload["ok"], False)
+            self.assertEqual(payload["error"], "vault validation failed")
+            self.assertEqual(payload["ready_for_cli_mcp"], False)
+            self.assertNotIn("note", payload)
+
     def test_review_show_reports_contexts_that_exclude_stale_memory(self) -> None:
         show = run_noesis(
             "review",

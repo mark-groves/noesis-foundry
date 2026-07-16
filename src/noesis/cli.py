@@ -812,6 +812,15 @@ def cmd_review_summary(args: argparse.Namespace) -> int:
 
 def cmd_review_show(args: argparse.Namespace) -> int:
     vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if issues:
+        if args.json:
+            write_json(validation_error_payload(vault, issues))
+        else:
+            for issue in issues:
+                print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+            print(f"validation failed: {len(issues)} issue(s)", file=sys.stderr)
+        return 1
     note = vault.find_note(args.note)
     if note is None:
         if args.json:
