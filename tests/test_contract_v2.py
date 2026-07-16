@@ -5,7 +5,15 @@ import shutil
 import tempfile
 import unittest
 
-from noesis.vault import Vault, compose_context, migrate_vault, renew_review, write_context_note, write_note
+from noesis.vault import (
+    Vault,
+    compose_context,
+    file_content_hash,
+    migrate_vault,
+    renew_review,
+    write_context_note,
+    write_note,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +60,23 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("operational context requires input_hashes", messages)
+
+    def test_validator_rejects_incorrect_context_input_hash_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            note_id = str(metadata["input_hashes"][0]).split("=", maxsplit=1)[0]
+            metadata["input_hashes"] = [f"{note_id}=sha256:{'0' * 64}"]
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                f"input_hashes digest for reviewed knowledge {note_id!r} does not match its file content",
+                messages,
+            )
 
     def test_validator_requires_explicit_context_freshness_metadata(self) -> None:
         required_fields = {
@@ -187,6 +212,14 @@ Not scheduled.
             metadata.pop("source_size_bytes", None)
             write_note(source.path, metadata, source.body)
 
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            context_metadata = dict(context.metadata)
+            context_metadata.pop("as_of")
+            context_metadata["created"] = "unknown"
+            write_note(context.path, context_metadata, context.body)
+
             (vault_path / ".noesis.lock").unlink(missing_ok=True)
             before_preview = {
                 path.relative_to(vault_path): path.read_bytes()
@@ -211,6 +244,8 @@ Not scheduled.
             self.assertEqual(Vault.load(vault_path).validate(), [])
             migrated_source = Vault.load(vault_path).find_note("source-noesis-readme")
             self.assertTrue(str(migrated_source.metadata["content_hash"]).startswith("sha256:"))
+            migrated_context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertRegex(str(migrated_context.metadata["as_of"]), r"^\d{4}-\d{2}-\d{2}$")
 
     def test_context_freshness_distinguishes_review_due_from_expired(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,6 +271,12 @@ Not scheduled.
             metadata = dict(target.metadata)
             metadata["valid_until"] = "2026-07-15"
             write_note(target.path, metadata, target.body)
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            context_metadata = dict(context.metadata)
+            context_metadata["input_hashes"] = [f"{target.noesis_id}={file_content_hash(target.path)}"]
+            write_note(context.path, context_metadata, context.body)
             expired = compose_context(Vault.load(vault_path), scope="agent memory", as_of="2026-07-16")
             excluded = next(item for item in expired.freshness_excluded if item.note.noesis_id == target.noesis_id)
             self.assertEqual(excluded.freshness_state, "expired")
@@ -293,6 +334,30 @@ Not scheduled.
             )
 
             self.assertEqual(Vault.load(vault_path).validate(), [])
+
+    def test_renewal_updates_selected_context_input_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            renew_review(
+                vault_path,
+                "reviewed-knowledge-noesis-lifecycle",
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The lifecycle knowledge remains current after scheduled review.",
+                today="2026-07-16",
+            )
+
+            vault = Vault.load(vault_path)
+            knowledge = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            context = vault.find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(knowledge)
+            self.assertIsNotNone(context)
+            assert knowledge is not None and context is not None
+            self.assertEqual(
+                context.metadata["input_hashes"],
+                [f"{knowledge.noesis_id}={file_content_hash(knowledge.path)}"],
+            )
+            self.assertEqual(vault.validate(), [])
 
     def test_written_context_records_reproducible_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

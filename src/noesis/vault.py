@@ -1134,7 +1134,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, str(exc)))
             freshness_policy = "balanced"
 
-    input_hash_ids: set[str] | None = None
+    input_hash_digests: dict[str, str] | None = None
     if "input_hashes" not in note.metadata:
         issues.append(Issue(note.path, "operational context requires input_hashes"))
     else:
@@ -1142,7 +1142,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
         if not isinstance(input_hashes, list):
             issues.append(Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings"))
         else:
-            parsed_input_hash_ids: list[str] = []
+            parsed_input_hashes: list[tuple[str, str]] = []
             for item in input_hashes:
                 match = re.fullmatch(r"([^=]+)=sha256:([0-9a-f]{64})", str(item))
                 if match is None:
@@ -1150,17 +1150,20 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                         Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings")
                     )
                     continue
-                parsed_input_hash_ids.append(match.group(1))
+                parsed_input_hashes.append((match.group(1), f"sha256:{match.group(2)}"))
+            parsed_input_hash_ids = [note_id for note_id, _ in parsed_input_hashes]
             if len(parsed_input_hash_ids) != len(set(parsed_input_hash_ids)):
                 issues.append(Issue(note.path, "input_hashes must not contain duplicate noesis_id entries"))
-            input_hash_ids = set(parsed_input_hash_ids)
+            input_hash_digests = dict(parsed_input_hashes)
 
     reviewed_knowledge_ids: set[str] = set()
+    reviewed_knowledge_hashes: dict[str, str] = {}
     for ref in as_list(note.metadata.get("reviewed_knowledge")):
         target = vault.find_note(str(ref))
         if target is None:
             continue
         reviewed_knowledge_ids.add(target.noesis_id)
+        reviewed_knowledge_hashes[target.noesis_id] = file_content_hash(target.path)
         if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
         elif target.status not in CURRENT_KNOWLEDGE_STATUSES:
@@ -1178,15 +1181,26 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                     )
                 )
 
-    if input_hash_ids is not None and input_hash_ids != reviewed_knowledge_ids:
-        missing = sorted(reviewed_knowledge_ids - input_hash_ids)
-        extra = sorted(input_hash_ids - reviewed_knowledge_ids)
+    if input_hash_digests is not None and set(input_hash_digests) != reviewed_knowledge_ids:
+        missing = sorted(reviewed_knowledge_ids - set(input_hash_digests))
+        extra = sorted(set(input_hash_digests) - reviewed_knowledge_ids)
         details = []
         if missing:
             details.append(f"missing: {', '.join(missing)}")
         if extra:
             details.append(f"extra: {', '.join(extra)}")
         issues.append(Issue(note.path, f"input_hashes must match reviewed_knowledge references ({'; '.join(details)})"))
+
+    for note_id in sorted(reviewed_knowledge_ids & set(input_hash_digests or {})):
+        recorded_hash = input_hash_digests[note_id]
+        actual_hash = reviewed_knowledge_hashes[note_id]
+        if recorded_hash != actual_hash:
+            issues.append(
+                Issue(
+                    note.path,
+                    f"input_hashes digest for reviewed knowledge {note_id!r} does not match its file content",
+                )
+            )
 
     for ref in as_list(note.metadata.get("excluded_memory")):
         target = vault.find_note(str(ref))
@@ -1319,7 +1333,16 @@ def _migrate_vault_locked(
             metadata["type"] = "dashboard"
             metadata.pop("reviewer", None)
         if note.type == "operational-context":
-            metadata.setdefault("as_of", metadata.get("created", date.today().isoformat()))
+            try:
+                if is_blank(metadata.get("as_of")):
+                    raise ValueError("missing as_of")
+                context_as_of_date(metadata.get("as_of"))
+            except ValueError:
+                try:
+                    migrated_as_of = context_as_of_date(metadata.get("created"))
+                except ValueError:
+                    migrated_as_of = date.today()
+                metadata["as_of"] = migrated_as_of.isoformat()
             metadata.setdefault("freshness_policy", "balanced")
             metadata.setdefault("freshness_excluded", [])
             context_inputs = context_reviewed_knowledge(vault, metadata)
@@ -2279,7 +2302,16 @@ None.
 
 {scheduled_for}
 """
-    write_notes_and_validate(root, [(target.path, target_metadata, target.body), (note_path, review_metadata, body)])
+    writes = [(target.path, target_metadata, target.body), (note_path, review_metadata, body)]
+    append_updated_reviewed_knowledge_contexts(
+        vault,
+        target,
+        target_metadata,
+        target.body,
+        renewed_at,
+        writes,
+    )
+    write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
 
 
@@ -2390,6 +2422,15 @@ def write_review_decision(
     ]
     if decision == "changes-requested":
         append_dependent_memory_review_changes(vault, target, reviewed_at, writes)
+    else:
+        append_updated_reviewed_knowledge_contexts(
+            vault,
+            target,
+            target_metadata,
+            target.body,
+            reviewed_at,
+            writes,
+        )
     write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
 
@@ -2982,6 +3023,61 @@ def append_dependent_memory_review_changes(
         writes.append((context_note.path, context_metadata, context_body))
 
 
+def append_updated_reviewed_knowledge_contexts(
+    vault: Vault,
+    target: Note,
+    target_metadata: dict[str, Any],
+    target_body: str,
+    updated_at: str,
+    writes: list[tuple[Path, dict[str, Any], str]],
+) -> None:
+    projected_target = Note(
+        path=target.path,
+        rel_path=target.rel_path,
+        metadata=target_metadata,
+        body=target_body,
+    )
+    if (
+        projected_target.type != "reviewed-knowledge"
+        or projected_target.status not in CURRENT_KNOWLEDGE_STATUSES
+        or projected_target.review_state not in {"reviewed", "approved"}
+        or is_excluded(projected_target)
+    ):
+        return
+
+    projected_target_hash = note_content_hash(target_metadata, target_body)
+    for context_note in vault.notes:
+        if context_note.type != "operational-context":
+            continue
+        if not relationship_contains(vault, context_note.metadata, "reviewed_knowledge", target.noesis_id):
+            continue
+        context_metadata = dict(context_note.metadata)
+        knowledge = [
+            projected_target if note.noesis_id == target.noesis_id else note
+            for note in context_reviewed_knowledge(vault, context_metadata)
+        ]
+        context_metadata["input_hashes"] = [
+            f"{note.noesis_id}="
+            f"{projected_target_hash if note.noesis_id == target.noesis_id else file_content_hash(note.path)}"
+            for note in knowledge
+        ]
+        context_metadata["updated"] = updated_at
+        context_body = build_context_body(
+            vault,
+            knowledge,
+            sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
+            scope=context_scope(context_note),
+            purpose=context_purpose(context_note),
+            as_of=context_metadata.get("as_of", context_metadata.get("created")),
+            freshness_policy=str(context_metadata.get("freshness_policy", "balanced")),
+            profile=context_profile(context_note),
+            limit=context_budget(context_note, "context_limit"),
+            max_chars=context_budget(context_note, "context_max_chars"),
+            freshness_excluded_notes=context_linked_notes(vault, context_metadata, "freshness_excluded"),
+        )
+        writes.append((context_note.path, context_metadata, context_body))
+
+
 def context_scope(context_note: Note) -> str | None:
     scope = context_note.metadata.get("scope")
     if isinstance(scope, str) and not is_blank(scope):
@@ -3170,10 +3266,19 @@ def parse_review_date(value: Any) -> date | None:
     return None
 
 
+def render_note_text(metadata: dict[str, Any], body: str) -> str:
+    frontmatter = yaml.safe_dump(metadata, sort_keys=False, allow_unicode=False)
+    return f"---\n{frontmatter}---\n\n{body.rstrip()}\n"
+
+
+def note_content_hash(metadata: dict[str, Any], body: str) -> str:
+    digest = hashlib.sha256(render_note_text(metadata, body).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
 def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frontmatter = yaml.safe_dump(metadata, sort_keys=False, allow_unicode=False)
-    atomic_write_text(path, f"---\n{frontmatter}---\n\n{body.rstrip()}\n")
+    atomic_write_text(path, render_note_text(metadata, body))
 
 
 def write_note_and_validate(
