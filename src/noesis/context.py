@@ -20,7 +20,7 @@ from .vault import (
     as_list,
     extract_wikilinks,
     file_content_hash,
-    is_excluded,
+    is_context_excluded,
     parse_review_date,
     review_support_lineage,
     searchable_note_text,
@@ -648,7 +648,11 @@ def context_profile_reason_suffix(
 
 
 def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
-    selections = [lifecycle_exclusion_selection(note) for note in vault.notes if is_excluded(note)]
+    selections = [
+        lifecycle_exclusion_selection(note)
+        for note in vault.notes
+        if is_context_excluded(note)
+    ]
     return sorted(selections, key=lambda selection: selection.note.title.lower())
 
 

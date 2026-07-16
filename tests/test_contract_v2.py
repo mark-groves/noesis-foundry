@@ -103,6 +103,19 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertTrue(any("unresolved placeholder" in message for message in messages), messages)
 
+    def test_validator_rejects_placeholder_metadata_in_mature_knowledge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            note = Vault.load(vault_path).find_note("reviewed-knowledge-noesis-lifecycle")
+            self.assertIsNotNone(note)
+            assert note is not None
+            metadata = dict(note.metadata)
+            metadata["title"] = "{{title}}"
+            write_note(note.path, metadata, note.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("mature note contains unresolved placeholder '{{title}}'", messages)
+
     def test_validator_requires_operational_context_input_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -1304,6 +1317,52 @@ Not scheduled.
             )
             self.assertEqual(renewed_vault.validate(), [])
 
+    def test_renewal_preserves_other_compact_freshness_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-07-16",
+                freshness_policy="strict",
+                title="Compact Strict Freshness Snapshot",
+            )
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            original_links = list(context.metadata["freshness_excluded"])
+            self.assertGreater(len(original_links), 1)
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            target_link = wikilink(target_id)
+            self.assertIn(target_link, original_links)
+            metadata = dict(context.metadata)
+            metadata["freshness_excluded"] = [" and ".join(original_links)]
+            write_note(context.path, metadata, context.body)
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+            renew_review(
+                vault_path,
+                target_id,
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The reviewed knowledge remains current after scheduled review.",
+                today="2026-07-16",
+            )
+
+            renewed_vault = Vault.load(vault_path)
+            renewed_context = renewed_vault.find_note(created.note_id)
+            self.assertIsNotNone(renewed_context)
+            assert renewed_context is not None
+            remaining_ids = {
+                target
+                for item in renewed_context.metadata["freshness_excluded"]
+                for target in extract_wikilinks(str(item))
+            }
+            self.assertEqual(
+                remaining_ids,
+                {link[2:-2] for link in original_links if link != target_link},
+            )
+            self.assertEqual(renewed_vault.validate(), [])
+
     def test_renewal_does_not_restore_freshness_exclusion_outside_selection(self) -> None:
         cases = (
             {"scope": "corpus"},
@@ -1435,6 +1494,18 @@ Not scheduled.
                 changes_requested="Update the lifecycle guidance.",
                 today="2026-06-18",
             )
+
+            blocked_vault = Vault.load(vault_path)
+            transient = compose_context(
+                blocked_vault,
+                as_of="2026-06-18",
+                profile="codex-handoff",
+            )
+            self.assertIn(
+                target_id,
+                [selection.note.noesis_id for selection in transient.lifecycle_excluded],
+            )
+            self.assertIn(target_id, transient.content)
 
             created = write_context_note(
                 vault_path,

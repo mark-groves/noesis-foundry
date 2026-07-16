@@ -1016,7 +1016,8 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
     if mature:
         lowered_body = note.body.casefold()
         for marker in PLACEHOLDER_MARKERS:
-            if marker.casefold() in lowered_body:
+            lowered_marker = marker.casefold()
+            if lowered_marker in lowered_body or metadata_contains_text(note.metadata, lowered_marker):
                 issues.append(Issue(note.path, f"mature note contains unresolved placeholder {marker!r}"))
 
     if note.type == "review":
@@ -4107,12 +4108,20 @@ def remove_relationship_link(
             kept.append(item)
             continue
         remove_item = False
+        remaining_links: list[str] = []
         for target in extract_wikilinks(item):
             target_note = vault.find_note(target)
             if target_note is not None and target_note.noesis_id == target_noesis_id:
                 remove_item = True
-                break
-        if not remove_item:
+                continue
+            remaining_links.append(
+                wikilink(target_note.noesis_id if target_note is not None else target)
+            )
+        if remove_item:
+            for link in remaining_links:
+                if link not in kept:
+                    kept.append(link)
+        else:
             kept.append(item)
     metadata[key] = kept
 
@@ -4191,6 +4200,20 @@ def is_date_like(value: Any) -> bool:
 
 def is_review_schedule(value: Any) -> bool:
     return value == "unknown" or parse_review_date(value) is not None
+
+
+def metadata_contains_text(metadata: dict[str, Any], needle: str) -> bool:
+    pending: list[Any] = list(metadata.values())
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            if needle in value.casefold():
+                return True
+        elif isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple, set)):
+            pending.extend(value)
+    return False
 
 
 def is_blank(value: Any) -> bool:
