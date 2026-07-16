@@ -34,6 +34,14 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual([hit.note.noesis_id for hit in hits], ["agent-handoff", "other"])
         self.assertNotIn("management", [hit.note.noesis_id for hit in rank_notes([substring_only], "agent")])
 
+    def test_ranker_matches_unhyphenated_queries_against_hyphenated_text(self) -> None:
+        candidate = note("lifecycle", "Lifecycle", "Use source-backed lifecycle guidance.")
+
+        hits = rank_notes([candidate], "source backed lifecycle")
+
+        self.assertEqual([hit.note.noesis_id for hit in hits], ["lifecycle"])
+        self.assertEqual(hits[0].matched_terms, ("source", "backed", "lifecycle"))
+
     def test_checked_in_retrieval_corpus_meets_quality_gate(self) -> None:
         specification = yaml.safe_load((ROOT / "evals" / "retrieval-v1.yaml").read_text(encoding="utf-8"))
         metrics = evaluate_retrieval(Vault.load(EXAMPLE_VAULT), specification)

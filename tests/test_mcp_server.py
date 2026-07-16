@@ -735,7 +735,7 @@ None.
                 ],
             )
 
-    def test_review_workbench_ignores_incomplete_changes_requested_audit(self) -> None:
+    def test_review_workbench_rejects_incomplete_changes_requested_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             shutil.copytree(EXAMPLE_VAULT, vault_path)
@@ -758,15 +758,11 @@ None.
             write_note(vault_path / "review" / "review-draft-changes-requested.md", metadata, body)
 
             workbench = NoesisMcpHandlers(vault_path).show_review("evidence-memory-lifecycle")
-            self.assertTrue(workbench["ok"], workbench)
-            self.assertEqual(workbench["changes_requested"], [])
-            self.assertEqual(
-                workbench["review_schedule"]["latest_audit"]["noesis_id"],
-                "review-local-first-lifecycle",
-            )
-            self.assertEqual(
-                workbench["audit_records"][-1]["noesis_id"],
-                "review-draft-changes-requested",
+            self.assertFalse(workbench["ok"], workbench)
+            self.assertEqual(workbench["error"], "vault validation failed")
+            self.assertIn(
+                "review decision audit must have complete status and a mature review_state",
+                [issue["message"] for issue in workbench["issues"]],
             )
 
     def test_review_presenter_parses_audit_headings_case_insensitively(self) -> None:
@@ -816,6 +812,75 @@ None.
         self.assertFalse(summary["ok"])
         self.assertEqual(summary["error"], "vault validation failed")
         self.assertEqual(summary["issue_count"], 16)
+
+        review = handlers.show_review("anything", vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(review["ok"])
+        self.assertEqual(review["error"], "vault validation failed")
+        self.assertEqual(review["issue_count"], 16)
+
+        lineage = handlers.trace_lineage("anything", vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(lineage["ok"])
+        self.assertEqual(lineage["error"], "vault validation failed")
+        self.assertEqual(lineage["issue_count"], 16)
+
+    def test_review_presenter_ignores_non_covering_target_side_audit_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            target_id = "claim-useful-memory-requires-lifecycle"
+            unrelated_id = "review-unrelated-changes-requested"
+            write_note(
+                vault_path / "review" / f"{unrelated_id}.md",
+                {
+                    "title": "Unrelated Changes Requested",
+                    "noesis_id": unrelated_id,
+                    "type": "review",
+                    "lifecycle_stage": "review",
+                    "status": "complete",
+                    "review_state": "approved",
+                    "confidence": "medium",
+                    "created": "2026-07-17",
+                    "updated": "2026-07-17",
+                    "reviewer": "test-human",
+                    "reviewed_at": "2026-07-17",
+                    "reviewed_notes": ["[[source-agent-memory-session]]"],
+                    "decision": "changes-requested",
+                    "tags": ["noesis", "review"],
+                    "aliases": [],
+                },
+                """# Unrelated Changes Requested
+
+## Decision
+
+changes-requested
+
+## Basis
+
+The unrelated source needs revision.
+
+## Changes Requested
+
+Revise the unrelated source.
+""",
+            )
+            target = Vault.load(vault_path).find_note(target_id)
+            self.assertIsNotNone(target)
+            assert target is not None
+            target_metadata = dict(target.metadata)
+            target_metadata["reviewed_by"] = [
+                *target_metadata["reviewed_by"],
+                f"[[{unrelated_id}]]",
+            ]
+            write_note(target.path, target_metadata, target.body)
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+            workbench = NoesisMcpHandlers(vault_path).show_review(target_id)
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertNotIn(
+                unrelated_id,
+                [audit["noesis_id"] for audit in workbench["audit_records"]],
+            )
+            self.assertEqual(workbench["changes_requested"], [])
 
     def test_import_source_bundle_handler_creates_evidence_and_preserves_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

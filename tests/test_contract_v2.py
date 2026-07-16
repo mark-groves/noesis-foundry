@@ -691,6 +691,48 @@ Not scheduled.
             migrated_context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
             self.assertRegex(str(migrated_context.metadata["as_of"]), r"^\d{4}-\d{2}-\d{2}$")
 
+    def test_migration_repairs_nested_support_audit_relationships(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            vault = Vault.load(vault_path)
+            original = vault.find_note("evidence-memory-lifecycle")
+            claim = vault.find_note("claim-useful-memory-requires-lifecycle")
+            self.assertIsNotNone(original)
+            self.assertIsNotNone(claim)
+            assert original is not None and claim is not None
+            nested_id = "evidence-nested-migration-support"
+            nested_metadata = dict(original.metadata)
+            nested_metadata["title"] = "Nested Migration Support"
+            nested_metadata["noesis_id"] = nested_id
+            nested_metadata["reviewed_by"] = []
+            nested_metadata["aliases"] = []
+            write_note(
+                vault_path / "evidence" / f"{nested_id}.md",
+                nested_metadata,
+                original.body,
+            )
+            claim_metadata = dict(claim.metadata)
+            claim_metadata["evidence"] = [
+                *claim_metadata["evidence"],
+                wikilink(nested_id),
+            ]
+            write_note(claim.path, claim_metadata, claim.body)
+
+            preview = migrate_vault(vault_path, dry_run=True)
+            self.assertTrue(preview.dry_run)
+            migrate_vault(vault_path, backup=False)
+
+            migrated = Vault.load(vault_path)
+            nested = migrated.find_note(nested_id)
+            audit = migrated.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(nested)
+            self.assertIsNotNone(audit)
+            assert nested is not None and audit is not None
+            self.assertIn(wikilink(audit.noesis_id), nested.metadata["reviewed_by"])
+            self.assertIn(wikilink(nested_id), audit.metadata["reviewed_notes"])
+            self.assertEqual(migrated.validate(), [])
+
     def test_migration_rejects_excluded_or_blocked_active_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))

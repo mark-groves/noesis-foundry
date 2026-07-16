@@ -577,10 +577,7 @@ class Vault:
         for note in self.notes:
             if note.type != "review":
                 continue
-            if relationship_contains(self, note.metadata, "reviewed_notes", target.noesis_id):
-                audits.append(note)
-                continue
-            if relationship_contains(self, target.metadata, "reviewed_by", note.noesis_id):
+            if review_audit_covers_target_or_lineage(self, note, target):
                 audits.append(note)
         relationship_order = self.review_audit_relationship_order(target)
         return sorted(
@@ -1142,6 +1139,31 @@ def review_support_lineage(vault: Vault, initial: Iterable[Note]) -> list[Note]:
     return sorted(found.values(), key=lambda item: item.rel_path.as_posix())
 
 
+def review_audit_covers_target_or_lineage(vault: Vault, audit: Note, target: Note) -> bool:
+    if relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id):
+        return True
+    if target.type != "reviewed-knowledge" or not relationship_contains(
+        vault,
+        target.metadata,
+        "reviewed_by",
+        audit.noesis_id,
+    ):
+        return False
+    direct_supports = [
+        support
+        for key, expected_type in (
+            ("evidence", "evidence"),
+            ("claims", "claim"),
+            ("syntheses", "synthesis"),
+        )
+        for support in relationship_notes(vault, target, key, expected_type=expected_type)
+    ]
+    return any(
+        relationship_contains(vault, audit.metadata, "reviewed_notes", support.noesis_id)
+        for support in review_support_lineage(vault, direct_supports)
+    )
+
+
 def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
     if note.type != "source":
         return []
@@ -1495,29 +1517,31 @@ def _migrate_vault_locked(
                 )
 
         auditable_lineage = {knowledge.noesis_id: knowledge}
-        supports_by_key: dict[str, list[Note]] = {}
+        direct_supports: list[Note] = []
         for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
             supports = relationship_notes(vault, knowledge, key, expected_type=expected_type)
             if not supports:
                 raise ValueError(f"cannot migrate active knowledge without {key}: {knowledge.noesis_id}")
-            for support in supports:
-                if (
-                    is_excluded(support)
-                    or support.status != "reviewed"
-                    or support.review_state not in MATURE_REVIEW_STATES
-                ):
+            direct_supports.extend(supports)
+
+        supports = review_support_lineage(vault, direct_supports)
+        for support in supports:
+            if (
+                is_excluded(support)
+                or support.status != "reviewed"
+                or support.review_state not in MATURE_REVIEW_STATES
+            ):
+                raise ValueError(
+                    f"cannot migrate active knowledge with excluded, blocked, or unreviewed {support.type}: "
+                    f"{support.noesis_id}"
+                )
+            for source in relationship_notes(vault, support, "sources", expected_type="source"):
+                if is_excluded(source):
                     raise ValueError(
-                        f"cannot migrate active knowledge with excluded, blocked, or unreviewed {expected_type}: "
-                        f"{support.noesis_id}"
+                        "cannot migrate active knowledge with excluded support source: "
+                        f"{source.noesis_id}"
                     )
-                for source in relationship_notes(vault, support, "sources", expected_type="source"):
-                    if is_excluded(source):
-                        raise ValueError(
-                            "cannot migrate active knowledge with excluded support source: "
-                            f"{source.noesis_id}"
-                        )
-                auditable_lineage[support.noesis_id] = support
-            supports_by_key[key] = supports
+            auditable_lineage[support.noesis_id] = support
 
         approved_audits = approved_lineage_review_audits_for(
             vault,
@@ -1531,12 +1555,11 @@ def _migrate_vault_locked(
             )
         audit = approved_audits[-1]
         audit_metadata = dict(note_updates.get(audit.path, (audit.metadata, audit.body))[0])
-        for supports in supports_by_key.values():
-            for support in supports:
-                support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
-                add_relationship_link(support_metadata, "reviewed_by", wikilink(audit.noesis_id))
-                note_updates[support.path] = (support_metadata, support.body)
-                add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
+        for support in supports:
+            support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
+            add_relationship_link(support_metadata, "reviewed_by", wikilink(audit.noesis_id))
+            note_updates[support.path] = (support_metadata, support.body)
+            add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
         note_updates[audit.path] = (audit_metadata, audit.body)
 
     today = date.today().isoformat()

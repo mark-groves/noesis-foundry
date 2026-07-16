@@ -22,6 +22,15 @@ def tokenize(value: Any) -> list[str]:
     return TOKEN_RE.findall(str(value).casefold())
 
 
+def index_tokens(value: Any) -> list[str]:
+    tokens: list[str] = []
+    for token in tokenize(value):
+        tokens.append(token)
+        if "-" in token:
+            tokens.extend(part for part in token.split("-") if part)
+    return tokens
+
+
 def rank_notes(notes: Sequence[Any], query: str | None) -> list[RetrievalHit]:
     """Rank notes using field-aware BM25-style lexical relevance.
 
@@ -80,7 +89,7 @@ def note_weighted_terms(note: Any) -> dict[str, float]:
             text = " ".join(str(item) for item in value)
         else:
             text = str(value)
-        for term in tokenize(text):
+        for term in index_tokens(text):
             weighted[term] = weighted.get(term, 0.0) + weight
     return weighted
 
