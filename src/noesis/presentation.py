@@ -10,6 +10,7 @@ from typing import Any
 from .vault import (
     Note,
     Vault,
+    is_completed_review_audit,
     is_excluded,
     note_review_due,
     parse_review_date,
@@ -46,14 +47,17 @@ def note_summary(note: Note, vault_root: Path) -> JsonObject:
 def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) -> JsonObject:
     data = note_summary(note, vault.root)
     audits = vault.review_audits_for(note)
-    history = review_change_request_history(vault, audits)
-    open_changes = open_review_changes(note, audits, history)
+    completed_audits = [audit for audit in audits if is_completed_review_audit(audit)]
+    history = review_change_request_history(vault, completed_audits)
+    open_changes = open_review_changes(note, completed_audits, history)
     data["review_schedule"] = review_due_details(note, due_on=due_on)
     data["audit"] = {
         "count": len(audits),
         "requires_audit": review_requires_audit(note),
-        "has_audit": bool(audits),
-        "latest_decision": json_safe(audits[-1].metadata.get("decision")) if audits else None,
+        "has_audit": bool(completed_audits),
+        "latest_decision": (
+            json_safe(completed_audits[-1].metadata.get("decision")) if completed_audits else None
+        ),
     }
     data["requested_changes"] = {
         "open": bool(open_changes),
@@ -116,19 +120,20 @@ def review_workbench_to_dict(
     due_on: str | None = None,
 ) -> JsonObject:
     audits = vault.review_audits_for(note)
+    completed_audits = [audit for audit in audits if is_completed_review_audit(audit)]
     support = vault.support_notes_for(note)
     lineage = vault.lineage(note.noesis_id)
     review_due = note_review_due(note, due_on=due_on)
     schedule = review_due_details(note, due_on=due_on)
     dependent_knowledge = vault.dependent_reviewed_knowledge_for(note)
     dependent_contexts = vault.dependent_contexts_for(note)
-    history = review_change_request_history(vault, audits)
-    open_changes = open_review_changes(note, audits, history)
+    history = review_change_request_history(vault, completed_audits)
+    open_changes = open_review_changes(note, completed_audits, history)
     requires_audit = review_requires_audit(note)
     audit_status = {
         "requires_audit": requires_audit,
-        "has_audit": bool(audits),
-        "ok": (not requires_audit) or bool(audits),
+        "has_audit": bool(completed_audits),
+        "ok": (not requires_audit) or bool(completed_audits),
     }
     return {
         "ok": True,
@@ -136,7 +141,13 @@ def review_workbench_to_dict(
         "note_ref": note_ref,
         "note": note_to_dict(note, vault.root),
         "review_due": review_due,
-        "review_schedule": review_schedule_to_dict(vault, note, audits, due_on=due_on, review_due=review_due),
+        "review_schedule": review_schedule_to_dict(
+            vault,
+            note,
+            completed_audits,
+            due_on=due_on,
+            review_due=review_due,
+        ),
         "triage": review_triage(
             note,
             schedule=schedule,

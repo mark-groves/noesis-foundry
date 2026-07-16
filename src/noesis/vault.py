@@ -474,14 +474,7 @@ class Vault:
         return vault
 
     def validate(self) -> list[Issue]:
-        issues = list(self.issues)
-        issues.extend(validate_contract(self.root))
-        issues.extend(validate_folders(self.root))
-        issues.extend(validate_notes(self))
-        issues.extend(validate_wikilinks(self))
-        issues.extend(validate_bases(self.root))
-        issues.extend(validate_canvases(self.root))
-        return sorted(issues, key=lambda issue: issue.path.as_posix())
+        return validate_vault(self)
 
     def doctor(self) -> VaultDoctor:
         contract = read_contract(self.root)
@@ -822,8 +815,14 @@ def validate_contract(root: Path) -> list[Issue]:
         metadata = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         return [Issue(path, f"invalid Noesis contract YAML: {exc}")]
-    if not isinstance(metadata, dict):
+
+    return validate_contract_metadata(path, metadata)
+
+
+def validate_contract_metadata(path: Path, value: Any) -> list[Issue]:
+    if not isinstance(value, dict):
         return [Issue(path, "Noesis contract metadata must be a YAML mapping")]
+    metadata = value
 
     issues: list[Issue] = []
     for key, value in metadata.items():
@@ -857,6 +856,24 @@ def validate_contract(root: Path) -> list[Issue]:
             issues.append(Issue(path, f"{date_key} must be a date or date-like string"))
 
     return issues
+
+
+def validate_vault(
+    vault: Vault,
+    *,
+    contract_metadata: dict[str, Any] | None = None,
+) -> list[Issue]:
+    issues = list(vault.issues)
+    if contract_metadata is None:
+        issues.extend(validate_contract(vault.root))
+    else:
+        issues.extend(validate_contract_metadata(vault.root / CONTRACT_FILE, contract_metadata))
+    issues.extend(validate_folders(vault.root))
+    issues.extend(validate_notes(vault))
+    issues.extend(validate_wikilinks(vault))
+    issues.extend(validate_bases(vault.root))
+    issues.extend(validate_canvases(vault.root))
+    return sorted(issues, key=lambda issue: issue.path.as_posix())
 
 
 def validate_requires_noesis(path: Path, value: Any) -> list[Issue]:
@@ -1008,11 +1025,11 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, "review audit requires a decision"))
         elif decision not in {"approved", "changes-requested", "renewed"}:
             issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
-        if decision in {"approved", "renewed"} and not is_completed_review_audit(note):
+        if decision in {"approved", "changes-requested", "renewed"} and not is_completed_review_audit(note):
             issues.append(
                 Issue(
                     note.path,
-                    "approved or renewed review audit must have complete status and a mature review_state",
+                    "review decision audit must have complete status and a mature review_state",
                 )
             )
         if not markdown_body_section(note.body, "Basis"):
@@ -1053,6 +1070,13 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
                     Issue(
                         note.path,
                         f"active reviewed knowledge depends on non-current {expected_type} {support.noesis_id!r}",
+                    )
+                )
+            elif not approved_review_audits_for(vault, support):
+                issues.append(
+                    Issue(
+                        note.path,
+                        f"active reviewed knowledge depends on unaudited {expected_type} {support.noesis_id!r}",
                     )
                 )
 
@@ -1453,8 +1477,14 @@ def _migrate_vault_locked(
                 add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
         note_updates[audit.path] = (audit_metadata, audit.body)
 
+    today = date.today().isoformat()
+    migrated_contract = dict(contract)
+    migrated_contract["contract_version"] = CONTRACT_VERSION
+    migrated_contract["requires_noesis"] = f">={NOESIS_VERSION}"
+    migrated_contract["updated"] = today
+
     projected_vault = project_vault_notes(vault, note_updates)
-    projected_issues = validate_notes(projected_vault) + validate_wikilinks(projected_vault)
+    projected_issues = validate_vault(projected_vault, contract_metadata=migrated_contract)
     if projected_issues:
         formatted = "; ".join(issue.format(root) for issue in projected_issues[:3])
         remaining = len(projected_issues) - 3
@@ -1462,11 +1492,6 @@ def _migrate_vault_locked(
             formatted += f"; and {remaining} more issue(s)"
         raise ValueError(f"cannot migrate invalid projected vault: {formatted}")
 
-    today = date.today().isoformat()
-    migrated_contract = dict(contract)
-    migrated_contract["contract_version"] = CONTRACT_VERSION
-    migrated_contract["requires_noesis"] = f">={NOESIS_VERSION}"
-    migrated_contract["updated"] = today
     changed_paths = sorted([*note_updates, contract_path], key=lambda item: item.as_posix())
     if dry_run:
         return VaultMigration(root, from_version, CONTRACT_VERSION, True, changed_paths, None)
@@ -3345,6 +3370,16 @@ def is_completed_review_audit(note: Note) -> bool:
         and note.status == "complete"
         and note.review_state in MATURE_REVIEW_STATES
     )
+
+
+def approved_review_audits_for(vault: Vault, target: Note) -> list[Note]:
+    return [
+        audit
+        for audit in vault.review_audits_for(target)
+        if is_completed_review_audit(audit)
+        and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
+        and relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id)
+    ]
 
 
 def review_requires_audit(note: Note) -> bool:

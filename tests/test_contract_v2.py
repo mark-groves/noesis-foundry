@@ -178,11 +178,35 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
-                "approved or renewed review audit must have complete status and a mature review_state",
+                "review decision audit must have complete status and a mature review_state",
                 messages,
             )
             self.assertIn(
                 "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                messages,
+            )
+
+    def test_validator_requires_completed_changes_requested_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["title"] = "Draft Changes Requested Audit"
+            metadata["noesis_id"] = "review-draft-changes-requested"
+            metadata["status"] = "draft"
+            metadata["review_state"] = "in-review"
+            metadata["decision"] = "changes-requested"
+            body = audit.body.replace(
+                "## Changes Requested\n\nNone.",
+                "## Changes Requested\n\nRevise the evidence.",
+            )
+            write_note(vault_path / "review" / "review-draft-changes-requested.md", metadata, body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "review decision audit must have complete status and a mature review_state",
                 messages,
             )
 
@@ -311,6 +335,41 @@ Not scheduled.
                 [issue.message for issue in issues],
             )
 
+    def test_validator_rejects_active_knowledge_with_unaudited_support(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            knowledge = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            evidence = vault.find_note("evidence-memory-lifecycle")
+            audit = vault.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(knowledge)
+            self.assertIsNotNone(evidence)
+            self.assertIsNotNone(audit)
+            assert knowledge is not None and evidence is not None and audit is not None
+
+            evidence_metadata = dict(evidence.metadata)
+            evidence_metadata["reviewed_by"] = []
+            write_note(evidence.path, evidence_metadata, evidence.body)
+            audit_metadata = dict(audit.metadata)
+            audit_metadata["reviewed_notes"] = [
+                link
+                for link in audit_metadata["reviewed_notes"]
+                if evidence.noesis_id not in str(link)
+            ]
+            write_note(audit.path, audit_metadata, audit.body)
+
+            issues = Vault.load(vault_path).validate()
+            self.assertTrue(
+                any(
+                    issue.path == knowledge.path
+                    and issue.message
+                    == "active reviewed knowledge depends on unaudited evidence "
+                    "'evidence-memory-lifecycle'"
+                    for issue in issues
+                ),
+                [issue.message for issue in issues],
+            )
+
     def test_migration_has_dry_run_backup_and_validated_commit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -428,6 +487,18 @@ Not scheduled.
                 ValueError,
                 "cannot migrate active knowledge without an approved audit covering it or its declared lineage: "
                 "reviewed-knowledge-noesis-lifecycle",
+            ):
+                migrate_vault(vault_path, dry_run=True)
+
+    def test_migration_dry_run_validates_vault_level_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            shutil.rmtree(vault_path / "_canvas")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "cannot migrate invalid projected vault: _canvas: required vault folder is missing",
             ):
                 migrate_vault(vault_path, dry_run=True)
 

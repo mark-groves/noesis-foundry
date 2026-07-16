@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from noesis.mcp_server import NoesisMcpHandlers, create_server
-from noesis.vault import Vault, build_context, init_vault
+from noesis.vault import Vault, build_context, init_vault, write_note
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -625,6 +625,40 @@ None.
                     "review-context-first-cli-mcp-workflow-renewed",
                     "review-imported-later-audit",
                 ],
+            )
+
+    def test_review_workbench_ignores_incomplete_changes_requested_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["title"] = "Draft Changes Requested Audit"
+            metadata["noesis_id"] = "review-draft-changes-requested"
+            metadata["status"] = "draft"
+            metadata["review_state"] = "in-review"
+            metadata["decision"] = "changes-requested"
+            metadata["created"] = "2026-08-01"
+            metadata["updated"] = "2026-08-01"
+            metadata["reviewed_at"] = "2026-08-01"
+            body = audit.body.replace(
+                "## Changes Requested\n\nNone.",
+                "## Changes Requested\n\nRevise the evidence.",
+            )
+            write_note(vault_path / "review" / "review-draft-changes-requested.md", metadata, body)
+
+            workbench = NoesisMcpHandlers(vault_path).show_review("evidence-memory-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertEqual(workbench["changes_requested"], [])
+            self.assertEqual(
+                workbench["review_schedule"]["latest_audit"]["noesis_id"],
+                "review-local-first-lifecycle",
+            )
+            self.assertEqual(
+                workbench["audit_records"][-1]["noesis_id"],
+                "review-draft-changes-requested",
             )
 
     def test_invalid_vault_errors_are_structured(self) -> None:
