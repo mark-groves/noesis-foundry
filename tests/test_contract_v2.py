@@ -8,6 +8,7 @@ import unittest
 from noesis.vault import (
     Vault,
     compose_context,
+    extract_wikilinks,
     file_content_hash,
     mark_memory_stale,
     migrate_vault,
@@ -215,6 +216,31 @@ class ContractV2Tests(unittest.TestCase):
             assert context is not None
             metadata = dict(context.metadata)
             metadata["reviewed_knowledge"] = [f"{metadata['reviewed_knowledge'][0]} # selected"]
+            write_note(context.path, metadata, context.body)
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+    def test_validator_preserves_multiple_wikilinks_in_relationship_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-06-18",
+                title="Multi-Link Selection Contract Context",
+                slug="multi-link-selection-contract-context",
+            )
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            expected_links = list(context.metadata["reviewed_knowledge"])
+            self.assertGreater(len(expected_links), 1)
+            combined = " then ".join(str(link) for link in expected_links)
+            self.assertEqual(
+                extract_wikilinks(combined),
+                [link[2:-2] for link in expected_links],
+            )
+            metadata = dict(context.metadata)
+            metadata["reviewed_knowledge"] = [combined]
             write_note(context.path, metadata, context.body)
 
             self.assertEqual(Vault.load(vault_path).validate(), [])
@@ -917,6 +943,42 @@ Not scheduled.
             migrated_context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
             self.assertRegex(str(migrated_context.metadata["as_of"]), r"^\d{4}-\d{2}-\d{2}$")
 
+    def test_migration_rebuilds_context_selection_under_v2_ranking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                scope="agent memory",
+                as_of="2026-06-18",
+                title="Legacy Ranked Selection Context",
+                slug="legacy-ranked-selection-context",
+            )
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            expected_links = list(context.metadata["reviewed_knowledge"])
+            self.assertGreater(len(expected_links), 1)
+            metadata = dict(context.metadata)
+            metadata["reviewed_knowledge"] = list(reversed(expected_links))
+            metadata.pop("input_hashes")
+            write_note(context.path, metadata, context.body)
+            self.downgrade_contract_to_v1(vault_path)
+
+            migrate_vault(vault_path, backup=False)
+
+            migrated_vault = Vault.load(vault_path)
+            migrated_context = migrated_vault.find_note(created.note_id)
+            self.assertIsNotNone(migrated_context)
+            assert migrated_context is not None
+            self.assertEqual(migrated_context.metadata["reviewed_knowledge"], expected_links)
+            self.assertEqual(
+                [str(item).split("=", maxsplit=1)[0] for item in migrated_context.metadata["input_hashes"]],
+                [link[2:-2] for link in expected_links],
+            )
+            body_positions = [migrated_context.body.index(link) for link in expected_links]
+            self.assertEqual(body_positions, sorted(body_positions))
+            self.assertEqual(migrated_vault.validate(), [])
+
     def test_migration_repairs_nested_support_audit_relationships(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -1221,6 +1283,60 @@ Not scheduled.
                 self.assertNotIn(wikilink(target_id), context.metadata["reviewed_knowledge"])
                 self.assertNotIn(wikilink(target_id), context.metadata["freshness_excluded"])
                 self.assertEqual(renewed_vault.validate(), [])
+
+    def test_approval_adds_newly_current_knowledge_to_existing_contexts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            template = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            self.assertIsNotNone(template)
+            assert template is not None
+            pending_id = "reviewed-knowledge-newly-approved-context-input"
+            pending_metadata = dict(template.metadata)
+            pending_metadata.update(
+                {
+                    "title": "Newly Approved Context Input",
+                    "noesis_id": pending_id,
+                    "status": "needs-review",
+                    "review_state": "ready-for-review",
+                    "updated": "2026-06-18",
+                    "aliases": [],
+                }
+            )
+            pending_metadata.pop("reviewed_at", None)
+            pending_metadata.pop("next_review", None)
+            pending_path = vault_path / "knowledge" / f"{pending_id}.md"
+            write_note(
+                pending_path,
+                pending_metadata,
+                template.body.replace("# Noesis Lifecycle Knowledge", "# Newly Approved Context Input", 1),
+            )
+            created = write_context_note(
+                vault_path,
+                as_of="2026-06-18",
+                title="Pre-Approval Default Context",
+                slug="pre-approval-default-context",
+            )
+            before = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(before)
+            assert before is not None
+            self.assertNotIn(wikilink(pending_id), before.metadata["reviewed_knowledge"])
+
+            write_review_decision(
+                vault_path,
+                pending_id,
+                decision="approved",
+                reviewer="test-human",
+                basis="The new knowledge is supported and ready for operational use.",
+                today="2026-06-18",
+            )
+
+            approved_vault = Vault.load(vault_path)
+            updated_context = approved_vault.find_note(created.note_id)
+            self.assertIsNotNone(updated_context)
+            assert updated_context is not None
+            self.assertIn(wikilink(pending_id), updated_context.metadata["reviewed_knowledge"])
+            self.assertEqual(approved_vault.validate(), [])
 
     def test_approval_does_not_restore_review_exclusion_outside_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

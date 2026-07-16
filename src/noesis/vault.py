@@ -1563,14 +1563,69 @@ def _migrate_vault_locked(
                     migrated_as_of = date.today()
                 metadata["as_of"] = migrated_as_of.isoformat()
             metadata.setdefault("freshness_policy", "balanced")
-            metadata.setdefault("freshness_excluded", [])
-            context_inputs = context_reviewed_knowledge(vault, metadata)
+            projected_context = Note(
+                path=note.path,
+                rel_path=note.rel_path,
+                metadata=metadata,
+                body=note.body,
+            )
+            available_knowledge = vault.current_reviewed_knowledge()
+            context_as_of = context_as_of_date(metadata["as_of"])
+            freshness_policy = resolve_freshness_policy(
+                str(metadata.get("freshness_policy", "balanced"))
+            )
+            context_inputs = context_selected_knowledge(
+                available_knowledge,
+                scope=context_scope(projected_context),
+                profile=context_profile(projected_context),
+                limit=context_budget(projected_context, "context_limit"),
+                max_chars=context_budget(projected_context, "context_max_chars"),
+                as_of=context_as_of,
+                freshness_policy=freshness_policy,
+            )
+            freshness_excluded = [
+                candidate
+                for candidate in available_knowledge
+                if not context_freshness_eligible(
+                    note_freshness(candidate, as_of=context_as_of)[0],
+                    policy=freshness_policy,
+                )
+            ]
+            metadata["reviewed_knowledge"] = [
+                wikilink(context_input.noesis_id) for context_input in context_inputs
+            ]
+            metadata["freshness_excluded"] = [
+                wikilink(candidate.noesis_id) for candidate in freshness_excluded
+            ]
             metadata["input_hashes"] = [
                 f"{context_input.noesis_id}={file_content_hash(context_input.path)}"
                 for context_input in context_inputs
             ]
-        if metadata != note.metadata:
-            note_updates[note.path] = (metadata, note.body)
+            metadata["syntheses"] = sorted(
+                collect_relationship_links(
+                    vault,
+                    context_inputs,
+                    "syntheses",
+                    expected_type="synthesis",
+                )
+            )
+            body = build_context_body(
+                vault,
+                context_inputs,
+                sorted(str(link) for link in as_list(metadata.get("excluded_memory"))),
+                scope=context_scope(projected_context),
+                purpose=context_purpose(projected_context),
+                as_of=context_as_of,
+                freshness_policy=freshness_policy,
+                profile=context_profile(projected_context),
+                limit=context_budget(projected_context, "context_limit"),
+                max_chars=context_budget(projected_context, "context_max_chars"),
+                freshness_excluded_notes=freshness_excluded,
+            )
+        else:
+            body = note.body
+        if metadata != note.metadata or body != note.body:
+            note_updates[note.path] = (metadata, body)
 
     for knowledge in vault.notes:
         if knowledge.type != "reviewed-knowledge" or knowledge.status not in CURRENT_KNOWLEDGE_STATUSES:
@@ -3498,7 +3553,12 @@ def append_updated_reviewed_knowledge_contexts(
             "freshness_excluded",
             target.noesis_id,
         )
-        if not included_target and not review_excluded_target and not freshness_excluded_target:
+        if (
+            projected_target.type != "reviewed-knowledge"
+            and not included_target
+            and not review_excluded_target
+            and not freshness_excluded_target
+        ):
             continue
         context_metadata = dict(context_note.metadata)
         if review_excluded_target:
@@ -4117,12 +4177,15 @@ def as_list(value: Any) -> list[Any]:
     return [value]
 
 
-def extract_wikilinks(text: str) -> set[str]:
-    return {
-        target
-        for match in WIKILINK_RE.finditer(text)
-        if (target := normalize_wikilink_target(match.group(1) or match.group(2)))
-    }
+def extract_wikilinks(text: str) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for match in WIKILINK_RE.finditer(text):
+        target = normalize_wikilink_target(match.group(1) or match.group(2))
+        if target and target not in seen:
+            targets.append(target)
+            seen.add(target)
+    return targets
 
 
 def iter_metadata_wikilinks(metadata: dict[str, Any]) -> Iterable[str]:
