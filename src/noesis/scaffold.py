@@ -678,6 +678,11 @@ syntheses:
 reviewed_knowledge:
   - "[[<reviewed-knowledge-note>]]"
 excluded_memory: []
+freshness_excluded: []
+as_of: "{{date}}"
+freshness_policy: balanced
+input_hashes:
+  - "<reviewed-knowledge-noesis-id>=sha256:<content-digest>"
 next_review: "{{date}}"
 tags:
   - noesis

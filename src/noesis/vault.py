@@ -651,6 +651,7 @@ class Vault:
                 and (
                     context_references_memory(self, note, target.noesis_id)
                     or relationship_contains(self, note.metadata, "excluded_memory", target.noesis_id)
+                    or relationship_contains(self, note.metadata, "freshness_excluded", target.noesis_id)
                 )
             ),
             key=lambda note: note.rel_path.as_posix(),
@@ -1005,6 +1006,8 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
         if not markdown_body_section(note.body, "Basis"):
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
+        if decision == "changes-requested" and not markdown_body_section(note.body, "Changes Requested"):
+            issues.append(Issue(note.path, "changes-requested review audit requires requested-change details"))
 
     if (
         note.type == "reviewed-knowledge"
@@ -1104,7 +1107,9 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
         freshness_policy = "balanced"
 
     input_hash_ids: set[str] | None = None
-    if "input_hashes" in note.metadata:
+    if "input_hashes" not in note.metadata:
+        issues.append(Issue(note.path, "operational context requires input_hashes"))
+    else:
         input_hashes = note.metadata["input_hashes"]
         if not isinstance(input_hashes, list):
             issues.append(Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings"))
@@ -2595,6 +2600,8 @@ Keep this note so future context builders can explain why {target_link} no longe
             sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
             scope=context_scope(context_note),
             purpose=context_purpose(context_note),
+            as_of=context_metadata.get("as_of", context_metadata.get("created")),
+            freshness_policy=str(context_metadata.get("freshness_policy", "balanced")),
         )
         writes.append((context_note.path, context_metadata, context_body))
 
@@ -2844,10 +2851,21 @@ def build_context_body(
     *,
     scope: str | None = None,
     purpose: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
 ) -> str:
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
-    body = render_context(knowledge, scope=scope, purpose=purpose).rstrip() + "\n\n## Traceability\n\n"
+    body = (
+        render_context(
+            knowledge,
+            scope=scope,
+            purpose=purpose,
+            as_of=context_as_of_date(as_of),
+            freshness_policy=resolve_freshness_policy(freshness_policy),
+        ).rstrip()
+        + "\n\n## Traceability\n\n"
+    )
     body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
     if synthesis_links:
         body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
@@ -2897,6 +2915,8 @@ def append_dependent_memory_review_changes(
             sorted(str(link) for link in as_list(context_metadata.get("excluded_memory"))),
             scope=context_scope(context_note),
             purpose=context_purpose(context_note),
+            as_of=context_metadata.get("as_of", context_metadata.get("created")),
+            freshness_policy=str(context_metadata.get("freshness_policy", "balanced")),
         )
         writes.append((context_note.path, context_metadata, context_body))
 

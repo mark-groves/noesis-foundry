@@ -2620,6 +2620,10 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 "lifecycle",
                 "--purpose",
                 "prepare scoped agent",
+                "--as-of",
+                "2026-06-01",
+                "--freshness-policy",
+                "strict",
                 "--slug",
                 "scoped-lifecycle",
             )
@@ -2641,8 +2645,12 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             context_note = (vault_path / "context" / "context-scoped-lifecycle.md").read_text(encoding="utf-8")
             self.assertIn("scope: lifecycle", context_note)
             self.assertIn("purpose: prepare scoped agent", context_note)
+            self.assertIn("as_of: '2026-06-01'", context_note)
+            self.assertIn("freshness_policy: strict", context_note)
             self.assertIn("Scope: lifecycle", context_note)
             self.assertIn("Purpose: prepare scoped agent", context_note)
+            self.assertIn("As of: 2026-06-01", context_note)
+            self.assertIn("Freshness policy: strict", context_note)
             self.assertIn("No current reviewed knowledge found.", context_note)
 
     def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:

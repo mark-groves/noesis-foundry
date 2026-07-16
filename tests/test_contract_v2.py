@@ -39,6 +39,52 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertTrue(any("unresolved placeholder" in message for message in messages), messages)
 
+    def test_validator_requires_operational_context_input_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            context = vault.find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata.pop("input_hashes")
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("operational context requires input_hashes", messages)
+
+    def test_validator_requires_requested_change_audit_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            audit = vault.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["title"] = "Incomplete Changes Requested Audit"
+            metadata["noesis_id"] = "review-incomplete-changes-requested"
+            metadata["decision"] = "changes-requested"
+            body = """# Incomplete Changes Requested Audit
+
+## Decision
+
+changes-requested
+
+## Basis
+
+The review found a problem that needs correction.
+
+## Changes Requested
+
+## Next Review
+
+Not scheduled.
+"""
+            write_note(vault_path / "review" / "review-incomplete-changes-requested.md", metadata, body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("changes-requested review audit requires requested-change details", messages)
+
     def test_invalid_active_lineage_cannot_reach_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -176,6 +222,15 @@ class ContractV2Tests(unittest.TestCase):
                 "[[reviewed-knowledge-agent-memory-dogfood]]",
                 context_note.metadata["freshness_excluded"],
             )
+            vault = Vault.load(vault_path)
+            target = vault.find_note("reviewed-knowledge-agent-memory-dogfood")
+            self.assertIsNotNone(target)
+            assert target is not None
+            dependent_context_ids = {
+                note.noesis_id
+                for note in vault.dependent_contexts_for(target)
+            }
+            self.assertIn(created.note_id, dependent_context_ids)
 
             renew_review(
                 vault_path,
