@@ -1159,27 +1159,43 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     reviewed_knowledge_ids: set[str] = set()
     reviewed_knowledge_hashes: dict[str, str] = {}
     for ref in as_list(note.metadata.get("reviewed_knowledge")):
-        target = vault.find_note(str(ref))
-        if target is None:
+        if not isinstance(ref, str):
             continue
-        reviewed_knowledge_ids.add(target.noesis_id)
-        reviewed_knowledge_hashes[target.noesis_id] = file_content_hash(target.path)
-        if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
-            issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
-        elif target.status not in CURRENT_KNOWLEDGE_STATUSES:
-            issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not current reviewed knowledge"))
-        elif is_excluded(target):
-            issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is stale, superseded, or archived"))
-        else:
-            freshness_state, _, _ = note_freshness(target, as_of=as_of)
-            if not context_freshness_eligible(freshness_state, policy=freshness_policy):
-                issues.append(
-                    Issue(
-                        note.path,
-                        f"reviewed_knowledge reference {ref!r} is {freshness_state} as of {as_of.isoformat()} "
-                        f"under {freshness_policy!r} freshness policy",
+        for target_ref in extract_wikilinks(ref):
+            target = vault.find_note(target_ref)
+            if target is None:
+                continue
+            reviewed_knowledge_ids.add(target.noesis_id)
+            reviewed_knowledge_hashes[target.noesis_id] = file_content_hash(target.path)
+            if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
+                issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
+            elif target.status not in CURRENT_KNOWLEDGE_STATUSES:
+                issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not current reviewed knowledge"))
+            elif is_excluded(target):
+                issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is stale, superseded, or archived"))
+            else:
+                freshness_state, _, _ = note_freshness(target, as_of=as_of)
+                if not context_freshness_eligible(freshness_state, policy=freshness_policy):
+                    issues.append(
+                        Issue(
+                            note.path,
+                            f"reviewed_knowledge reference {ref!r} is {freshness_state} as of {as_of.isoformat()} "
+                            f"under {freshness_policy!r} freshness policy",
+                        )
                     )
-                )
+
+    freshness_excluded_ids = {
+        target.noesis_id
+        for target in context_linked_notes(vault, note.metadata, "freshness_excluded")
+    }
+    overlap = sorted(reviewed_knowledge_ids & freshness_excluded_ids)
+    if overlap:
+        issues.append(
+            Issue(
+                note.path,
+                "reviewed_knowledge and freshness_excluded must not overlap: " + ", ".join(overlap),
+            )
+        )
 
     if input_hash_digests is not None and set(input_hash_digests) != reviewed_knowledge_ids:
         missing = sorted(reviewed_knowledge_ids - set(input_hash_digests))
@@ -1203,11 +1219,14 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             )
 
     for ref in as_list(note.metadata.get("excluded_memory")):
-        target = vault.find_note(str(ref))
-        if target is None:
+        if not isinstance(ref, str):
             continue
-        elif not is_excluded(target):
-            issues.append(Issue(note.path, f"excluded_memory reference {ref!r} is not stale, superseded, or archived"))
+        for target_ref in extract_wikilinks(ref):
+            target = vault.find_note(target_ref)
+            if target is not None and not is_excluded(target):
+                issues.append(
+                    Issue(note.path, f"excluded_memory reference {ref!r} is not stale, superseded, or archived")
+                )
 
     return issues
 
@@ -1356,16 +1375,43 @@ def _migrate_vault_locked(
     for knowledge in vault.notes:
         if knowledge.type != "reviewed-knowledge" or knowledge.status not in CURRENT_KNOWLEDGE_STATUSES:
             continue
-        audits = relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
-        approved_audits = [audit for audit in audits if str(audit.metadata.get("decision", "")) == "approved"]
-        if not approved_audits:
-            raise ValueError(f"cannot migrate active knowledge without approved audit: {knowledge.noesis_id}")
-        audit = approved_audits[-1]
-        audit_metadata = dict(note_updates.get(audit.path, (audit.metadata, audit.body))[0])
+        auditable_lineage_ids = {knowledge.noesis_id}
+        supports_by_key: dict[str, list[Note]] = {}
         for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
             supports = relationship_notes(vault, knowledge, key, expected_type=expected_type)
             if not supports:
                 raise ValueError(f"cannot migrate active knowledge without {key}: {knowledge.noesis_id}")
+            for support in supports:
+                if (
+                    is_excluded(support)
+                    or support.status == "needs-review"
+                    or support.review_state == "changes-requested"
+                ):
+                    raise ValueError(
+                        f"cannot migrate active knowledge with excluded or blocked {expected_type}: "
+                        f"{support.noesis_id}"
+                    )
+                auditable_lineage_ids.add(support.noesis_id)
+            supports_by_key[key] = supports
+
+        audits = relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
+        approved_audits = [
+            audit
+            for audit in audits
+            if str(audit.metadata.get("decision", "")) == "approved"
+            and any(
+                relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
+                for lineage_id in auditable_lineage_ids
+            )
+        ]
+        if not approved_audits:
+            raise ValueError(
+                "cannot migrate active knowledge without an approved audit covering it or its declared lineage: "
+                f"{knowledge.noesis_id}"
+            )
+        audit = approved_audits[-1]
+        audit_metadata = dict(note_updates.get(audit.path, (audit.metadata, audit.body))[0])
+        for supports in supports_by_key.values():
             for support in supports:
                 support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
                 support_metadata["status"] = "reviewed"

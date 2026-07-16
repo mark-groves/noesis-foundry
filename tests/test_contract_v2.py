@@ -26,6 +26,16 @@ class ContractV2Tests(unittest.TestCase):
         shutil.copytree(EXAMPLE_VAULT, vault_path)
         return vault_path
 
+    def downgrade_contract_to_v1(self, vault_path: Path) -> None:
+        contract_path = vault_path / "noesis.vault.yaml"
+        contract_text = contract_path.read_text(encoding="utf-8")
+        contract_path.write_text(
+            contract_text.replace('contract_version: "2"', 'contract_version: "1"').replace(
+                'requires_noesis: ">=0.2.0"', 'requires_noesis: ">=0.1.0"'
+            ),
+            encoding="utf-8",
+        )
+
     def test_validator_detects_raw_source_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -75,6 +85,35 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
                 f"input_hashes digest for reviewed knowledge {note_id!r} does not match its file content",
+                messages,
+            )
+
+    def test_validator_parses_annotated_context_relationship_wikilinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata["reviewed_knowledge"] = [f"{metadata['reviewed_knowledge'][0]} # selected"]
+            write_note(context.path, metadata, context.body)
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+    def test_validator_rejects_active_and_freshness_excluded_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata["freshness_excluded"] = list(metadata["reviewed_knowledge"])
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "reviewed_knowledge and freshness_excluded must not overlap: "
+                "reviewed-knowledge-agent-memory-dogfood",
                 messages,
             )
 
@@ -197,13 +236,7 @@ Not scheduled.
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
             contract_path = vault_path / "noesis.vault.yaml"
-            contract_text = contract_path.read_text(encoding="utf-8")
-            contract_path.write_text(
-                contract_text.replace('contract_version: "2"', 'contract_version: "1"').replace(
-                    'requires_noesis: ">=0.2.0"', 'requires_noesis: ">=0.1.0"'
-                ),
-                encoding="utf-8",
-            )
+            self.downgrade_contract_to_v1(vault_path)
             source = Vault.load(vault_path).find_note("source-noesis-readme")
             self.assertIsNotNone(source)
             metadata = dict(source.metadata)
@@ -246,6 +279,41 @@ Not scheduled.
             self.assertTrue(str(migrated_source.metadata["content_hash"]).startswith("sha256:"))
             migrated_context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
             self.assertRegex(str(migrated_context.metadata["as_of"]), r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_migration_rejects_excluded_or_blocked_active_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            evidence = Vault.load(vault_path).find_note("evidence-memory-lifecycle")
+            self.assertIsNotNone(evidence)
+            assert evidence is not None
+            metadata = dict(evidence.metadata)
+            metadata["status"] = "stale"
+            write_note(evidence.path, metadata, evidence.body)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "cannot migrate active knowledge with excluded or blocked evidence: evidence-memory-lifecycle",
+            ):
+                migrate_vault(vault_path, dry_run=True)
+
+    def test_migration_rejects_unrelated_approved_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            knowledge = Vault.load(vault_path).find_note("reviewed-knowledge-noesis-lifecycle")
+            self.assertIsNotNone(knowledge)
+            assert knowledge is not None
+            metadata = dict(knowledge.metadata)
+            metadata["reviewed_by"] = ["[[review-agent-memory-dogfood]]"]
+            write_note(knowledge.path, metadata, knowledge.body)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "cannot migrate active knowledge without an approved audit covering it or its declared lineage: "
+                "reviewed-knowledge-noesis-lifecycle",
+            ):
+                migrate_vault(vault_path, dry_run=True)
 
     def test_context_freshness_distinguishes_review_due_from_expired(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
