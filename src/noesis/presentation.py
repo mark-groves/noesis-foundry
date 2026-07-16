@@ -310,7 +310,7 @@ def review_audit_to_dict(note: Note, vault_root: Path) -> JsonObject:
 def markdown_section(body: str, heading: str) -> str:
     pattern = re.compile(
         rf"^##\s+{re.escape(heading)}\s*$\n(?P<section>.*?)(?=^##\s+|\Z)",
-        re.MULTILINE | re.DOTALL,
+        re.MULTILINE | re.DOTALL | re.IGNORECASE,
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""

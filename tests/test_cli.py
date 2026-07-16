@@ -285,6 +285,10 @@ class NoesisCliTests(unittest.TestCase):
                 "reviewed-knowledge-noesis-lifecycle",
                 [note["noesis_id"] for note in payload["impact"]["dependent_reviewed_knowledge"]],
             )
+            self.assertIn(
+                "context-first-cli-mcp-workflow",
+                [note["noesis_id"] for note in payload["impact"]["dependent_contexts"]],
+            )
             self.assertIn("source-noesis-readme", [note["noesis_id"] for note in payload["lineage"]])
             self.assertIn("Clarify the claim", payload["changes_requested"][0]["changes_requested"])
 
@@ -2056,6 +2060,8 @@ This archived note is provenance, not active guidance.
                 vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
             ).read_text(encoding="utf-8")
             self.assertIn("reviewed_knowledge: []", context_note)
+            self.assertIn("[[claim-useful-memory-requires-lifecycle]]", context_note)
+            self.assertIn("[[reviewed-knowledge-noesis-lifecycle]]", context_note)
             self.assertIn("No current reviewed knowledge found.", context_note)
             self.assertNotIn("Build CLI commands against the vault schema", context_note)
 

@@ -433,6 +433,53 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertIn("follow-up cycle", follow_up["changes_requested"][0]["changes_requested"])
             self.assertEqual(len(follow_up["changes_requested_history"]), 2)
 
+    def test_resolved_change_requests_restore_context_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            requested = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The claim needs clarification before reuse.",
+                changes_requested="Clarify before approval.",
+                slug="claim-context-clarification",
+            )
+            self.assertTrue(requested["ok"], requested)
+            claim_approved = handlers.approve_review(
+                "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The claim clarification is complete.",
+                slug="claim-context-approved",
+            )
+            self.assertTrue(claim_approved["ok"], claim_approved)
+            knowledge_approved = handlers.approve_review(
+                "reviewed-knowledge-noesis-lifecycle",
+                reviewer="test-agent",
+                basis="The dependent knowledge is safe after the claim correction.",
+                slug="knowledge-context-restored",
+            )
+            self.assertTrue(knowledge_approved["ok"], knowledge_approved)
+
+            vault = Vault.load(vault_path)
+            context = vault.find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["reviewed_knowledge"],
+            )
+            self.assertNotIn(
+                "[[claim-useful-memory-requires-lifecycle]]",
+                context.metadata["excluded_memory"],
+            )
+            self.assertNotIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["excluded_memory"],
+            )
+            self.assertEqual(vault.validate(), [])
+
     def test_propagated_change_requests_are_open_without_direct_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
@@ -660,6 +707,26 @@ None.
                 workbench["audit_records"][-1]["noesis_id"],
                 "review-draft-changes-requested",
             )
+
+    def test_review_presenter_parses_audit_headings_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            body = audit.body.replace("## Basis", "## basis").replace(
+                "## Changes Requested",
+                "## CHANGES REQUESTED",
+            )
+            write_note(audit.path, audit.metadata, body)
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+            workbench = NoesisMcpHandlers(vault_path).show_review("evidence-memory-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            audit_record = workbench["audit_records"][-1]
+            self.assertIn("The claim and synthesis", audit_record["basis"])
+            self.assertEqual(audit_record["changes_requested"], "None for the prototype.")
 
     def test_invalid_vault_errors_are_structured(self) -> None:
         handlers = NoesisMcpHandlers()
