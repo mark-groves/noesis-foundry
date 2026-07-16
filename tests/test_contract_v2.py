@@ -9,8 +9,10 @@ from noesis.vault import (
     Vault,
     compose_context,
     file_content_hash,
+    mark_memory_stale,
     migrate_vault,
     renew_review,
+    wikilink,
     write_context_note,
     write_note,
 )
@@ -114,6 +116,22 @@ class ContractV2Tests(unittest.TestCase):
             self.assertIn(
                 "reviewed_knowledge and freshness_excluded must not overlap: "
                 "reviewed-knowledge-agent-memory-dogfood",
+                messages,
+            )
+
+    def test_validator_rejects_unknown_stored_context_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            metadata = dict(context.metadata)
+            metadata["context_profile"] = "missing-profile"
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertTrue(
+                any(message.startswith("context_profile must be one of:") for message in messages),
                 messages,
             )
 
@@ -681,6 +699,78 @@ Not scheduled.
                 renewed_context.metadata["freshness_excluded"],
             )
             self.assertEqual(renewed_vault.validate(), [])
+
+    def test_renewal_does_not_restore_freshness_exclusion_outside_selection(self) -> None:
+        cases = (
+            {"scope": "corpus"},
+            {"scope": "project memory corpus agent", "limit": 1},
+        )
+        for context_options in cases:
+            with self.subTest(context_options=context_options), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                created = write_context_note(
+                    vault_path,
+                    as_of="2026-07-16",
+                    freshness_policy="strict",
+                    title="Selection-Bounded Freshness Snapshot",
+                    slug="selection-bounded-freshness",
+                    **context_options,
+                )
+                target_id = "reviewed-knowledge-agent-memory-dogfood"
+                before = Vault.load(vault_path).find_note(created.note_id)
+                self.assertIsNotNone(before)
+                assert before is not None
+                self.assertIn(wikilink(target_id), before.metadata["freshness_excluded"])
+
+                renew_review(
+                    vault_path,
+                    target_id,
+                    next_review="2026-08-16",
+                    reviewer="test-human",
+                    basis="The reviewed knowledge remains current after scheduled review.",
+                    today="2026-07-16",
+                )
+
+                renewed_vault = Vault.load(vault_path)
+                context = renewed_vault.find_note(created.note_id)
+                self.assertIsNotNone(context)
+                assert context is not None
+                self.assertNotIn(wikilink(target_id), context.metadata["reviewed_knowledge"])
+                self.assertIn(wikilink(target_id), context.metadata["freshness_excluded"])
+                self.assertEqual(renewed_vault.validate(), [])
+
+    def test_mark_stale_rewrites_freshness_only_context_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            created = write_context_note(
+                vault_path,
+                scope="agent memory",
+                as_of="2026-07-16",
+                freshness_policy="strict",
+                title="Freshness-Only Stale Snapshot",
+            )
+            before = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(before)
+            assert before is not None
+            self.assertIn(wikilink(target_id), before.metadata["freshness_excluded"])
+            self.assertNotIn(wikilink(target_id), before.metadata["reviewed_knowledge"])
+
+            stale = mark_memory_stale(
+                vault_path,
+                target_id,
+                reason="The reviewed knowledge is no longer current.",
+                today="2026-07-16",
+            )
+
+            stale_vault = Vault.load(vault_path)
+            context = stale_vault.find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertNotIn(wikilink(target_id), context.metadata["freshness_excluded"])
+            self.assertIn(wikilink(target_id), context.metadata["excluded_memory"])
+            self.assertIn(wikilink(stale.note_id), context.metadata["excluded_memory"])
+            self.assertEqual(stale_vault.validate(), [])
 
     def test_renewal_updates_selected_context_input_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1170,6 +1170,13 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, str(exc)))
             freshness_policy = "balanced"
 
+    if "context_profile" in note.metadata:
+        profile_value = note.metadata.get("context_profile")
+        normalized_profile = profile_value.strip().lower() if isinstance(profile_value, str) else ""
+        if normalized_profile not in CONTEXT_PROFILE_NAMES:
+            expected = ", ".join(sorted(CONTEXT_PROFILE_NAMES))
+            issues.append(Issue(note.path, f"context_profile must be one of: {expected}"))
+
     input_hash_digests: dict[str, str] | None = None
     if "input_hashes" not in note.metadata:
         issues.append(Issue(note.path, "operational context requires input_hashes"))
@@ -1224,6 +1231,19 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
         target.noesis_id
         for target in context_linked_notes(vault, note.metadata, "freshness_excluded")
     }
+    for target in context_linked_notes(vault, note.metadata, "freshness_excluded"):
+        if (
+            target.type != "reviewed-knowledge"
+            or target.review_state not in {"reviewed", "approved"}
+            or target.status not in CURRENT_KNOWLEDGE_STATUSES
+            or is_excluded(target)
+        ):
+            issues.append(
+                Issue(
+                    note.path,
+                    f"freshness_excluded reference {wikilink(target.noesis_id)!r} is not current reviewed knowledge",
+                )
+            )
     overlap = sorted(reviewed_knowledge_ids & freshness_excluded_ids)
     if overlap:
         issues.append(
@@ -2747,7 +2767,6 @@ def mark_memory_stale(
         for note in vault.current_reviewed_knowledge()
         if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
     ]
-    dependent_links = [wikilink(note.noesis_id) for note in dependent_knowledge]
     for note in dependent_knowledge:
         note_metadata = dict(note.metadata)
         note_metadata["status"] = status
@@ -2802,8 +2821,16 @@ Keep this note so future context builders can explain why {target_link} no longe
             collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
         )
         remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
+        remove_relationship_link(vault, context_metadata, "freshness_excluded", target.noesis_id)
         add_relationship_link(context_metadata, "excluded_memory", target_link)
-        for dependent_link in dependent_links:
+        for dependent_note in dependent_knowledge:
+            dependent_link = wikilink(dependent_note.noesis_id)
+            remove_relationship_link(
+                vault,
+                context_metadata,
+                "freshness_excluded",
+                dependent_note.noesis_id,
+            )
             add_relationship_link(context_metadata, "excluded_memory", dependent_link)
         add_relationship_link(context_metadata, "excluded_memory", stale_link)
         context_metadata["updated"] = marked_at
@@ -3024,6 +3051,31 @@ def context_freshness_eligible(state: str, *, policy: str) -> bool:
     return implementation(state, policy=policy)
 
 
+def context_selection_includes(
+    knowledge: list[Note],
+    note_id: str,
+    scope: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
+) -> bool:
+    from .context import context_selection_includes as implementation
+
+    return implementation(
+        knowledge,
+        note_id,
+        scope=scope,
+        limit=limit,
+        max_chars=max_chars,
+        profile=profile,
+        as_of=as_of,
+        freshness_policy=freshness_policy,
+    )
+
+
 def context_lifecycle_exclusion_kind(note: Note) -> str:
     from .context import context_lifecycle_exclusion_kind as implementation
 
@@ -3148,9 +3200,28 @@ def append_dependent_memory_review_changes(
             collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
         )
         remove_relationship_link(vault, context_metadata, "syntheses", target.noesis_id)
+        remove_relationship_link(vault, context_metadata, "freshness_excluded", target.noesis_id)
         add_relationship_link(context_metadata, "excluded_memory", wikilink(target.noesis_id))
         for removed_note in removed_knowledge:
             add_relationship_link(context_metadata, "excluded_memory", wikilink(removed_note.noesis_id))
+        for dependent_note in dependent_knowledge:
+            if relationship_contains(
+                vault,
+                context_metadata,
+                "freshness_excluded",
+                dependent_note.noesis_id,
+            ):
+                remove_relationship_link(
+                    vault,
+                    context_metadata,
+                    "freshness_excluded",
+                    dependent_note.noesis_id,
+                )
+                add_relationship_link(
+                    context_metadata,
+                    "excluded_memory",
+                    wikilink(dependent_note.noesis_id),
+                )
         context_metadata["updated"] = reviewed_at
         context_body = build_context_body(
             vault,
@@ -3239,14 +3310,33 @@ def append_updated_reviewed_knowledge_contexts(
             )
             freshness_state, _, _ = note_freshness(projected_target, as_of=context_as_of)
             if context_freshness_eligible(freshness_state, policy=freshness_policy):
-                remove_relationship_link(
-                    vault,
-                    context_metadata,
-                    "freshness_excluded",
-                    target.noesis_id,
-                )
-                if all(note.noesis_id != projected_target.noesis_id for note in knowledge):
-                    knowledge.append(projected_target)
+                restore_target = not freshness_excluded_target
+                if freshness_excluded_target:
+                    available = [
+                        projected_target if note.noesis_id == projected_target.noesis_id else note
+                        for note in vault.current_reviewed_knowledge()
+                    ]
+                    if all(note.noesis_id != projected_target.noesis_id for note in available):
+                        available.append(projected_target)
+                    restore_target = context_selection_includes(
+                        available,
+                        projected_target.noesis_id,
+                        scope=context_scope(context_note),
+                        profile=context_profile(context_note),
+                        limit=context_budget(context_note, "context_limit"),
+                        max_chars=context_budget(context_note, "context_max_chars"),
+                        as_of=context_metadata.get("as_of", context_metadata.get("created")),
+                        freshness_policy=freshness_policy,
+                    )
+                if restore_target:
+                    remove_relationship_link(
+                        vault,
+                        context_metadata,
+                        "freshness_excluded",
+                        target.noesis_id,
+                    )
+                    if all(note.noesis_id != projected_target.noesis_id for note in knowledge):
+                        knowledge.append(projected_target)
             else:
                 knowledge = [
                     note for note in knowledge if note.noesis_id != projected_target.noesis_id
@@ -3346,7 +3436,10 @@ def context_references_memory(vault: Vault, context_note: Note, target_noesis_id
         return True
     return any(
         note_references_memory(vault, knowledge_note, target_noesis_id)
-        for knowledge_note in context_reviewed_knowledge(vault, context_note.metadata)
+        for knowledge_note in (
+            context_reviewed_knowledge(vault, context_note.metadata)
+            + context_linked_notes(vault, context_note.metadata, "freshness_excluded")
+        )
     )
 
 

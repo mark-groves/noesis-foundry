@@ -174,6 +174,47 @@ def compose_context(
     )
 
 
+def context_selection_includes(
+    knowledge: list[Note],
+    note_id: str,
+    scope: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
+) -> bool:
+    """Return whether a note survives the stored context selection contract."""
+    validate_context_budget(limit=limit, max_chars=max_chars)
+    cutoff = context_as_of_date(as_of)
+    normalized_freshness_policy = resolve_freshness_policy(freshness_policy)
+    profile_definition = resolve_context_profile(profile)
+    effective_limit, effective_max_chars, applied_profile_defaults = apply_context_profile_defaults(
+        profile_definition,
+        limit=limit,
+        max_chars=max_chars,
+    )
+    freshness_eligible, _ = apply_context_freshness(
+        knowledge,
+        as_of=cutoff,
+        policy=normalized_freshness_policy,
+    )
+    selected, _ = select_knowledge_for_context(
+        freshness_eligible,
+        scope,
+        as_of=cutoff,
+        profile=profile_definition,
+        applied_profile_defaults=applied_profile_defaults,
+    )
+    included, _ = apply_context_budget(
+        selected,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
+    )
+    return any(selection.note.noesis_id == note_id for selection in included)
+
+
 def render_context_snapshot(
     vault: Vault,
     knowledge: list[Note],
