@@ -93,6 +93,9 @@ class NoesisMcpHandlers:
         match_mode: str = "all",
     ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
         candidates: list[Note] = []
         for note in vault.notes:
             if note_type and note.type != note_type:

@@ -284,6 +284,31 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("renewed review audit requires next_review", messages)
 
+    def test_validator_requires_latest_renewal_schedule_to_match_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            renew_review(
+                vault_path,
+                target_id,
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The reviewed knowledge remains current.",
+                today="2026-07-16",
+            )
+            target = Vault.load(vault_path).find_note(target_id)
+            self.assertIsNotNone(target)
+            assert target is not None
+            metadata = dict(target.metadata)
+            metadata["next_review"] = "2026-07-13"
+            write_note(target.path, metadata, target.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                f"latest renewed review audit next_review must match reviewed note {target_id!r}",
+                messages,
+            )
+
     def test_validator_requires_review_audit_to_cover_knowledge_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -323,6 +348,38 @@ class ContractV2Tests(unittest.TestCase):
 
                 messages = [issue.message for issue in Vault.load(vault_path).validate()]
                 self.assertIn(expected, messages)
+
+    def test_validator_walks_nested_review_support_lineage(self) -> None:
+        cases = (
+            ("extracted", "ready-for-review", "non-current"),
+            ("reviewed", "approved", "unaudited"),
+        )
+        for status, review_state, expected_state in cases:
+            with self.subTest(expected_state=expected_state), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                vault = Vault.load(vault_path)
+                synthesis = vault.find_note("synthesis-local-first-lifecycle-interface")
+                nested = vault.find_note("evidence-cli-authoring-loop")
+                self.assertIsNotNone(synthesis)
+                self.assertIsNotNone(nested)
+                assert synthesis is not None and nested is not None
+
+                nested_metadata = dict(nested.metadata)
+                nested_metadata["status"] = status
+                nested_metadata["review_state"] = review_state
+                write_note(nested.path, nested_metadata, nested.body)
+                synthesis_metadata = dict(synthesis.metadata)
+                synthesis_metadata["evidence"] = [
+                    *synthesis_metadata["evidence"],
+                    wikilink(nested.noesis_id),
+                ]
+                write_note(synthesis.path, synthesis_metadata, synthesis.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertIn(
+                    f"active reviewed knowledge depends on {expected_state} evidence {nested.noesis_id!r}",
+                    messages,
+                )
 
     def test_validator_requires_requested_change_audit_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -596,6 +653,18 @@ Not scheduled.
             metadata = dict(audit.metadata)
             metadata["decision"] = "renewed"
             write_note(audit.path, metadata, audit.body)
+            vault = Vault.load(vault_path)
+            for target_id in (
+                "evidence-memory-lifecycle",
+                "claim-useful-memory-requires-lifecycle",
+                "synthesis-local-first-lifecycle-interface",
+            ):
+                target = vault.find_note(target_id)
+                self.assertIsNotNone(target)
+                assert target is not None
+                target_metadata = dict(target.metadata)
+                target_metadata["next_review"] = metadata["next_review"]
+                write_note(target.path, target_metadata, target.body)
 
             preview = migrate_vault(vault_path, dry_run=True)
             self.assertTrue(preview.dry_run)
@@ -770,6 +839,40 @@ Not scheduled.
             self.assertNotIn(wikilink(target_id), context.metadata["freshness_excluded"])
             self.assertIn(wikilink(target_id), context.metadata["excluded_memory"])
             self.assertIn(wikilink(stale.note_id), context.metadata["excluded_memory"])
+            self.assertEqual(stale_vault.validate(), [])
+
+    def test_mark_stale_excludes_only_context_referenced_dependents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            original = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            self.assertIsNotNone(original)
+            assert original is not None
+            duplicate_id = "reviewed-knowledge-unselected-lifecycle"
+            duplicate_metadata = dict(original.metadata)
+            duplicate_metadata["title"] = "Unselected Lifecycle Knowledge"
+            duplicate_metadata["noesis_id"] = duplicate_id
+            duplicate_metadata["aliases"] = []
+            write_note(
+                vault_path / "knowledge" / f"{duplicate_id}.md",
+                duplicate_metadata,
+                original.body,
+            )
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+            mark_memory_stale(
+                vault_path,
+                "source-noesis-readme",
+                reason="The source is no longer current.",
+                today="2026-07-16",
+            )
+
+            stale_vault = Vault.load(vault_path)
+            context = stale_vault.find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertIn(wikilink(original.noesis_id), context.metadata["excluded_memory"])
+            self.assertNotIn(wikilink(duplicate_id), context.metadata["excluded_memory"])
             self.assertEqual(stale_vault.validate(), [])
 
     def test_renewal_updates_selected_context_input_hash(self) -> None:

@@ -1554,6 +1554,21 @@ sources:
             self.assertEqual(promote.returncode, 0, promote.stderr)
             self.assertIn("created reviewed-knowledge-review-before-reuse", promote.stdout)
 
+            knowledge_review = run_noesis(
+                "review",
+                "approve",
+                "reviewed-knowledge-review-before-reuse",
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "The custom promoted knowledge accurately states the approved synthesis.",
+                "--slug",
+                "knowledge-review-before-reuse",
+            )
+            self.assertEqual(knowledge_review.returncode, 0, knowledge_review.stderr)
+
             context = run_noesis(
                 "context",
                 "write",

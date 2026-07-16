@@ -1039,6 +1039,25 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
         if decision == "renewed" and parse_review_date(note.metadata.get("next_review")) is None:
             issues.append(Issue(note.path, "renewed review audit requires next_review"))
+        if decision == "renewed" and is_completed_review_audit(note):
+            audit_next_review = parse_review_date(note.metadata.get("next_review"))
+            for target in relationship_notes(vault, note, "reviewed_notes"):
+                completed_renewals = [
+                    audit
+                    for audit in vault.review_audits_for(target)
+                    if is_completed_review_audit(audit)
+                    and str(audit.metadata.get("decision", "")) == "renewed"
+                ]
+                if not completed_renewals or completed_renewals[-1].noesis_id != note.noesis_id:
+                    continue
+                if parse_review_date(target.metadata.get("next_review")) != audit_next_review:
+                    issues.append(
+                        Issue(
+                            note.path,
+                            "latest renewed review audit next_review must match reviewed note "
+                            f"{target.noesis_id!r}",
+                        )
+                    )
         if decision == "changes-requested" and not markdown_body_section(note.body, "Changes Requested"):
             issues.append(Issue(note.path, "changes-requested review audit requires requested-change details"))
 
@@ -1059,29 +1078,37 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
         for source in relationship_notes(vault, note, "sources", expected_type="source")
     }
 
-    for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
-        for support in relationship_notes(vault, note, key, expected_type=expected_type):
-            auditable_lineage[support.noesis_id] = support
-            for source in relationship_notes(vault, support, "sources", expected_type="source"):
-                lineage_sources[source.noesis_id] = source
-            if (
-                support.status != "reviewed"
-                or support.review_state not in MATURE_REVIEW_STATES
-                or is_excluded(support)
-            ):
-                issues.append(
-                    Issue(
-                        note.path,
-                        f"active reviewed knowledge depends on non-current {expected_type} {support.noesis_id!r}",
-                    )
+    direct_supports = [
+        support
+        for key, expected_type in (
+            ("evidence", "evidence"),
+            ("claims", "claim"),
+            ("syntheses", "synthesis"),
+        )
+        for support in relationship_notes(vault, note, key, expected_type=expected_type)
+    ]
+    for support in review_support_lineage(vault, direct_supports):
+        auditable_lineage[support.noesis_id] = support
+        for source in relationship_notes(vault, support, "sources", expected_type="source"):
+            lineage_sources[source.noesis_id] = source
+        if (
+            support.status != "reviewed"
+            or support.review_state not in MATURE_REVIEW_STATES
+            or is_excluded(support)
+        ):
+            issues.append(
+                Issue(
+                    note.path,
+                    f"active reviewed knowledge depends on non-current {support.type} {support.noesis_id!r}",
                 )
-            elif not approved_review_audits_for(vault, support):
-                issues.append(
-                    Issue(
-                        note.path,
-                        f"active reviewed knowledge depends on unaudited {expected_type} {support.noesis_id!r}",
-                    )
+            )
+        elif not approved_review_audits_for(vault, support):
+            issues.append(
+                Issue(
+                    note.path,
+                    f"active reviewed knowledge depends on unaudited {support.type} {support.noesis_id!r}",
                 )
+            )
 
     for source in sorted(lineage_sources.values(), key=lambda item: item.rel_path.as_posix()):
         if is_excluded(source):
@@ -1101,6 +1128,23 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
             )
         )
     return issues
+
+
+def review_support_lineage(vault: Vault, initial: Iterable[Note]) -> list[Note]:
+    queue = list(initial)
+    found: dict[str, Note] = {}
+    while queue:
+        support = queue.pop(0)
+        if support.noesis_id in found:
+            continue
+        found[support.noesis_id] = support
+        relationships = {
+            "claim": (("evidence", "evidence"),),
+            "synthesis": (("evidence", "evidence"), ("claims", "claim")),
+        }.get(support.type, ())
+        for key, expected_type in relationships:
+            queue.extend(relationship_notes(vault, support, key, expected_type=expected_type))
+    return sorted(found.values(), key=lambda item: item.rel_path.as_posix())
 
 
 def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
@@ -2601,6 +2645,8 @@ def promote_synthesis(
 ) -> CreatedNote:
     if title is not None and is_blank(title):
         raise ValueError("title must not be blank")
+    if knowledge is not None and is_blank(knowledge):
+        raise ValueError("knowledge must not be blank")
     if next_review is not None and not is_date_like(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     root = ensure_valid_vault(vault_path)
@@ -2653,13 +2699,14 @@ def promote_synthesis(
     note_slug = slugify(slug or note_title)
     note_id = unique_noesis_id(root, f"reviewed-knowledge-{note_slug}")
     note_path = unique_note_path(root / "knowledge", f"{note_id}.md")
+    custom_knowledge = knowledge is not None
     metadata: dict[str, Any] = {
         "title": note_title,
         "noesis_id": note_id,
         "type": "reviewed-knowledge",
         "lifecycle_stage": "knowledge",
-        "status": "active",
-        "review_state": "reviewed",
+        "status": "needs-review" if custom_knowledge else "active",
+        "review_state": "ready-for-review" if custom_knowledge else "reviewed",
         "confidence": synthesis_note.metadata.get("confidence", "medium"),
         "created": reviewed_at,
         "updated": reviewed_at,
@@ -2668,14 +2715,29 @@ def promote_synthesis(
         "claims": claim_links,
         "syntheses": [wikilink(synthesis_note.noesis_id)],
         "reviewed_by": review_links,
-        "reviewed_at": reviewed_at,
         "tags": ["noesis", "knowledge"],
         "aliases": [],
     }
+    if not custom_knowledge:
+        metadata["reviewed_at"] = reviewed_at
     if next_review:
         metadata["next_review"] = next_review
 
-    knowledge_text = knowledge or "Use the approved synthesis as current reviewed knowledge."
+    knowledge_text = (
+        str(knowledge).strip()
+        if custom_knowledge
+        else markdown_body_section(synthesis_note.body, "Synthesis") or synthesis_note.body.strip()
+    )
+    trust_text = (
+        "Pending a direct review of this custom promoted text."
+        if custom_knowledge
+        else f"Derived from approved synthesis {wikilink(synthesis_note.noesis_id)}."
+    )
+    usage_text = (
+        "Do not use this custom knowledge in operational context until it is approved."
+        if custom_knowledge
+        else "Use this only while it remains current reviewed knowledge."
+    )
     body = f"""# {note_title}
 
 ## Current Knowledge
@@ -2684,12 +2746,13 @@ def promote_synthesis(
 
 ## Why It Is Trusted
 
-- Synthesis: {wikilink(synthesis_note.noesis_id)}
-- Review: {format_inline_links(review_links)}
+{trust_text}
+
+- Synthesis review: {format_inline_links(review_links)}
 
 ## Use In Future Work
 
-Use this only while it remains current reviewed knowledge.
+{usage_text}
 
 ## Staleness Rule
 
@@ -2811,6 +2874,13 @@ Keep this note so future context builders can explain why {target_link} no longe
         if not context_references_memory(vault, context_note, target.noesis_id):
             continue
         context_metadata = dict(context_note.metadata)
+        context_dependency_ids = {
+            note.noesis_id
+            for note in (
+                context_reviewed_knowledge(vault, context_metadata)
+                + context_linked_notes(vault, context_metadata, "freshness_excluded")
+            )
+        }
         remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
         if "input_hashes" in context_metadata:
@@ -2824,6 +2894,8 @@ Keep this note so future context builders can explain why {target_link} no longe
         remove_relationship_link(vault, context_metadata, "freshness_excluded", target.noesis_id)
         add_relationship_link(context_metadata, "excluded_memory", target_link)
         for dependent_note in dependent_knowledge:
+            if dependent_note.noesis_id not in context_dependency_ids:
+                continue
             dependent_link = wikilink(dependent_note.noesis_id)
             remove_relationship_link(
                 vault,

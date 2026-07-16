@@ -712,6 +712,13 @@ None.
                 encoding="utf-8",
             )
 
+            target = Vault.load(vault_path).find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(target)
+            assert target is not None
+            target_metadata = dict(target.metadata)
+            target_metadata["next_review"] = "2026-09-01"
+            write_note(target.path, target_metadata, target.body)
+
             self.assertEqual(Vault.load(vault_path).validate(), [])
             workbench = handlers.show_review("context-first-cli-mcp-workflow")
             self.assertTrue(workbench["ok"], workbench)
@@ -719,6 +726,7 @@ None.
                 workbench["review_schedule"]["latest_audit"]["noesis_id"],
                 "review-imported-later-audit",
             )
+            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-09-01")
             self.assertEqual(
                 [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
                 [
@@ -793,6 +801,11 @@ None.
         self.assertEqual(result["ready_for_cli_mcp"], False)
         self.assertEqual(result["contract"]["supported"], False)
         self.assertIn("vault path does not exist", result["issues"][0]["message"])
+
+        search = handlers.search_notes(vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(search["ok"])
+        self.assertEqual(search["error"], "vault validation failed")
+        self.assertEqual(search["issue_count"], 16)
 
     def test_import_source_bundle_handler_creates_evidence_and_preserves_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -911,6 +924,21 @@ None.
                 next_review="2026-08-06",
             )
             self.assertTrue(knowledge["ok"], knowledge)
+            pending_knowledge = Vault.load(vault_path).find_note(
+                "reviewed-knowledge-review-before-reuse"
+            )
+            self.assertIsNotNone(pending_knowledge)
+            assert pending_knowledge is not None
+            self.assertEqual(pending_knowledge.status, "needs-review")
+            self.assertEqual(pending_knowledge.review_state, "ready-for-review")
+
+            knowledge_review = handlers.approve_review(
+                "reviewed-knowledge-review-before-reuse",
+                reviewer="test-human",
+                basis="The custom promoted knowledge accurately states the approved synthesis.",
+                slug="knowledge-review-before-reuse",
+            )
+            self.assertTrue(knowledge_review["ok"], knowledge_review)
 
             context = handlers.write_context(
                 purpose="prepare a future agent",
