@@ -185,6 +185,8 @@ def render_context_snapshot(
     profile: str | None = None,
     as_of: str | date | None = None,
     freshness_policy: str = "balanced",
+    freshness_excluded_notes: list[Note] | None = None,
+    lifecycle_excluded_notes: list[Note] | None = None,
 ) -> str:
     """Re-render an already selected context while preserving its stored presentation contract."""
     validate_context_budget(limit=limit, max_chars=max_chars)
@@ -207,6 +209,13 @@ def render_context_snapshot(
             )
         )
 
+    freshness_excluded = snapshot_freshness_exclusions(
+        freshness_excluded_notes or [],
+        as_of=cutoff,
+        policy=normalized_freshness_policy,
+    )
+    total_candidates = len(knowledge) + len(freshness_excluded)
+
     if not is_handoff_profile(profile_definition):
         return render_context(
             knowledge,
@@ -215,12 +224,21 @@ def render_context_snapshot(
             profile=profile_definition,
             limit=limit,
             max_chars=max_chars,
-            total_candidates=len(knowledge),
+            total_candidates=total_candidates,
             as_of=cutoff,
             freshness_policy=normalized_freshness_policy,
+            freshness_excluded=freshness_excluded,
         )
 
-    lifecycle_excluded = explain_lifecycle_exclusions(vault)
+    lifecycle_excluded_by_id = {
+        selection.note.noesis_id: selection for selection in explain_lifecycle_exclusions(vault)
+    }
+    for note in lifecycle_excluded_notes or []:
+        lifecycle_excluded_by_id[note.noesis_id] = lifecycle_exclusion_selection(note)
+    lifecycle_excluded = sorted(
+        lifecycle_excluded_by_id.values(),
+        key=lambda selection: selection.note.title.lower(),
+    )
     lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
     handoff = context_handoff_guidance(
         vault_path=vault.root,
@@ -244,12 +262,48 @@ def render_context_snapshot(
         profile=profile_definition,
         limit=limit,
         max_chars=max_chars,
-        total_candidates=len(knowledge),
+        total_candidates=total_candidates,
         excluded=[],
         as_of=cutoff,
         freshness_policy=normalized_freshness_policy,
-        freshness_excluded=[],
+        freshness_excluded=freshness_excluded,
     )
+
+
+def snapshot_freshness_exclusions(
+    notes: list[Note],
+    *,
+    as_of: date,
+    policy: str,
+) -> list[ContextSelection]:
+    selections: list[ContextSelection] = []
+    for note in notes:
+        state, review_due_on, valid_until = note_freshness(note, as_of=as_of)
+        if state == "expired":
+            reason = f"expired after valid_until {valid_until.isoformat()} as of {as_of.isoformat()}"
+        elif state == "review-due" and policy == "strict":
+            reason = (
+                f"review was due on {review_due_on.isoformat()} as of {as_of.isoformat()} "
+                "and strict freshness excludes review-due knowledge"
+            )
+        else:
+            reason = (
+                "excluded by the stored operational context freshness snapshot; "
+                "current note metadata no longer reproduces the original exclusion"
+            )
+        selections.append(
+            ContextSelection(
+                note=note,
+                status="freshness_excluded",
+                reason=reason,
+                score=0,
+                content_chars=len(note.body.strip()),
+                freshness_state=state,
+                review_due_on=review_due_on.isoformat() if review_due_on else None,
+                valid_until=valid_until.isoformat() if valid_until else None,
+            )
+        )
+    return sorted(selections, key=lambda selection: selection.note.title.lower())
 
 
 def is_handoff_profile(profile: ContextProfile | None) -> bool:
@@ -522,24 +576,22 @@ def context_profile_reason_suffix(
 
 
 def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
-    selections: list[ContextSelection] = []
-    for note in vault.notes:
-        if not is_excluded(note):
-            continue
-        selections.append(
-            ContextSelection(
-                note=note,
-                status="lifecycle_excluded",
-                reason=(
-                    f"{note.type} has status {note.status!r} "
-                    f"and lifecycle_stage {note.lifecycle_stage!r}; "
-                    f"intentionally excluded as {context_lifecycle_exclusion_kind(note)} note"
-                ),
-                score=0,
-                content_chars=len(note.body.strip()),
-            )
-        )
+    selections = [lifecycle_exclusion_selection(note) for note in vault.notes if is_excluded(note)]
     return sorted(selections, key=lambda selection: selection.note.title.lower())
+
+
+def lifecycle_exclusion_selection(note: Note) -> ContextSelection:
+    return ContextSelection(
+        note=note,
+        status="lifecycle_excluded",
+        reason=(
+            f"{note.type} has status {note.status!r} "
+            f"and lifecycle_stage {note.lifecycle_stage!r}; "
+            f"intentionally excluded as {context_lifecycle_exclusion_kind(note)} note"
+        ),
+        score=0,
+        content_chars=len(note.body.strip()),
+    )
 
 
 def context_lifecycle_exclusion_kind(note: Note) -> str:

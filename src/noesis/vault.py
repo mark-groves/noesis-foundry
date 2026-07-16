@@ -1112,7 +1112,10 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     as_of_value = note.metadata.get("as_of")
     if is_blank(as_of_value):
         issues.append(Issue(note.path, "operational context requires as_of"))
-        as_of = context_as_of_date(note.metadata.get("created"))
+        try:
+            as_of = context_as_of_date(note.metadata.get("created"))
+        except ValueError:
+            as_of = date.today()
     else:
         try:
             as_of = context_as_of_date(as_of_value)
@@ -2597,6 +2600,17 @@ Keep this note so future context builders can explain why {target_link} no longe
 """
     writes.append((note_path, stale_metadata, stale_body))
 
+    pending_lifecycle_excluded: list[Note] = []
+    for pending_path, pending_metadata, pending_body in writes:
+        pending_note = Note(
+            path=pending_path,
+            rel_path=pending_path.relative_to(root),
+            metadata=pending_metadata,
+            body=pending_body,
+        )
+        if is_excluded(pending_note):
+            pending_lifecycle_excluded.append(pending_note)
+
     stale_link = wikilink(note_id)
     for context_note in vault.notes:
         if context_note.type != "operational-context":
@@ -2630,6 +2644,8 @@ Keep this note so future context builders can explain why {target_link} no longe
             profile=context_profile(context_note),
             limit=context_budget(context_note, "context_limit"),
             max_chars=context_budget(context_note, "context_max_chars"),
+            freshness_excluded_notes=context_linked_notes(vault, context_metadata, "freshness_excluded"),
+            lifecycle_excluded_notes=pending_lifecycle_excluded,
         )
         writes.append((context_note.path, context_metadata, context_body))
 
@@ -2884,6 +2900,8 @@ def build_context_body(
     profile: str | None = None,
     limit: int | None = None,
     max_chars: int | None = None,
+    freshness_excluded_notes: list[Note] | None = None,
+    lifecycle_excluded_notes: list[Note] | None = None,
 ) -> str:
     from .context import render_context_snapshot
 
@@ -2900,6 +2918,8 @@ def build_context_body(
             max_chars=max_chars,
             as_of=as_of,
             freshness_policy=freshness_policy,
+            freshness_excluded_notes=freshness_excluded_notes,
+            lifecycle_excluded_notes=lifecycle_excluded_notes,
         ).rstrip()
         + "\n\n## Traceability\n\n"
     )
@@ -2957,6 +2977,7 @@ def append_dependent_memory_review_changes(
             profile=context_profile(context_note),
             limit=context_budget(context_note, "context_limit"),
             max_chars=context_budget(context_note, "context_max_chars"),
+            freshness_excluded_notes=context_linked_notes(vault, context_metadata, "freshness_excluded"),
         )
         writes.append((context_note.path, context_metadata, context_body))
 
@@ -2987,6 +3008,21 @@ def context_budget(context_note: Note, key: str) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return None
+
+
+def context_linked_notes(vault: Vault, metadata: dict[str, Any], key: str) -> list[Note]:
+    notes: list[Note] = []
+    seen: set[str] = set()
+    for item in as_list(metadata.get(key)):
+        if not isinstance(item, str):
+            continue
+        for target in extract_wikilinks(item):
+            note = vault.find_note(target)
+            if note is None or note.noesis_id in seen:
+                continue
+            notes.append(note)
+            seen.add(note.noesis_id)
+    return notes
 
 
 def context_body_field(context_note: Note, label: str) -> str | None:

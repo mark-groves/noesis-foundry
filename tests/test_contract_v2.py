@@ -66,6 +66,8 @@ class ContractV2Tests(unittest.TestCase):
                 assert context is not None
                 metadata = dict(context.metadata)
                 metadata.pop(field)
+                if field == "as_of":
+                    metadata["created"] = "unknown"
                 write_note(context.path, metadata, context.body)
 
                 messages = [issue.message for issue in Vault.load(vault_path).validate()]

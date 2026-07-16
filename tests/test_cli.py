@@ -2617,11 +2617,11 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 "--vault",
                 str(vault_path),
                 "--scope",
-                "lifecycle",
+                "project memory",
                 "--purpose",
                 "prepare scoped agent",
                 "--as-of",
-                "2026-06-01",
+                "2026-07-16",
                 "--freshness-policy",
                 "strict",
                 "--profile",
@@ -2638,32 +2638,42 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             stale = run_noesis(
                 "memory",
                 "stale",
-                "synthesis-local-first-lifecycle-interface",
+                "synthesis-project-memory-corpus-continuation",
                 "--vault",
                 str(vault_path),
                 "--reason",
                 "The synthesis has been replaced.",
                 "--slug",
-                "scoped-lifecycle-synthesis-old",
+                "project-memory-synthesis-old",
             )
             self.assertEqual(stale.returncode, 0, stale.stderr)
 
             context_note = (vault_path / "context" / "context-scoped-lifecycle.md").read_text(encoding="utf-8")
-            self.assertIn("scope: lifecycle", context_note)
+            self.assertIn("scope: project memory", context_note)
             self.assertIn("purpose: prepare scoped agent", context_note)
-            self.assertIn("as_of: '2026-06-01'", context_note)
+            self.assertIn("as_of: '2026-07-16'", context_note)
             self.assertIn("freshness_policy: strict", context_note)
             self.assertIn("context_profile: codex-handoff", context_note)
             self.assertIn("context_limit: 1", context_note)
             self.assertIn("context_max_chars: 9000", context_note)
-            self.assertIn("Scope: lifecycle", context_note)
+            self.assertIn("Scope: project memory", context_note)
             self.assertIn("Purpose: prepare scoped agent", context_note)
-            self.assertIn("As of: 2026-06-01", context_note)
+            self.assertIn("As of: 2026-07-16", context_note)
             self.assertIn("Freshness policy: strict", context_note)
             self.assertIn("# Noesis Codex Handoff Pack", context_note)
             self.assertIn("Profile: codex-handoff", context_note)
             self.assertIn("Budget: limit 1, max_chars 9000", context_note)
             self.assertIn("No current reviewed knowledge selected.", context_note)
+            self.assertIn("- Excluded by freshness: 3", context_note)
+            self.assertIn("- reviewed-knowledge-agent-memory-dogfood (freshness_excluded", context_note)
+            self.assertIn("- reviewed-knowledge-noesis-lifecycle (freshness_excluded", context_note)
+            self.assertIn("- reviewed-knowledge-noesis-roadmap-phase-orchestration (freshness_excluded", context_note)
+            self.assertIn("- synthesis-project-memory-corpus-continuation (lifecycle_excluded, kind=stale", context_note)
+            self.assertIn(
+                "- reviewed-knowledge-project-memory-corpus-continuation (lifecycle_excluded, kind=stale",
+                context_note,
+            )
+            self.assertIn("- stale-project-memory-synthesis-old (lifecycle_excluded, kind=stale", context_note)
 
     def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
