@@ -15,6 +15,7 @@ from noesis.vault import (
     wikilink,
     write_context_note,
     write_note,
+    write_review_decision,
 )
 
 
@@ -116,6 +117,24 @@ class ContractV2Tests(unittest.TestCase):
             self.assertIn(
                 "reviewed_knowledge and freshness_excluded must not overlap: "
                 "reviewed-knowledge-agent-memory-dogfood",
+                messages,
+            )
+
+    def test_validator_rejects_freshness_exclusions_eligible_under_stored_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(context)
+            assert context is not None
+            target_id = "reviewed-knowledge-project-memory-corpus-continuation"
+            metadata = dict(context.metadata)
+            metadata["freshness_excluded"] = [wikilink(target_id)]
+            write_note(context.path, metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                f"freshness_excluded reference {wikilink(target_id)!r} is fresh as of "
+                "2026-06-13 under 'balanced' freshness policy",
                 messages,
             )
 
@@ -309,6 +328,36 @@ class ContractV2Tests(unittest.TestCase):
                 messages,
             )
 
+    def test_later_approval_can_replace_a_renewal_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            renew_review(
+                vault_path,
+                target_id,
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The reviewed knowledge remains current.",
+                today="2026-07-16",
+            )
+
+            write_review_decision(
+                vault_path,
+                target_id,
+                decision="approved",
+                reviewer="test-human",
+                basis="A later approval sets a new review schedule.",
+                next_review="2026-09-16",
+                today="2026-07-17",
+            )
+
+            vault = Vault.load(vault_path)
+            target = vault.find_note(target_id)
+            self.assertIsNotNone(target)
+            assert target is not None
+            self.assertEqual(str(target.metadata["next_review"]), "2026-09-16")
+            self.assertEqual(vault.validate(), [])
+
     def test_validator_requires_review_audit_to_cover_knowledge_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -348,6 +397,52 @@ class ContractV2Tests(unittest.TestCase):
 
                 messages = [issue.message for issue in Vault.load(vault_path).validate()]
                 self.assertIn(expected, messages)
+
+    def test_validator_rejects_active_knowledge_after_later_change_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            audit_path = vault_path / "review" / "review-imported-knowledge-changes.md"
+            write_note(
+                audit_path,
+                {
+                    "title": "Imported Knowledge Changes",
+                    "noesis_id": "review-imported-knowledge-changes",
+                    "type": "review",
+                    "lifecycle_stage": "review",
+                    "status": "complete",
+                    "review_state": "approved",
+                    "confidence": "medium",
+                    "created": "2026-07-17",
+                    "updated": "2026-07-17",
+                    "reviewer": "imported-reviewer",
+                    "reviewed_at": "2026-07-17",
+                    "reviewed_notes": [wikilink(target_id)],
+                    "decision": "changes-requested",
+                    "tags": ["noesis", "review"],
+                    "aliases": [],
+                },
+                """# Imported Knowledge Changes
+
+## Decision
+
+changes-requested
+
+## Basis
+
+The active knowledge requires revision.
+
+## Changes Requested
+
+Revise the operational guidance before reuse.
+""",
+            )
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                messages,
+            )
 
     def test_validator_walks_nested_review_support_lineage(self) -> None:
         cases = (
@@ -805,7 +900,7 @@ Not scheduled.
                 self.assertIsNotNone(context)
                 assert context is not None
                 self.assertNotIn(wikilink(target_id), context.metadata["reviewed_knowledge"])
-                self.assertIn(wikilink(target_id), context.metadata["freshness_excluded"])
+                self.assertNotIn(wikilink(target_id), context.metadata["freshness_excluded"])
                 self.assertEqual(renewed_vault.validate(), [])
 
     def test_mark_stale_rewrites_freshness_only_context_provenance(self) -> None:

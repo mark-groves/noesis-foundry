@@ -1042,13 +1042,12 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
         if decision == "renewed" and is_completed_review_audit(note):
             audit_next_review = parse_review_date(note.metadata.get("next_review"))
             for target in relationship_notes(vault, note, "reviewed_notes"):
-                completed_renewals = [
+                completed_audits = [
                     audit
                     for audit in vault.review_audits_for(target)
                     if is_completed_review_audit(audit)
-                    and str(audit.metadata.get("decision", "")) == "renewed"
                 ]
-                if not completed_renewals or completed_renewals[-1].noesis_id != note.noesis_id:
+                if not completed_audits or completed_audits[-1].noesis_id != note.noesis_id:
                     continue
                 if parse_review_date(target.metadata.get("next_review")) != audit_next_review:
                     issues.append(
@@ -1288,6 +1287,17 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                     f"freshness_excluded reference {wikilink(target.noesis_id)!r} is not current reviewed knowledge",
                 )
             )
+        else:
+            freshness_state, _, _ = note_freshness(target, as_of=as_of)
+            if context_freshness_eligible(freshness_state, policy=freshness_policy):
+                issues.append(
+                    Issue(
+                        note.path,
+                        f"freshness_excluded reference {wikilink(target.noesis_id)!r} is "
+                        f"{freshness_state} as of {as_of.isoformat()} under {freshness_policy!r} "
+                        "freshness policy",
+                    )
+                )
     overlap = sorted(reviewed_knowledge_ids & freshness_excluded_ids)
     if overlap:
         issues.append(
@@ -3400,13 +3410,13 @@ def append_updated_reviewed_knowledge_contexts(
                         as_of=context_metadata.get("as_of", context_metadata.get("created")),
                         freshness_policy=freshness_policy,
                     )
+                remove_relationship_link(
+                    vault,
+                    context_metadata,
+                    "freshness_excluded",
+                    target.noesis_id,
+                )
                 if restore_target:
-                    remove_relationship_link(
-                        vault,
-                        context_metadata,
-                        "freshness_excluded",
-                        target.noesis_id,
-                    )
                     if all(note.noesis_id != projected_target.noesis_id for note in knowledge):
                         knowledge.append(projected_target)
             else:
@@ -3611,15 +3621,23 @@ def is_completed_review_audit(note: Note) -> bool:
     return has_completed_review_state(note) and parse_review_date(note.metadata.get("reviewed_at")) is not None
 
 
-def approved_review_audits_for(vault: Vault, target: Note) -> list[Note]:
+def completed_review_audits_covering(vault: Vault, target: Note) -> list[Note]:
     return [
         audit
         for audit in vault.review_audits_for(target)
         if is_completed_review_audit(audit)
-        and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
         and relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id)
-        and review_audit_postdates_note(audit, target)
     ]
+
+
+def approved_review_audits_for(vault: Vault, target: Note) -> list[Note]:
+    completed = completed_review_audits_covering(vault, target)
+    if not completed:
+        return []
+    latest = completed[-1]
+    if str(latest.metadata.get("decision", "")) not in {"approved", "renewed"}:
+        return []
+    return [latest] if review_audit_postdates_note(latest, target) else []
 
 
 def approved_lineage_review_audits_for(
@@ -3631,22 +3649,34 @@ def approved_lineage_review_audits_for(
     created = parse_review_date(knowledge.metadata.get("created"))
     updated = parse_review_date(knowledge.metadata.get("updated"))
     knowledge_was_edited = created is None or updated is None or updated > created
+    direct_audits = completed_review_audits_covering(vault, knowledge)
+    if direct_audits:
+        latest = direct_audits[-1]
+        if str(latest.metadata.get("decision", "")) not in {"approved", "renewed"}:
+            return []
+        return [latest] if review_audit_postdates_note(latest, knowledge) else []
+
+    linked_audit_ids = {
+        audit.noesis_id
+        for audit in relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
+    }
     approved: list[Note] = []
-    for audit in relationship_notes(vault, knowledge, "reviewed_by", expected_type="review"):
-        if not is_completed_review_audit(audit):
+    for target in lineage_by_id.values():
+        if target.noesis_id == knowledge.noesis_id:
             continue
-        if str(audit.metadata.get("decision", "")) not in {"approved", "renewed"}:
+        completed = completed_review_audits_covering(vault, target)
+        if not completed:
             continue
-        covered = [
-            target
-            for target in lineage_by_id.values()
-            if relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id)
-        ]
-        if not any(review_audit_postdates_note(audit, target) for target in covered):
+        latest = completed[-1]
+        if latest.noesis_id not in linked_audit_ids:
             continue
-        if knowledge_was_edited and not review_audit_postdates_note(audit, knowledge):
+        if str(latest.metadata.get("decision", "")) not in {"approved", "renewed"}:
             continue
-        approved.append(audit)
+        if not review_audit_postdates_note(latest, target):
+            continue
+        if knowledge_was_edited and not review_audit_postdates_note(latest, knowledge):
+            continue
+        approved.append(latest)
     return approved
 
 

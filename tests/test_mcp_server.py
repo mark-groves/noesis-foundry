@@ -807,6 +807,11 @@ None.
         self.assertEqual(search["error"], "vault validation failed")
         self.assertEqual(search["issue_count"], 16)
 
+        fetched = handlers.get_note("anything", vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(fetched["ok"])
+        self.assertEqual(fetched["error"], "vault validation failed")
+        self.assertEqual(fetched["issue_count"], 16)
+
     def test_import_source_bundle_handler_creates_evidence_and_preserves_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"

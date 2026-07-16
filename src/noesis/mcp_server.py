@@ -132,6 +132,9 @@ class NoesisMcpHandlers:
 
     def get_note(self, note: str, vault_path: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
         found = vault.find_note(note)
         if found is None:
             return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
