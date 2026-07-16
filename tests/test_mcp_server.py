@@ -318,6 +318,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 for note in handoff_context["handoff"]["scoped_out_reviewed_knowledge"]
             ],
         )
+
         self.assertEqual(handoff_context["handoff"]["budgeted_out_reviewed_knowledge"], [])
         self.assertTrue(
             any(
@@ -354,6 +355,33 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         invalid_profile = handlers.build_context(profile="missing-profile")
         self.assertFalse(invalid_profile["ok"])
         self.assertIn("profile must be one of", invalid_profile["error"])
+
+    def test_get_note_rejects_absolute_source_raw_path_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+            source_id = "source-noesis-readme"
+            relative = handlers.get_note(source_id)
+            self.assertTrue(relative["ok"], relative)
+            self.assertFalse(Path(relative["note"]["metadata"]["raw_path"]).is_absolute())
+
+            source = Vault.load(vault_path).find_note(source_id)
+            self.assertIsNotNone(source)
+            assert source is not None
+            metadata = dict(source.metadata)
+            metadata["raw_path"] = str(
+                (source.path.parent / str(source.metadata["raw_path"])).resolve()
+            )
+            write_note(source.path, metadata, source.body)
+
+            blocked = handlers.get_note(source_id)
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertEqual(blocked["error"], "vault validation failed")
+            self.assertIn(
+                "raw_path must be vault-relative",
+                [issue["message"] for issue in blocked["issues"]],
+            )
 
     def test_search_notes_filters_by_text_and_metadata(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
@@ -604,7 +632,10 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             lint = handlers.lint_vault()
             self.assertFalse(lint["ok"], lint)
-            self.assertIn("next_review must be a date or date-like string", lint["issues"][0]["message"])
+            self.assertIn(
+                "next_review must be a parseable YYYY-MM-DD date or unknown",
+                lint["issues"][0]["message"],
+            )
 
     def test_review_handlers_normalize_metadata_datetimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

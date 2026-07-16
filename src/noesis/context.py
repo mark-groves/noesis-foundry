@@ -22,6 +22,7 @@ from .vault import (
     file_content_hash,
     is_excluded,
     parse_review_date,
+    review_support_lineage,
     searchable_note_text,
 )
 
@@ -681,24 +682,74 @@ def context_lineage_summary(
     *,
     note_overrides: dict[str, Note] | None = None,
 ) -> ContextLineageSummary:
+    direct_evidence = context_relationship_notes(
+        vault, note, "evidence", expected_type="evidence", note_overrides=note_overrides
+    )
+    direct_claims = context_relationship_notes(
+        vault, note, "claims", expected_type="claim", note_overrides=note_overrides
+    )
+    direct_syntheses = context_relationship_notes(
+        vault, note, "syntheses", expected_type="synthesis", note_overrides=note_overrides
+    )
+    support = [
+        (note_overrides or {}).get(item.noesis_id, item)
+        for item in review_support_lineage(
+            vault,
+            [*direct_evidence, *direct_claims, *direct_syntheses],
+        )
+    ]
+    sources = context_lineage_related_notes(
+        vault,
+        [note, *support],
+        "sources",
+        expected_type="source",
+        note_overrides=note_overrides,
+    )
+    reviews = context_lineage_related_notes(
+        vault,
+        [note, *support],
+        "reviewed_by",
+        expected_type="review",
+        note_overrides=note_overrides,
+    )
     return ContextLineageSummary(
         reviewed_knowledge=note,
-        sources=context_relationship_notes(
-            vault, note, "sources", expected_type="source", note_overrides=note_overrides
+        sources=sources,
+        evidence=sorted(
+            (item for item in support if item.type == "evidence"),
+            key=lambda item: item.rel_path.as_posix(),
         ),
-        evidence=context_relationship_notes(
-            vault, note, "evidence", expected_type="evidence", note_overrides=note_overrides
+        claims=sorted(
+            (item for item in support if item.type == "claim"),
+            key=lambda item: item.rel_path.as_posix(),
         ),
-        claims=context_relationship_notes(
-            vault, note, "claims", expected_type="claim", note_overrides=note_overrides
+        syntheses=sorted(
+            (item for item in support if item.type == "synthesis"),
+            key=lambda item: item.rel_path.as_posix(),
         ),
-        syntheses=context_relationship_notes(
-            vault, note, "syntheses", expected_type="synthesis", note_overrides=note_overrides
-        ),
-        reviews=context_relationship_notes(
-            vault, note, "reviewed_by", expected_type="review", note_overrides=note_overrides
-        ),
+        reviews=reviews,
     )
+
+
+def context_lineage_related_notes(
+    vault: Vault,
+    notes: list[Note],
+    key: str,
+    *,
+    expected_type: str,
+    note_overrides: dict[str, Note] | None = None,
+) -> list[Note]:
+    related: dict[str, Note] = {}
+    for item in notes:
+        for target in context_relationship_notes(
+            vault,
+            item,
+            key,
+            expected_type=expected_type,
+            note_overrides=note_overrides,
+        ):
+            related[target.noesis_id] = target
+    return sorted(related.values(), key=lambda item: item.rel_path.as_posix())
 
 
 def context_relationship_notes(

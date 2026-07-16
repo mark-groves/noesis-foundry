@@ -931,6 +931,11 @@ def validate_notes(vault: Vault) -> list[Issue]:
             if date_key == "valid_until":
                 if parse_review_date(metadata[date_key]) is None:
                     issues.append(Issue(note.path, "valid_until must be a parseable YYYY-MM-DD date"))
+            elif date_key == "next_review":
+                if not is_review_schedule(metadata[date_key]):
+                    issues.append(
+                        Issue(note.path, "next_review must be a parseable YYYY-MM-DD date or unknown")
+                    )
             elif not is_date_like(metadata[date_key]):
                 issues.append(Issue(note.path, f"{date_key} must be a date or date-like string"))
 
@@ -1176,6 +1181,8 @@ def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
     raw_path = note.metadata.get("raw_path")
     if not isinstance(raw_path, str) or is_blank(raw_path):
         return [Issue(note.path, "source requires raw_path")]
+    if Path(raw_path).is_absolute():
+        return [Issue(note.path, "raw_path must be vault-relative")]
     candidate = (note.path.parent / raw_path).resolve()
     try:
         candidate.relative_to(vault.root)
@@ -2688,7 +2695,7 @@ def write_review_decision(
         raise ValueError("basis is required for a review decision")
     if decision == "changes-requested" and is_blank(changes_requested):
         raise ValueError("changes_requested is required when requesting changes")
-    if next_review is not None and not is_date_like(next_review):
+    if next_review is not None and not is_review_schedule(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
@@ -2799,7 +2806,7 @@ def promote_synthesis(
         raise ValueError("title must not be blank")
     if knowledge is not None and is_blank(knowledge):
         raise ValueError("knowledge must not be blank")
-    if next_review is not None and not is_date_like(next_review):
+    if next_review is not None and not is_review_schedule(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
@@ -2910,7 +2917,22 @@ def promote_synthesis(
 
 Recheck this note when its source, evidence, claims, or synthesis are superseded.
 """
-    write_note_and_validate(root, note_path, metadata, body)
+    promoted_note = Note(
+        path=note_path,
+        rel_path=note_path.relative_to(root),
+        metadata=metadata,
+        body=body,
+    )
+    writes = [(note_path, metadata, body)]
+    append_updated_reviewed_knowledge_contexts(
+        vault,
+        promoted_note,
+        metadata,
+        body,
+        reviewed_at,
+        writes,
+    )
+    write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
 
 
@@ -3103,7 +3125,7 @@ def write_context_note(
 ) -> CreatedNote:
     if title is not None and is_blank(title):
         raise ValueError("title must not be blank")
-    if next_review is not None and not is_date_like(next_review):
+    if next_review is not None and not is_review_schedule(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     validate_context_budget(limit=limit, max_chars=max_chars)
     root = ensure_valid_vault(vault_path)
@@ -3129,7 +3151,9 @@ def write_context_note(
     note_path = unique_note_path(root / "context", f"{note_id}.md")
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
-    excluded_links = sorted(wikilink(note.noesis_id) for note in vault.notes if is_excluded(note))
+    excluded_links = sorted(
+        wikilink(note.noesis_id) for note in vault.notes if is_context_excluded(note)
+    )
     freshness_excluded_links = [wikilink(selection.note.noesis_id) for selection in package.freshness_excluded]
     metadata: dict[str, Any] = {
         "title": note_title,
@@ -4163,6 +4187,10 @@ def is_date_like(value: Any) -> bool:
             return False
         return True
     return False
+
+
+def is_review_schedule(value: Any) -> bool:
+    return value == "unknown" or parse_review_date(value) is not None
 
 
 def is_blank(value: Any) -> bool:

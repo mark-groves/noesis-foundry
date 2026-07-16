@@ -610,7 +610,10 @@ class NoesisCliTests(unittest.TestCase):
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertNotEqual(validate.returncode, 0)
-            self.assertIn("next_review must be a date or date-like string", validate.stderr)
+            self.assertIn(
+                "next_review must be a parseable YYYY-MM-DD date or unknown",
+                validate.stderr,
+            )
 
     def test_review_workbench_normalizes_metadata_datetimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,6 +12,7 @@ from noesis.vault import (
     file_content_hash,
     mark_memory_stale,
     migrate_vault,
+    promote_synthesis,
     renew_review,
     wikilink,
     write_context_note,
@@ -73,6 +74,23 @@ class ContractV2Tests(unittest.TestCase):
 
                 messages = [issue.message for issue in Vault.load(vault_path).validate()]
                 self.assertIn("raw_path must resolve inside the vault raw directory", messages)
+
+    def test_validator_requires_source_raw_path_to_be_relative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            source = vault.find_note("source-noesis-readme")
+            self.assertIsNotNone(source)
+            assert source is not None
+            self.assertEqual(vault.validate(), [])
+            metadata = dict(source.metadata)
+            metadata["raw_path"] = str(
+                (source.path.parent / str(source.metadata["raw_path"])).resolve()
+            )
+            write_note(source.path, metadata, source.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("raw_path must be vault-relative", messages)
 
     def test_validator_rejects_placeholder_in_mature_knowledge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -469,6 +487,24 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("renewed review audit requires next_review", messages)
 
+    def test_validator_requires_parseable_next_review_schedules(self) -> None:
+        for value, valid in (("{{date}}", False), ("unknown", True)):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                note = Vault.load(vault_path).find_note("reviewed-knowledge-noesis-lifecycle")
+                self.assertIsNotNone(note)
+                assert note is not None
+                metadata = dict(note.metadata)
+                metadata["next_review"] = value
+                write_note(note.path, metadata, note.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                schedule_error = "next_review must be a parseable YYYY-MM-DD date or unknown"
+                if valid:
+                    self.assertNotIn(schedule_error, messages)
+                else:
+                    self.assertIn(schedule_error, messages)
+
     def test_validator_requires_latest_renewal_schedule_to_match_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -702,6 +738,7 @@ Revise the operational guidance before reuse.
                 {
                     "title": "Nested Context Impact Evidence",
                     "noesis_id": evidence_id,
+                    "sources": [wikilink("source-agent-memory-session")],
                     "aliases": [],
                 }
             )
@@ -717,6 +754,7 @@ Revise the operational guidance before reuse.
                 {
                     "title": "Nested Context Impact Claim",
                     "noesis_id": claim_id,
+                    "sources": [wikilink("source-agent-memory-session")],
                     "evidence": [wikilink(evidence_id)],
                     "aliases": [],
                 }
@@ -729,6 +767,10 @@ Revise the operational guidance before reuse.
 
             synthesis_metadata = dict(synthesis.metadata)
             synthesis_metadata["claims"] = [*synthesis_metadata["claims"], wikilink(claim_id)]
+            synthesis_metadata["sources"] = [
+                *synthesis_metadata["sources"],
+                wikilink("source-agent-memory-session"),
+            ]
             write_note(synthesis.path, synthesis_metadata, synthesis.body)
             audit_metadata = dict(audit.metadata)
             audit_metadata["reviewed_notes"] = [
@@ -743,6 +785,23 @@ Revise the operational guidance before reuse.
             self.assertIsNotNone(nested_evidence)
             assert nested_evidence is not None
             self.assertEqual(nested_vault.validate(), [])
+            package = compose_context(
+                nested_vault,
+                scope="lifecycle",
+                profile="codex-handoff",
+                as_of="2026-06-01",
+            )
+            summary = next(
+                item
+                for item in package.lineage_summaries
+                if item.reviewed_knowledge.noesis_id == "reviewed-knowledge-noesis-lifecycle"
+            )
+            self.assertIn(evidence_id, [note.noesis_id for note in summary.evidence])
+            self.assertIn(claim_id, [note.noesis_id for note in summary.claims])
+            self.assertIn(
+                "source-agent-memory-session",
+                [note.noesis_id for note in summary.sources],
+            )
             self.assertIn(
                 "context-first-cli-mcp-workflow",
                 [note.noesis_id for note in nested_vault.dependent_contexts_for(nested_evidence)],
@@ -1337,6 +1396,65 @@ Not scheduled.
             assert updated_context is not None
             self.assertIn(wikilink(pending_id), updated_context.metadata["reviewed_knowledge"])
             self.assertEqual(approved_vault.validate(), [])
+
+    def test_direct_promotion_adds_current_knowledge_to_existing_contexts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-06-18",
+                title="Pre-Promotion Default Context",
+                slug="pre-promotion-default-context",
+            )
+
+            promoted = promote_synthesis(
+                vault_path,
+                "synthesis-local-first-lifecycle-interface",
+                title="Directly Promoted Context Input",
+                slug="directly-promoted-context-input",
+                today="2026-06-18",
+            )
+
+            promoted_vault = Vault.load(vault_path)
+            updated_context = promoted_vault.find_note(created.note_id)
+            self.assertIsNotNone(updated_context)
+            assert updated_context is not None
+            self.assertIn(wikilink(promoted.note_id), updated_context.metadata["reviewed_knowledge"])
+            self.assertEqual(promoted_vault.validate(), [])
+
+    def test_new_context_records_changes_requested_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-noesis-lifecycle"
+            write_review_decision(
+                vault_path,
+                target_id,
+                decision="changes-requested",
+                reviewer="test-human",
+                basis="The knowledge needs revision before further use.",
+                changes_requested="Update the lifecycle guidance.",
+                today="2026-06-18",
+            )
+
+            created = write_context_note(
+                vault_path,
+                as_of="2026-06-18",
+                title="Post-Change-Request Context",
+                slug="post-change-request-context",
+            )
+
+            vault = Vault.load(vault_path)
+            context = vault.find_note(created.note_id)
+            target = vault.find_note(target_id)
+            self.assertIsNotNone(context)
+            self.assertIsNotNone(target)
+            assert context is not None and target is not None
+            self.assertIn(wikilink(target_id), context.metadata["excluded_memory"])
+            self.assertIn(
+                created.note_id,
+                [note.noesis_id for note in vault.dependent_contexts_for(target)],
+            )
+            self.assertEqual(vault.validate(), [])
 
     def test_approval_does_not_restore_review_exclusion_outside_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
