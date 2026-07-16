@@ -1639,6 +1639,49 @@ Not scheduled.
             self.assertIn(wikilink(target_id), approved_context.metadata["reviewed_knowledge"])
             self.assertEqual(approved_vault.validate(), [])
 
+    def test_handoff_rewrite_preserves_scope_and_budget_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                scope="lifecycle",
+                profile="codex-handoff",
+                as_of="2026-06-18",
+                title="Scoped Lifecycle Rewrite Handoff",
+                slug="scoped-lifecycle-rewrite-handoff",
+            )
+            before = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(before)
+            assert before is not None
+            before_count = next(
+                line
+                for line in before.body.splitlines()
+                if line.startswith("- Excluded by scope or budget:")
+            )
+            self.assertNotEqual(before_count, "- Excluded by scope or budget: 0")
+
+            renew_review(
+                vault_path,
+                "reviewed-knowledge-noesis-lifecycle",
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The scoped lifecycle knowledge remains current.",
+                today="2026-07-16",
+            )
+
+            rewritten_vault = Vault.load(vault_path)
+            rewritten = rewritten_vault.find_note(created.note_id)
+            self.assertIsNotNone(rewritten)
+            assert rewritten is not None
+            after_count = next(
+                line
+                for line in rewritten.body.splitlines()
+                if line.startswith("- Excluded by scope or budget:")
+            )
+            self.assertEqual(after_count, before_count)
+            self.assertIn("(scoped_out,", rewritten.body)
+            self.assertEqual(rewritten_vault.validate(), [])
+
     def test_approval_does_not_restore_review_exclusion_outside_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))

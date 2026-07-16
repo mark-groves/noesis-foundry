@@ -633,6 +633,18 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertEqual(len(workbench["changes_requested"]), 1)
             self.assertIsNone(workbench["changes_requested"][0]["review"])
             self.assertEqual(workbench["changes_requested_history"], [])
+            self.assertEqual(
+                workbench["lifecycle_safety"]["excluded_from_active_context"],
+                True,
+            )
+
+            source_workbench = handlers.show_review("source-noesis-readme")
+            self.assertTrue(source_workbench["ok"], source_workbench)
+            impacted_context_ids = {
+                context["noesis_id"]
+                for context in source_workbench["impact"]["dependent_contexts"]
+            }
+            self.assertIn("context-first-cli-mcp-workflow", impacted_context_ids)
 
     def test_lint_rejects_impossible_metadata_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

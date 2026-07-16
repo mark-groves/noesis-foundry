@@ -3668,6 +3668,7 @@ def context_references_memory(vault: Vault, context_note: Note, target_noesis_id
         for knowledge_note in (
             context_reviewed_knowledge(vault, context_note.metadata)
             + context_linked_notes(vault, context_note.metadata, "freshness_excluded")
+            + context_linked_notes(vault, context_note.metadata, "excluded_memory")
         )
     )
 

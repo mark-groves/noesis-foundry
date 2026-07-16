@@ -11,6 +11,7 @@ from .vault import (
     Note,
     Vault,
     is_completed_review_audit,
+    is_context_excluded,
     is_excluded,
     note_review_due,
     parse_review_date,
@@ -210,10 +211,11 @@ def review_due_details(note: Note, *, due_on: str | None = None) -> JsonObject:
 
 
 def review_lifecycle_safety(note: Note) -> JsonObject:
+    context_excluded = is_context_excluded(note)
     excluded = is_excluded(note)
     stale_memory = note.type == "stale-memory"
     return {
-        "excluded_from_active_context": excluded,
+        "excluded_from_active_context": context_excluded,
         "stale_or_superseded_memory": stale_memory and excluded,
         "renewal_preserves_lifecycle": stale_memory and excluded,
     }

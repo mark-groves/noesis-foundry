@@ -261,28 +261,46 @@ def render_context_snapshot(
     cutoff = context_as_of_date(as_of)
     normalized_freshness_policy = resolve_freshness_policy(freshness_policy)
     profile_definition = resolve_context_profile(profile)
-    included: list[ContextSelection] = []
-    for note in knowledge:
-        freshness_state, review_due_on, valid_until = note_freshness(note, as_of=cutoff)
-        included.append(
-            ContextSelection(
-                note=note,
-                status="included",
-                reason="retained from the stored operational context after a lifecycle update",
-                score=0,
-                content_chars=len(note.body.strip()),
-                freshness_state=freshness_state,
-                review_due_on=review_due_on.isoformat() if review_due_on else None,
-                valid_until=valid_until.isoformat() if valid_until else None,
-            )
-        )
+    effective_limit, effective_max_chars, applied_profile_defaults = apply_context_profile_defaults(
+        profile_definition,
+        limit=limit,
+        max_chars=max_chars,
+    )
+    available = vault.current_reviewed_knowledge()
+    freshness_eligible, _ = apply_context_freshness(
+        available,
+        as_of=cutoff,
+        policy=normalized_freshness_policy,
+    )
+    selected, scoped_out = select_knowledge_for_context(
+        freshness_eligible,
+        scope,
+        as_of=cutoff,
+        profile=profile_definition,
+        applied_profile_defaults=applied_profile_defaults,
+    )
+    recomputed_included, budgeted_out = apply_context_budget(
+        selected,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
+    )
+    retained_ids = {note.noesis_id for note in knowledge}
+    included = [
+        selection
+        for selection in recomputed_included
+        if selection.note.noesis_id in retained_ids
+    ]
+    selection_excluded = sorted(
+        scoped_out + budgeted_out,
+        key=lambda selection: (selection.status, selection.note.title.lower()),
+    )
 
     freshness_excluded = snapshot_freshness_exclusions(
         freshness_excluded_notes or [],
         as_of=cutoff,
         policy=normalized_freshness_policy,
     )
-    total_candidates = len(knowledge) + len(freshness_excluded)
+    total_candidates = len(available)
 
     if not is_handoff_profile(profile_definition):
         return render_context(
@@ -290,9 +308,10 @@ def render_context_snapshot(
             scope=scope,
             purpose=purpose,
             profile=profile_definition,
-            limit=limit,
-            max_chars=max_chars,
+            limit=effective_limit,
+            max_chars=effective_max_chars,
             total_candidates=total_candidates,
+            excluded=selection_excluded,
             as_of=cutoff,
             freshness_policy=normalized_freshness_policy,
             freshness_excluded=freshness_excluded,
@@ -327,12 +346,12 @@ def render_context_snapshot(
         scope=scope,
         purpose=purpose,
         profile=profile_definition,
-        limit=limit,
-        max_chars=max_chars,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
         as_of=cutoff,
         freshness_policy=normalized_freshness_policy,
         included=included,
-        excluded=[],
+        excluded=selection_excluded,
         lifecycle_excluded=lifecycle_excluded,
     )
     return render_context_handoff(
@@ -342,10 +361,10 @@ def render_context_snapshot(
         handoff,
         scope=scope,
         profile=profile_definition,
-        limit=limit,
-        max_chars=max_chars,
+        limit=effective_limit,
+        max_chars=effective_max_chars,
         total_candidates=total_candidates,
-        excluded=[],
+        excluded=selection_excluded,
         as_of=cutoff,
         freshness_policy=normalized_freshness_policy,
         freshness_excluded=freshness_excluded,

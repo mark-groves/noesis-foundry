@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 from noesis.storage import atomic_write_text, vault_lock
@@ -37,6 +38,41 @@ class StorageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "vault path is not a directory"):
                 with vault_lock(invalid_file):
                     pass
+
+    def test_vault_lock_serializes_threads_in_the_same_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            vault_path.mkdir()
+            first_entered = threading.Event()
+            release_first = threading.Event()
+            second_started = threading.Event()
+            second_entered = threading.Event()
+
+            def hold_first_lock() -> None:
+                with vault_lock(vault_path):
+                    first_entered.set()
+                    release_first.wait(timeout=2)
+
+            def enter_second_lock() -> None:
+                second_started.set()
+                with vault_lock(vault_path):
+                    second_entered.set()
+
+            first = threading.Thread(target=hold_first_lock)
+            second = threading.Thread(target=enter_second_lock)
+            first.start()
+            self.assertTrue(first_entered.wait(timeout=1))
+            second.start()
+            try:
+                self.assertTrue(second_started.wait(timeout=1))
+                self.assertFalse(second_entered.wait(timeout=0.1))
+            finally:
+                release_first.set()
+                first.join(timeout=2)
+                second.join(timeout=2)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertTrue(second_entered.is_set())
 
     def test_parallel_cli_writers_leave_a_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
