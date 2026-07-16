@@ -1042,11 +1042,7 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
         if decision == "renewed" and is_completed_review_audit(note):
             audit_next_review = parse_review_date(note.metadata.get("next_review"))
             for target in relationship_notes(vault, note, "reviewed_notes"):
-                completed_audits = [
-                    audit
-                    for audit in vault.review_audits_for(target)
-                    if is_completed_review_audit(audit)
-                ]
+                completed_audits = completed_review_audits_covering(vault, target)
                 if not completed_audits or completed_audits[-1].noesis_id != note.noesis_id:
                     continue
                 if parse_review_date(target.metadata.get("next_review")) != audit_next_review:
@@ -3392,8 +3388,8 @@ def append_updated_reviewed_knowledge_contexts(
             )
             freshness_state, _, _ = note_freshness(projected_target, as_of=context_as_of)
             if context_freshness_eligible(freshness_state, policy=freshness_policy):
-                restore_target = not freshness_excluded_target
-                if freshness_excluded_target:
+                restore_target = included_target
+                if not included_target:
                     available = [
                         projected_target if note.noesis_id == projected_target.noesis_id else note
                         for note in vault.current_reviewed_knowledge()

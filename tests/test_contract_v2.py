@@ -358,6 +358,43 @@ class ContractV2Tests(unittest.TestCase):
             self.assertEqual(str(target.metadata["next_review"]), "2026-09-16")
             self.assertEqual(vault.validate(), [])
 
+    def test_non_covering_audit_does_not_hide_latest_renewal_schedule_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            renew_review(
+                vault_path,
+                target_id,
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The reviewed knowledge remains current.",
+                today="2026-07-16",
+            )
+
+            vault = Vault.load(vault_path)
+            target = vault.find_note(target_id)
+            unrelated_audit = vault.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(target)
+            self.assertIsNotNone(unrelated_audit)
+            assert target is not None and unrelated_audit is not None
+            unrelated_metadata = dict(unrelated_audit.metadata)
+            unrelated_metadata["reviewed_at"] = "2026-07-17"
+            unrelated_metadata["updated"] = "2026-07-17"
+            write_note(unrelated_audit.path, unrelated_metadata, unrelated_audit.body)
+            target_metadata = dict(target.metadata)
+            target_metadata["next_review"] = "2026-07-13"
+            target_metadata["reviewed_by"] = [
+                *target_metadata["reviewed_by"],
+                wikilink(unrelated_audit.noesis_id),
+            ]
+            write_note(target.path, target_metadata, target.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                f"latest renewed review audit next_review must match reviewed note {target_id!r}",
+                messages,
+            )
+
     def test_validator_requires_review_audit_to_cover_knowledge_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -902,6 +939,54 @@ Not scheduled.
                 self.assertNotIn(wikilink(target_id), context.metadata["reviewed_knowledge"])
                 self.assertNotIn(wikilink(target_id), context.metadata["freshness_excluded"])
                 self.assertEqual(renewed_vault.validate(), [])
+
+    def test_approval_does_not_restore_review_exclusion_outside_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target_id = "reviewed-knowledge-agent-memory-dogfood"
+            created = write_context_note(
+                vault_path,
+                scope="corpus",
+                as_of="2026-07-16",
+                title="Selection-Bounded Review Snapshot",
+            )
+            write_review_decision(
+                vault_path,
+                target_id,
+                decision="changes-requested",
+                reviewer="test-human",
+                basis="The knowledge needs another review.",
+                changes_requested="Reconfirm the operational guidance.",
+                today="2026-07-16",
+            )
+
+            context = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context)
+            assert context is not None
+            context_metadata = dict(context.metadata)
+            context_metadata["excluded_memory"] = [
+                *context_metadata["excluded_memory"],
+                wikilink(target_id),
+            ]
+            write_note(context.path, context_metadata, context.body)
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+            write_review_decision(
+                vault_path,
+                target_id,
+                decision="approved",
+                reviewer="test-human",
+                basis="The operational guidance has been reconfirmed.",
+                today="2026-07-17",
+            )
+
+            approved_vault = Vault.load(vault_path)
+            updated_context = approved_vault.find_note(created.note_id)
+            self.assertIsNotNone(updated_context)
+            assert updated_context is not None
+            self.assertNotIn(wikilink(target_id), updated_context.metadata["reviewed_knowledge"])
+            self.assertNotIn(wikilink(target_id), updated_context.metadata["excluded_memory"])
+            self.assertEqual(approved_vault.validate(), [])
 
     def test_mark_stale_rewrites_freshness_only_context_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

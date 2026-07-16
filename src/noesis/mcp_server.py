@@ -503,6 +503,9 @@ class NoesisMcpHandlers:
 
     def vault_summary(self, vault_path: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
+        issues = vault.validate()
+        if issues:
+            return validation_error(vault, issues)
         type_counts: dict[str, int] = {}
         review_counts: dict[str, int] = {}
         for note in vault.notes:
