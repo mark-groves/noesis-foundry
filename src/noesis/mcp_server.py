@@ -262,7 +262,7 @@ class NoesisMcpHandlers:
             "selection": context_package_selection_payload(package, vault.root),
             "lineage_summaries": context_lineage_summary_payloads(package, vault.root),
             "handoff": context_handoff_payload(package, vault.root),
-            "content": package.content,
+            "content": redact_vault_path(package.content, vault.root),
         }
 
     def ingest_source(
@@ -955,7 +955,9 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
     return {
         "task_purpose": package.handoff.task_purpose,
         "assumptions": list(package.handoff.assumptions),
-        "validation_commands": list(package.handoff.validation_commands),
+        "validation_commands": [
+            redact_vault_path(command, vault_root) for command in package.handoff.validation_commands
+        ],
         "next_steps": list(package.handoff.next_steps),
         "active_reviewed_knowledge": [
             note_summary(selection.note, vault_root) for selection in package.included
@@ -987,6 +989,12 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
             ],
         },
     }
+
+
+def redact_vault_path(value: str, vault_root: Path) -> str:
+    raw_path = str(vault_root)
+    shell_quoted_path = "'" + raw_path.replace("'", "'\"'\"'") + "'"
+    return value.replace(shell_quoted_path, "'<vault>'").replace(raw_path, "<vault>")
 
 
 def review_filter_error(

@@ -77,6 +77,25 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertNotIn("absolute_path", fetched["note"])
             self.assertEqual(fetched["note"]["metadata"]["original_path"], "<local>/private-source.txt")
 
+            for profile in ("agent-handoff", "codex-handoff"):
+                with self.subTest(profile=profile):
+                    handoff = handlers.build_context(profile=profile)
+                    self.assertTrue(handoff["ok"], handoff)
+                    self.assertNotIn(str(vault_path.resolve()), handoff["content"])
+                    self.assertTrue(
+                        all(
+                            str(vault_path.resolve()) not in command
+                            for command in handoff["handoff"]["validation_commands"]
+                        )
+                    )
+                    self.assertIn("'<vault>'", handoff["content"])
+                    self.assertTrue(
+                        all(
+                            "'<vault>'" in command
+                            for command in handoff["handoff"]["validation_commands"][1:4]
+                        )
+                    )
+
     def test_mcp_allowed_roots_extend_the_default_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

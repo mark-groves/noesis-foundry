@@ -152,6 +152,40 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("review audit requires a decision", messages)
 
+    def test_validator_requires_scalar_reviewer_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["reviewer"] = ["test-human"]
+            write_note(audit.path, metadata, audit.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("review audit requires an identified reviewer", messages)
+
+    def test_validator_requires_completed_approval_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["status"] = "draft"
+            metadata["review_state"] = "in-review"
+            write_note(audit.path, metadata, audit.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "approved or renewed review audit must have complete status and a mature review_state",
+                messages,
+            )
+            self.assertIn(
+                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                messages,
+            )
+
     def test_validator_requires_renewed_review_to_record_next_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -244,6 +278,37 @@ Not scheduled.
             self.assertIn(
                 "active reviewed knowledge depends on non-current source 'source-agent-memory-session'",
                 messages,
+            )
+
+    def test_validator_rejects_active_knowledge_with_excluded_support_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            knowledge = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            evidence = vault.find_note("evidence-memory-lifecycle")
+            support_source = vault.find_note("source-agent-memory-session")
+            self.assertIsNotNone(knowledge)
+            self.assertIsNotNone(evidence)
+            self.assertIsNotNone(support_source)
+            assert knowledge is not None and evidence is not None and support_source is not None
+
+            evidence_metadata = dict(evidence.metadata)
+            evidence_metadata["sources"] = [f"[[{support_source.noesis_id}]]"]
+            write_note(evidence.path, evidence_metadata, evidence.body)
+            source_metadata = dict(support_source.metadata)
+            source_metadata["status"] = "stale"
+            write_note(support_source.path, source_metadata, support_source.body)
+
+            issues = Vault.load(vault_path).validate()
+            self.assertTrue(
+                any(
+                    issue.path == knowledge.path
+                    and issue.message
+                    == "active reviewed knowledge depends on non-current source "
+                    "'source-agent-memory-session'"
+                    for issue in issues
+                ),
+                [issue.message for issue in issues],
             )
 
     def test_migration_has_dry_run_backup_and_validated_commit(self) -> None:

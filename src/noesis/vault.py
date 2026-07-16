@@ -996,8 +996,9 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
                 issues.append(Issue(note.path, f"mature note contains unresolved placeholder {marker!r}"))
 
     if note.type == "review":
-        reviewer = str(note.metadata.get("reviewer", "")).strip().casefold()
-        if reviewer in {"", "unknown", "unassigned"}:
+        reviewer_value = note.metadata.get("reviewer")
+        reviewer = reviewer_value.strip().casefold() if isinstance(reviewer_value, str) else ""
+        if not isinstance(reviewer_value, str) or reviewer in {"", "unknown", "unassigned"}:
             issues.append(Issue(note.path, "review audit requires an identified reviewer"))
         if not relationship_notes(vault, note, "reviewed_notes"):
             issues.append(Issue(note.path, "review audit requires at least one reviewed_notes relationship"))
@@ -1007,6 +1008,13 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, "review audit requires a decision"))
         elif decision not in {"approved", "changes-requested", "renewed"}:
             issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
+        if decision in {"approved", "renewed"} and not is_completed_review_audit(note):
+            issues.append(
+                Issue(
+                    note.path,
+                    "approved or renewed review audit must have complete status and a mature review_state",
+                )
+            )
         if not markdown_body_section(note.body, "Basis"):
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
         if decision == "renewed" and parse_review_date(note.metadata.get("next_review")) is None:
@@ -1026,18 +1034,16 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
 def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
     auditable_lineage_ids = {note.noesis_id}
-    for source in relationship_notes(vault, note, "sources", expected_type="source"):
-        if is_excluded(source):
-            issues.append(
-                Issue(
-                    note.path,
-                    f"active reviewed knowledge depends on non-current source {source.noesis_id!r}",
-                )
-            )
+    lineage_sources = {
+        source.noesis_id: source
+        for source in relationship_notes(vault, note, "sources", expected_type="source")
+    }
 
     for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
         for support in relationship_notes(vault, note, key, expected_type=expected_type):
             auditable_lineage_ids.add(support.noesis_id)
+            for source in relationship_notes(vault, support, "sources", expected_type="source"):
+                lineage_sources[source.noesis_id] = source
             if (
                 support.status != "reviewed"
                 or support.review_state not in MATURE_REVIEW_STATES
@@ -1050,10 +1056,20 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
                     )
                 )
 
+    for source in sorted(lineage_sources.values(), key=lambda item: item.rel_path.as_posix()):
+        if is_excluded(source):
+            issues.append(
+                Issue(
+                    note.path,
+                    f"active reviewed knowledge depends on non-current source {source.noesis_id!r}",
+                )
+            )
+
     approved_audits = [
         audit
         for audit in relationship_notes(vault, note, "reviewed_by", expected_type="review")
-        if str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
+        if is_completed_review_audit(audit)
+        and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
         and any(
             relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
             for lineage_id in auditable_lineage_ids
@@ -1402,6 +1418,12 @@ def _migrate_vault_locked(
                         f"cannot migrate active knowledge with excluded, blocked, or unreviewed {expected_type}: "
                         f"{support.noesis_id}"
                     )
+                for source in relationship_notes(vault, support, "sources", expected_type="source"):
+                    if is_excluded(source):
+                        raise ValueError(
+                            "cannot migrate active knowledge with excluded support source: "
+                            f"{source.noesis_id}"
+                        )
                 auditable_lineage_ids.add(support.noesis_id)
             supports_by_key[key] = supports
 
@@ -1409,7 +1431,8 @@ def _migrate_vault_locked(
         approved_audits = [
             audit
             for audit in audits
-            if str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
+            if is_completed_review_audit(audit)
+            and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
             and any(
                 relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
                 for lineage_id in auditable_lineage_ids
@@ -3314,6 +3337,14 @@ def searchable_note_text(note: Note) -> str:
 
 def is_excluded(note: Note) -> bool:
     return note.lifecycle_stage in {"stale", "archive"} or note.status in EXCLUDED_STATUSES
+
+
+def is_completed_review_audit(note: Note) -> bool:
+    return (
+        note.type == "review"
+        and note.status == "complete"
+        and note.review_state in MATURE_REVIEW_STATES
+    )
 
 
 def review_requires_audit(note: Note) -> bool:
