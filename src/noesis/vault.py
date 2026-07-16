@@ -995,14 +995,17 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             if marker.casefold() in lowered_body:
                 issues.append(Issue(note.path, f"mature note contains unresolved placeholder {marker!r}"))
 
-    if note.type == "review" and note.metadata.get("decision") is not None:
+    if note.type == "review":
         reviewer = str(note.metadata.get("reviewer", "")).strip().casefold()
         if reviewer in {"", "unknown", "unassigned"}:
             issues.append(Issue(note.path, "review audit requires an identified reviewer"))
         if not relationship_notes(vault, note, "reviewed_notes"):
             issues.append(Issue(note.path, "review audit requires at least one reviewed_notes relationship"))
-        decision = str(note.metadata.get("decision", ""))
-        if decision not in {"approved", "changes-requested", "renewed"}:
+        decision_value = note.metadata.get("decision")
+        decision = "" if is_blank(decision_value) else str(decision_value).strip()
+        if not decision:
+            issues.append(Issue(note.path, "review audit requires a decision"))
+        elif decision not in {"approved", "changes-requested", "renewed"}:
             issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
         if not markdown_body_section(note.body, "Basis"):
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
@@ -1020,6 +1023,7 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
 
 def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
+    auditable_lineage_ids = {note.noesis_id}
     for source in relationship_notes(vault, note, "sources", expected_type="source"):
         if is_excluded(source):
             issues.append(
@@ -1031,6 +1035,7 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
 
     for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
         for support in relationship_notes(vault, note, key, expected_type=expected_type):
+            auditable_lineage_ids.add(support.noesis_id)
             if (
                 support.status != "reviewed"
                 or support.review_state not in MATURE_REVIEW_STATES
@@ -1047,9 +1052,18 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
         audit
         for audit in relationship_notes(vault, note, "reviewed_by", expected_type="review")
         if str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
+        and any(
+            relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
+            for lineage_id in auditable_lineage_ids
+        )
     ]
     if not approved_audits:
-        issues.append(Issue(note.path, "active reviewed knowledge requires an approved review audit"))
+        issues.append(
+            Issue(
+                note.path,
+                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+            )
+        )
     return issues
 
 
@@ -1095,16 +1109,27 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     if note.type != "operational-context":
         return issues
 
-    try:
-        as_of = context_as_of_date(note.metadata.get("as_of", note.metadata.get("created")))
-    except ValueError as exc:
-        issues.append(Issue(note.path, str(exc)))
-        as_of = date.today()
-    try:
-        freshness_policy = resolve_freshness_policy(note.metadata.get("freshness_policy", "balanced"))
-    except ValueError as exc:
-        issues.append(Issue(note.path, str(exc)))
+    as_of_value = note.metadata.get("as_of")
+    if is_blank(as_of_value):
+        issues.append(Issue(note.path, "operational context requires as_of"))
+        as_of = context_as_of_date(note.metadata.get("created"))
+    else:
+        try:
+            as_of = context_as_of_date(as_of_value)
+        except ValueError as exc:
+            issues.append(Issue(note.path, str(exc)))
+            as_of = date.today()
+
+    freshness_policy_value = note.metadata.get("freshness_policy")
+    if is_blank(freshness_policy_value):
+        issues.append(Issue(note.path, "operational context requires freshness_policy"))
         freshness_policy = "balanced"
+    else:
+        try:
+            freshness_policy = resolve_freshness_policy(str(freshness_policy_value))
+        except ValueError as exc:
+            issues.append(Issue(note.path, str(exc)))
+            freshness_policy = "balanced"
 
     input_hash_ids: set[str] | None = None
     if "input_hashes" not in note.metadata:
@@ -2602,6 +2627,9 @@ Keep this note so future context builders can explain why {target_link} no longe
             purpose=context_purpose(context_note),
             as_of=context_metadata.get("as_of", context_metadata.get("created")),
             freshness_policy=str(context_metadata.get("freshness_policy", "balanced")),
+            profile=context_profile(context_note),
+            limit=context_budget(context_note, "context_limit"),
+            max_chars=context_budget(context_note, "context_max_chars"),
         )
         writes.append((context_note.path, context_metadata, context_body))
 
@@ -2853,16 +2881,25 @@ def build_context_body(
     purpose: str | None = None,
     as_of: str | date | None = None,
     freshness_policy: str = "balanced",
+    profile: str | None = None,
+    limit: int | None = None,
+    max_chars: int | None = None,
 ) -> str:
+    from .context import render_context_snapshot
+
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
     body = (
-        render_context(
+        render_context_snapshot(
+            vault,
             knowledge,
             scope=scope,
             purpose=purpose,
-            as_of=context_as_of_date(as_of),
-            freshness_policy=resolve_freshness_policy(freshness_policy),
+            profile=profile,
+            limit=limit,
+            max_chars=max_chars,
+            as_of=as_of,
+            freshness_policy=freshness_policy,
         ).rstrip()
         + "\n\n## Traceability\n\n"
     )
@@ -2917,6 +2954,9 @@ def append_dependent_memory_review_changes(
             purpose=context_purpose(context_note),
             as_of=context_metadata.get("as_of", context_metadata.get("created")),
             freshness_policy=str(context_metadata.get("freshness_policy", "balanced")),
+            profile=context_profile(context_note),
+            limit=context_budget(context_note, "context_limit"),
+            max_chars=context_budget(context_note, "context_max_chars"),
         )
         writes.append((context_note.path, context_metadata, context_body))
 
@@ -2933,6 +2973,20 @@ def context_purpose(context_note: Note) -> str | None:
     if isinstance(purpose, str) and not is_blank(purpose):
         return purpose
     return context_body_field(context_note, "Purpose")
+
+
+def context_profile(context_note: Note) -> str | None:
+    profile = context_note.metadata.get("context_profile")
+    if isinstance(profile, str) and not is_blank(profile):
+        return profile
+    return context_body_field(context_note, "Profile")
+
+
+def context_budget(context_note: Note, key: str) -> int | None:
+    value = context_note.metadata.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
 
 
 def context_body_field(context_note: Note, label: str) -> str | None:

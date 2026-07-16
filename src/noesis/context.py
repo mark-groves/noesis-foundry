@@ -174,6 +174,84 @@ def compose_context(
     )
 
 
+def render_context_snapshot(
+    vault: Vault,
+    knowledge: list[Note],
+    scope: str | None = None,
+    purpose: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
+) -> str:
+    """Re-render an already selected context while preserving its stored presentation contract."""
+    validate_context_budget(limit=limit, max_chars=max_chars)
+    cutoff = context_as_of_date(as_of)
+    normalized_freshness_policy = resolve_freshness_policy(freshness_policy)
+    profile_definition = resolve_context_profile(profile)
+    included: list[ContextSelection] = []
+    for note in knowledge:
+        freshness_state, review_due_on, valid_until = note_freshness(note, as_of=cutoff)
+        included.append(
+            ContextSelection(
+                note=note,
+                status="included",
+                reason="retained from the stored operational context after a lifecycle update",
+                score=0,
+                content_chars=len(note.body.strip()),
+                freshness_state=freshness_state,
+                review_due_on=review_due_on.isoformat() if review_due_on else None,
+                valid_until=valid_until.isoformat() if valid_until else None,
+            )
+        )
+
+    if not is_handoff_profile(profile_definition):
+        return render_context(
+            knowledge,
+            scope=scope,
+            purpose=purpose,
+            profile=profile_definition,
+            limit=limit,
+            max_chars=max_chars,
+            total_candidates=len(knowledge),
+            as_of=cutoff,
+            freshness_policy=normalized_freshness_policy,
+        )
+
+    lifecycle_excluded = explain_lifecycle_exclusions(vault)
+    lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
+    handoff = context_handoff_guidance(
+        vault_path=vault.root,
+        scope=scope,
+        purpose=purpose,
+        profile=profile_definition,
+        limit=limit,
+        max_chars=max_chars,
+        as_of=cutoff,
+        freshness_policy=normalized_freshness_policy,
+        included=included,
+        excluded=[],
+        lifecycle_excluded=lifecycle_excluded,
+    )
+    return render_context_handoff(
+        included,
+        lineage_summaries,
+        lifecycle_excluded,
+        handoff,
+        scope=scope,
+        profile=profile_definition,
+        limit=limit,
+        max_chars=max_chars,
+        total_candidates=len(knowledge),
+        excluded=[],
+        as_of=cutoff,
+        freshness_policy=normalized_freshness_policy,
+        freshness_excluded=[],
+    )
+
+
 def is_handoff_profile(profile: ContextProfile | None) -> bool:
     return profile is not None and profile.name in {"agent-handoff", "codex-handoff"}
 

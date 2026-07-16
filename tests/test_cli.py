@@ -2624,6 +2624,12 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 "2026-06-01",
                 "--freshness-policy",
                 "strict",
+                "--profile",
+                "codex-handoff",
+                "--limit",
+                "1",
+                "--max-chars",
+                "9000",
                 "--slug",
                 "scoped-lifecycle",
             )
@@ -2647,11 +2653,17 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("purpose: prepare scoped agent", context_note)
             self.assertIn("as_of: '2026-06-01'", context_note)
             self.assertIn("freshness_policy: strict", context_note)
+            self.assertIn("context_profile: codex-handoff", context_note)
+            self.assertIn("context_limit: 1", context_note)
+            self.assertIn("context_max_chars: 9000", context_note)
             self.assertIn("Scope: lifecycle", context_note)
             self.assertIn("Purpose: prepare scoped agent", context_note)
             self.assertIn("As of: 2026-06-01", context_note)
             self.assertIn("Freshness policy: strict", context_note)
-            self.assertIn("No current reviewed knowledge found.", context_note)
+            self.assertIn("# Noesis Codex Handoff Pack", context_note)
+            self.assertIn("Profile: codex-handoff", context_note)
+            self.assertIn("Budget: limit 1, max_chars 9000", context_note)
+            self.assertIn("No current reviewed knowledge selected.", context_note)
 
     def test_ingest_source_rejects_invalid_source_date_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

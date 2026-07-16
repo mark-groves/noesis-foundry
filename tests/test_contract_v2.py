@@ -53,6 +53,55 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("operational context requires input_hashes", messages)
 
+    def test_validator_requires_explicit_context_freshness_metadata(self) -> None:
+        required_fields = {
+            "as_of": "operational context requires as_of",
+            "freshness_policy": "operational context requires freshness_policy",
+        }
+        for field, expected in required_fields.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                context = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+                self.assertIsNotNone(context)
+                assert context is not None
+                metadata = dict(context.metadata)
+                metadata.pop(field)
+                write_note(context.path, metadata, context.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertIn(expected, messages)
+
+    def test_validator_requires_every_review_note_to_record_a_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["title"] = "Decisionless Review Audit"
+            metadata["noesis_id"] = "review-decisionless"
+            metadata.pop("decision")
+            write_note(vault_path / "review" / "review-decisionless.md", metadata, audit.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("review audit requires a decision", messages)
+
+    def test_validator_requires_review_audit_to_cover_knowledge_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            knowledge = Vault.load(vault_path).find_note("reviewed-knowledge-noesis-lifecycle")
+            self.assertIsNotNone(knowledge)
+            assert knowledge is not None
+            metadata = dict(knowledge.metadata)
+            metadata["reviewed_by"] = ["[[review-agent-memory-dogfood]]"]
+            write_note(knowledge.path, metadata, knowledge.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                messages,
+            )
+
     def test_validator_requires_requested_change_audit_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
