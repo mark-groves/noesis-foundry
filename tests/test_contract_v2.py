@@ -49,6 +49,30 @@ class ContractV2Tests(unittest.TestCase):
             self.assertTrue(any("content hash mismatch" in message for message in messages), messages)
             self.assertTrue(any("source size mismatch" in message for message in messages), messages)
 
+    def test_validator_requires_source_raw_path_under_raw_directory(self) -> None:
+        for via_symlink in (False, True):
+            with self.subTest(via_symlink=via_symlink), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                vault = Vault.load(vault_path)
+                source = vault.find_note("source-noesis-readme")
+                mutable_note = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+                self.assertIsNotNone(source)
+                self.assertIsNotNone(mutable_note)
+                assert source is not None and mutable_note is not None
+                raw_path = f"../knowledge/{mutable_note.path.name}"
+                if via_symlink:
+                    link_path = vault_path / "raw" / "mutable-knowledge-link.md"
+                    link_path.symlink_to(mutable_note.path)
+                    raw_path = f"../raw/{link_path.name}"
+                metadata = dict(source.metadata)
+                metadata["raw_path"] = raw_path
+                metadata["content_hash"] = file_content_hash(mutable_note.path)
+                metadata["source_size_bytes"] = mutable_note.path.stat().st_size
+                write_note(source.path, metadata, source.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertIn("raw_path must resolve inside the vault raw directory", messages)
+
     def test_validator_rejects_placeholder_in_mature_knowledge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -73,6 +97,52 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("operational context requires input_hashes", messages)
+
+    def test_validator_requires_context_to_match_stored_selection(self) -> None:
+        cases = (
+            {"scope": "agent-memory"},
+            {"limit": 1},
+        )
+        for context_options in cases:
+            with self.subTest(context_options=context_options), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                created = write_context_note(
+                    vault_path,
+                    as_of="2026-06-13",
+                    title="Selection Contract Context",
+                    slug="selection-contract-context",
+                    **context_options,
+                )
+                vault = Vault.load(vault_path)
+                context = vault.find_note(created.note_id)
+                self.assertIsNotNone(context)
+                assert context is not None
+                included_ids = {
+                    note.noesis_id
+                    for note in vault.current_reviewed_knowledge()
+                    if wikilink(note.noesis_id) in context.metadata["reviewed_knowledge"]
+                }
+                extra = next(
+                    note
+                    for note in vault.current_reviewed_knowledge()
+                    if note.noesis_id not in included_ids
+                )
+                metadata = dict(context.metadata)
+                metadata["reviewed_knowledge"] = [
+                    *metadata["reviewed_knowledge"],
+                    wikilink(extra.noesis_id),
+                ]
+                metadata["input_hashes"] = [
+                    *metadata["input_hashes"],
+                    f"{extra.noesis_id}={file_content_hash(extra.path)}",
+                ]
+                write_note(context.path, metadata, context.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertTrue(
+                    any(message.startswith("reviewed_knowledge must match stored context selection") for message in messages),
+                    messages,
+                )
 
     def test_validator_rejects_incorrect_context_input_hash_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1181,6 +1181,10 @@ def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
         candidate.relative_to(vault.root)
     except ValueError:
         return [Issue(note.path, "raw_path must remain inside the vault")]
+    try:
+        candidate.relative_to((vault.root / "raw").resolve())
+    except ValueError:
+        return [Issue(note.path, "raw_path must resolve inside the vault raw directory")]
     if not candidate.is_file():
         return [Issue(note.path, f"raw_path target is missing: {raw_path}")]
 
@@ -1211,9 +1215,11 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     if note.type != "operational-context":
         return issues
 
+    selection_contract_valid = True
     as_of_value = note.metadata.get("as_of")
     if is_blank(as_of_value):
         issues.append(Issue(note.path, "operational context requires as_of"))
+        selection_contract_valid = False
         try:
             as_of = context_as_of_date(note.metadata.get("created"))
         except ValueError:
@@ -1223,25 +1229,40 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             as_of = context_as_of_date(as_of_value)
         except ValueError as exc:
             issues.append(Issue(note.path, str(exc)))
+            selection_contract_valid = False
             as_of = date.today()
 
     freshness_policy_value = note.metadata.get("freshness_policy")
     if is_blank(freshness_policy_value):
         issues.append(Issue(note.path, "operational context requires freshness_policy"))
+        selection_contract_valid = False
         freshness_policy = "balanced"
     else:
         try:
             freshness_policy = resolve_freshness_policy(str(freshness_policy_value))
         except ValueError as exc:
             issues.append(Issue(note.path, str(exc)))
+            selection_contract_valid = False
             freshness_policy = "balanced"
 
+    stored_profile: str | None = None
     if "context_profile" in note.metadata:
         profile_value = note.metadata.get("context_profile")
         normalized_profile = profile_value.strip().lower() if isinstance(profile_value, str) else ""
         if normalized_profile not in CONTEXT_PROFILE_NAMES:
             expected = ", ".join(sorted(CONTEXT_PROFILE_NAMES))
             issues.append(Issue(note.path, f"context_profile must be one of: {expected}"))
+            selection_contract_valid = False
+        else:
+            stored_profile = normalized_profile
+
+    stored_budgets: dict[str, int | None] = {}
+    for budget_key in ("context_limit", "context_max_chars"):
+        stored_budget = context_budget(note, budget_key)
+        stored_budgets[budget_key] = stored_budget
+        if budget_key in note.metadata and stored_budget is None:
+            issues.append(Issue(note.path, f"{budget_key} must be a positive integer"))
+            selection_contract_valid = False
 
     input_hash_digests: dict[str, str] | None = None
     if "input_hashes" not in note.metadata:
@@ -1292,6 +1313,34 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                             f"under {freshness_policy!r} freshness policy",
                         )
                     )
+
+    selection_contract_recorded = any(
+        key in note.metadata
+        for key in ("scope", "context_profile", "context_limit", "context_max_chars")
+    )
+    if selection_contract_recorded and selection_contract_valid:
+        expected_knowledge_ids = {
+            selected.noesis_id
+            for selected in context_selected_knowledge(
+                vault.current_reviewed_knowledge(),
+                scope=context_scope(note),
+                profile=stored_profile,
+                limit=stored_budgets["context_limit"],
+                max_chars=stored_budgets["context_max_chars"],
+                as_of=as_of,
+                freshness_policy=freshness_policy,
+            )
+        }
+        if reviewed_knowledge_ids != expected_knowledge_ids:
+            expected = ", ".join(sorted(expected_knowledge_ids)) or "none"
+            found = ", ".join(sorted(reviewed_knowledge_ids)) or "none"
+            issues.append(
+                Issue(
+                    note.path,
+                    f"reviewed_knowledge must match stored context selection "
+                    f"(expected: {expected}; found: {found})",
+                )
+            )
 
     freshness_excluded_ids = {
         target.noesis_id
@@ -2864,6 +2913,9 @@ def mark_memory_stale(
         for note in vault.current_reviewed_knowledge()
         if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
     ]
+    blocked_knowledge_ids = {note.noesis_id for note in dependent_knowledge}
+    if target.type == "reviewed-knowledge":
+        blocked_knowledge_ids.add(target.noesis_id)
     for note in dependent_knowledge:
         note_metadata = dict(note.metadata)
         note_metadata["status"] = status
@@ -2915,7 +2967,12 @@ Keep this note so future context builders can explain why {target_link} no longe
                 + context_linked_notes(vault, context_metadata, "freshness_excluded")
             )
         }
-        remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
+        remaining_knowledge = context_knowledge_after_exclusions(
+            vault,
+            context_note,
+            blocked_knowledge_ids,
+            fallback_target_id=target.noesis_id,
+        )
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
         if "input_hashes" in context_metadata:
             context_metadata["input_hashes"] = [
@@ -3182,6 +3239,29 @@ def context_selection_includes(
     )
 
 
+def context_selected_knowledge(
+    knowledge: list[Note],
+    scope: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
+) -> list[Note]:
+    from .context import context_selected_knowledge as implementation
+
+    return implementation(
+        knowledge,
+        scope=scope,
+        limit=limit,
+        max_chars=max_chars,
+        profile=profile,
+        as_of=as_of,
+        freshness_policy=freshness_policy,
+    )
+
+
 def context_lifecycle_exclusion_kind(note: Note) -> str:
     from .context import context_lifecycle_exclusion_kind as implementation
 
@@ -3276,6 +3356,9 @@ def append_dependent_memory_review_changes(
         for note in vault.current_reviewed_knowledge()
         if note.noesis_id != target.noesis_id and note_references_memory(vault, note, target.noesis_id)
     ]
+    blocked_knowledge_ids = {note.noesis_id for note in dependent_knowledge}
+    if target.type == "reviewed-knowledge":
+        blocked_knowledge_ids.add(target.noesis_id)
     for note in dependent_knowledge:
         note_metadata = dict(note.metadata)
         note_metadata["status"] = "needs-review"
@@ -3290,7 +3373,12 @@ def append_dependent_memory_review_changes(
             continue
         context_metadata = dict(context_note.metadata)
         original_knowledge = context_reviewed_knowledge(vault, context_metadata)
-        remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
+        remaining_knowledge = context_knowledge_after_exclusions(
+            vault,
+            context_note,
+            blocked_knowledge_ids,
+            fallback_target_id=target.noesis_id,
+        )
         remaining_knowledge_ids = {note.noesis_id for note in remaining_knowledge}
         removed_knowledge = [
             note
@@ -3509,6 +3597,34 @@ def context_budget(context_note: Note, key: str) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return None
+
+
+def context_knowledge_after_exclusions(
+    vault: Vault,
+    context_note: Note,
+    excluded_ids: set[str],
+    *,
+    fallback_target_id: str,
+) -> list[Note]:
+    if not any(
+        key in context_note.metadata
+        for key in ("scope", "context_profile", "context_limit", "context_max_chars")
+    ):
+        return remaining_context_knowledge(vault, context_note.metadata, fallback_target_id)
+    candidates = [
+        note
+        for note in vault.current_reviewed_knowledge()
+        if note.noesis_id not in excluded_ids
+    ]
+    return context_selected_knowledge(
+        candidates,
+        scope=context_scope(context_note),
+        profile=context_profile(context_note),
+        limit=context_budget(context_note, "context_limit"),
+        max_chars=context_budget(context_note, "context_max_chars"),
+        as_of=context_note.metadata.get("as_of", context_note.metadata.get("created")),
+        freshness_policy=str(context_note.metadata.get("freshness_policy", "balanced")),
+    )
 
 
 def context_linked_notes(vault: Vault, metadata: dict[str, Any], key: str) -> list[Note]:

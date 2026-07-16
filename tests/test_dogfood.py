@@ -14,6 +14,24 @@ EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
 
 
 class DogfoodEvaluationTests(unittest.TestCase):
+    def test_context_scenario_requires_forbidden_active_list(self) -> None:
+        specification = {
+            "scenarios": [
+                {
+                    "scope": "agent-memory",
+                    "expected_top": "reviewed-knowledge-agent-memory-dogfood",
+                    "as_of": "2026-06-13",
+                    "forbidden_active": "stale-agent-memory-global-summary",
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "context scenario 1 forbidden_active must be a list",
+        ):
+            evaluate_context_dogfood(Vault.load(EXAMPLE_VAULT), specification)
+
     def test_checked_in_context_scenarios_meet_outcome_gate(self) -> None:
         specification = yaml.safe_load(
             (ROOT / "evals" / "context-dogfood-v1.yaml").read_text(encoding="utf-8")

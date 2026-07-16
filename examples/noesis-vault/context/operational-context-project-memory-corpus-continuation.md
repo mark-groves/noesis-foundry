@@ -10,6 +10,7 @@ created: 2026-06-18
 updated: 2026-06-18
 scope: project-memory-corpus
 purpose: continue expanding Noesis Foundry project memory
+context_limit: 1
 syntheses:
   - "[[synthesis-project-memory-corpus-continuation]]"
 reviewed_knowledge:

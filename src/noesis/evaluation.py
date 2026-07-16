@@ -8,6 +8,9 @@ from .retrieval import rank_notes
 from .vault import Vault, compose_context
 
 
+RETRIEVAL_FILTER_KEYS = {"type", "lifecycle_stage", "status", "review_state"}
+
+
 def evaluate_retrieval(vault: Vault, specification: dict[str, Any]) -> dict[str, Any]:
     queries = specification.get("queries")
     if not isinstance(queries, list) or not queries:
@@ -27,6 +30,12 @@ def evaluate_retrieval(vault: Vault, specification: dict[str, Any]) -> dict[str,
         filters = item.get("filters") or {}
         if not isinstance(filters, dict):
             raise ValueError(f"retrieval query {index} filters must be a mapping")
+        unknown_filters = sorted(set(filters) - RETRIEVAL_FILTER_KEYS)
+        if unknown_filters:
+            raise ValueError(
+                f"retrieval query {index} filters contain unsupported keys: "
+                + ", ".join(unknown_filters)
+            )
         candidates = [note for note in vault.notes if note_matches_filters(note, filters)]
         hits = rank_notes(candidates, query)
         ranked_ids = [hit.note.noesis_id for hit in hits]
@@ -95,7 +104,10 @@ def evaluate_context_dogfood(vault: Vault, specification: dict[str, Any]) -> dic
         as_of = str(item.get("as_of") or "").strip()
         if not as_of:
             raise ValueError(f"context scenario {index} requires non-empty as_of")
-        forbidden = {str(value) for value in item.get("forbidden_active", [])}
+        forbidden_values = item.get("forbidden_active", [])
+        if not isinstance(forbidden_values, list):
+            raise ValueError(f"context scenario {index} forbidden_active must be a list")
+        forbidden = {str(value) for value in forbidden_values}
         package = compose_context(
             vault,
             scope=scope,

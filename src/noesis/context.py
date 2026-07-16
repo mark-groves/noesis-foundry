@@ -174,9 +174,8 @@ def compose_context(
     )
 
 
-def context_selection_includes(
+def context_selected_knowledge(
     knowledge: list[Note],
-    note_id: str,
     scope: str | None = None,
     *,
     limit: int | None = None,
@@ -184,8 +183,8 @@ def context_selection_includes(
     profile: str | None = None,
     as_of: str | date | None = None,
     freshness_policy: str = "balanced",
-) -> bool:
-    """Return whether a note survives the stored context selection contract."""
+) -> list[Note]:
+    """Return notes that survive a stored context selection contract."""
     validate_context_budget(limit=limit, max_chars=max_chars)
     cutoff = context_as_of_date(as_of)
     normalized_freshness_policy = resolve_freshness_policy(freshness_policy)
@@ -212,7 +211,33 @@ def context_selection_includes(
         limit=effective_limit,
         max_chars=effective_max_chars,
     )
-    return any(selection.note.noesis_id == note_id for selection in included)
+    return [selection.note for selection in included]
+
+
+def context_selection_includes(
+    knowledge: list[Note],
+    note_id: str,
+    scope: str | None = None,
+    *,
+    limit: int | None = None,
+    max_chars: int | None = None,
+    profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
+) -> bool:
+    """Return whether a note survives the stored context selection contract."""
+    return any(
+        note.noesis_id == note_id
+        for note in context_selected_knowledge(
+            knowledge,
+            scope=scope,
+            limit=limit,
+            max_chars=max_chars,
+            profile=profile,
+            as_of=as_of,
+            freshness_policy=freshness_policy,
+        )
+    )
 
 
 def render_context_snapshot(

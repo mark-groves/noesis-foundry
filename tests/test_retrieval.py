@@ -42,6 +42,23 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual([hit.note.noesis_id for hit in hits], ["lifecycle"])
         self.assertEqual(hits[0].matched_terms, ("source", "backed", "lifecycle"))
 
+    def test_retrieval_evaluation_rejects_unknown_filters(self) -> None:
+        specification = {
+            "queries": [
+                {
+                    "query": "lifecycle",
+                    "relevant": ["reviewed-knowledge-noesis-lifecycle"],
+                    "filters": {"review_stte": "reviewed"},
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "retrieval query 1 filters contain unsupported keys: review_stte",
+        ):
+            evaluate_retrieval(Vault.load(EXAMPLE_VAULT), specification)
+
     def test_checked_in_retrieval_corpus_meets_quality_gate(self) -> None:
         specification = yaml.safe_load((ROOT / "evals" / "retrieval-v1.yaml").read_text(encoding="utf-8"))
         metrics = evaluate_retrieval(Vault.load(EXAMPLE_VAULT), specification)
