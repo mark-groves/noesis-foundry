@@ -152,6 +152,20 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn("review audit requires a decision", messages)
 
+    def test_validator_requires_renewed_review_to_record_next_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            audit = Vault.load(vault_path).find_note("review-agent-memory-dogfood")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["decision"] = "renewed"
+            metadata.pop("next_review", None)
+            write_note(audit.path, metadata, audit.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn("renewed review audit requires next_review", messages)
+
     def test_validator_requires_review_audit_to_cover_knowledge_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -293,7 +307,44 @@ Not scheduled.
 
             with self.assertRaisesRegex(
                 ValueError,
-                "cannot migrate active knowledge with excluded or blocked evidence: evidence-memory-lifecycle",
+                "cannot migrate active knowledge with excluded, blocked, or unreviewed evidence: "
+                "evidence-memory-lifecycle",
+            ):
+                migrate_vault(vault_path, dry_run=True)
+
+    def test_migration_rejects_pending_active_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            evidence = Vault.load(vault_path).find_note("evidence-memory-lifecycle")
+            self.assertIsNotNone(evidence)
+            assert evidence is not None
+            metadata = dict(evidence.metadata)
+            metadata["status"] = "extracted"
+            metadata["review_state"] = "ready-for-review"
+            write_note(evidence.path, metadata, evidence.body)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "cannot migrate active knowledge with excluded, blocked, or unreviewed evidence: "
+                "evidence-memory-lifecycle",
+            ):
+                migrate_vault(vault_path, dry_run=True)
+
+    def test_migration_rejects_excluded_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            source = Vault.load(vault_path).find_note("source-noesis-readme")
+            self.assertIsNotNone(source)
+            assert source is not None
+            metadata = dict(source.metadata)
+            metadata["status"] = "stale"
+            write_note(source.path, metadata, source.body)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "cannot migrate active knowledge with excluded source: source-noesis-readme",
             ):
                 migrate_vault(vault_path, dry_run=True)
 
@@ -314,6 +365,20 @@ Not scheduled.
                 "reviewed-knowledge-noesis-lifecycle",
             ):
                 migrate_vault(vault_path, dry_run=True)
+
+    def test_migration_accepts_covering_renewed_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["decision"] = "renewed"
+            write_note(audit.path, metadata, audit.body)
+
+            preview = migrate_vault(vault_path, dry_run=True)
+            self.assertTrue(preview.dry_run)
 
     def test_context_freshness_distinguishes_review_due_from_expired(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -406,6 +471,14 @@ Not scheduled.
     def test_renewal_updates_selected_context_input_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
+            handoff = write_context_note(
+                vault_path,
+                scope="lifecycle",
+                profile="codex-handoff",
+                as_of="2026-06-01",
+                title="Renewed Lifecycle Handoff",
+                slug="renewed-lifecycle-handoff",
+            )
             renew_review(
                 vault_path,
                 "reviewed-knowledge-noesis-lifecycle",
@@ -413,6 +486,7 @@ Not scheduled.
                 reviewer="test-human",
                 basis="The lifecycle knowledge remains current after scheduled review.",
                 today="2026-07-16",
+                slug="lifecycle-renewed-handoff",
             )
 
             vault = Vault.load(vault_path)
@@ -425,6 +499,10 @@ Not scheduled.
                 context.metadata["input_hashes"],
                 [f"{knowledge.noesis_id}={file_content_hash(knowledge.path)}"],
             )
+            handoff_context = vault.find_note(handoff.note_id)
+            self.assertIsNotNone(handoff_context)
+            assert handoff_context is not None
+            self.assertIn("review-lifecycle-renewed-handoff", handoff_context.body)
             self.assertEqual(vault.validate(), [])
 
     def test_written_context_records_reproducible_inputs(self) -> None:

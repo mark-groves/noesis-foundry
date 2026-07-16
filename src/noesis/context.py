@@ -187,6 +187,7 @@ def render_context_snapshot(
     freshness_policy: str = "balanced",
     freshness_excluded_notes: list[Note] | None = None,
     lifecycle_excluded_notes: list[Note] | None = None,
+    pending_notes: list[Note] | None = None,
 ) -> str:
     """Re-render an already selected context while preserving its stored presentation contract."""
     validate_context_budget(limit=limit, max_chars=max_chars)
@@ -239,7 +240,11 @@ def render_context_snapshot(
         lifecycle_excluded_by_id.values(),
         key=lambda selection: selection.note.title.lower(),
     )
-    lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
+    note_overrides = {note.noesis_id: note for note in pending_notes or []}
+    lineage_summaries = [
+        context_lineage_summary(vault, selection.note, note_overrides=note_overrides)
+        for selection in included
+    ]
     handoff = context_handoff_guidance(
         vault_path=vault.root,
         scope=scope,
@@ -604,14 +609,29 @@ def context_lifecycle_exclusion_kind(note: Note) -> str:
     return "excluded"
 
 
-def context_lineage_summary(vault: Vault, note: Note) -> ContextLineageSummary:
+def context_lineage_summary(
+    vault: Vault,
+    note: Note,
+    *,
+    note_overrides: dict[str, Note] | None = None,
+) -> ContextLineageSummary:
     return ContextLineageSummary(
         reviewed_knowledge=note,
-        sources=context_relationship_notes(vault, note, "sources", expected_type="source"),
-        evidence=context_relationship_notes(vault, note, "evidence", expected_type="evidence"),
-        claims=context_relationship_notes(vault, note, "claims", expected_type="claim"),
-        syntheses=context_relationship_notes(vault, note, "syntheses", expected_type="synthesis"),
-        reviews=context_relationship_notes(vault, note, "reviewed_by", expected_type="review"),
+        sources=context_relationship_notes(
+            vault, note, "sources", expected_type="source", note_overrides=note_overrides
+        ),
+        evidence=context_relationship_notes(
+            vault, note, "evidence", expected_type="evidence", note_overrides=note_overrides
+        ),
+        claims=context_relationship_notes(
+            vault, note, "claims", expected_type="claim", note_overrides=note_overrides
+        ),
+        syntheses=context_relationship_notes(
+            vault, note, "syntheses", expected_type="synthesis", note_overrides=note_overrides
+        ),
+        reviews=context_relationship_notes(
+            vault, note, "reviewed_by", expected_type="review", note_overrides=note_overrides
+        ),
     )
 
 
@@ -621,13 +641,14 @@ def context_relationship_notes(
     key: str,
     *,
     expected_type: str | None = None,
+    note_overrides: dict[str, Note] | None = None,
 ) -> list[Note]:
     notes_by_id: dict[str, Note] = {}
     for item in as_list(note.metadata.get(key)):
         if not isinstance(item, str):
             continue
         for target in extract_wikilinks(item):
-            target_note = vault.find_note(target)
+            target_note = (note_overrides or {}).get(target) or vault.find_note(target)
             if target_note is None:
                 continue
             if expected_type is not None and target_note.type != expected_type:

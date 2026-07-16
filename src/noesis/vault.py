@@ -1009,6 +1009,8 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
         if not markdown_body_section(note.body, "Basis"):
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
+        if decision == "renewed" and parse_review_date(note.metadata.get("next_review")) is None:
+            issues.append(Issue(note.path, "renewed review audit requires next_review"))
         if decision == "changes-requested" and not markdown_body_section(note.body, "Changes Requested"):
             issues.append(Issue(note.path, "changes-requested review audit requires requested-change details"))
 
@@ -1375,6 +1377,15 @@ def _migrate_vault_locked(
     for knowledge in vault.notes:
         if knowledge.type != "reviewed-knowledge" or knowledge.status not in CURRENT_KNOWLEDGE_STATUSES:
             continue
+        sources = relationship_notes(vault, knowledge, "sources", expected_type="source")
+        if not sources:
+            raise ValueError(f"cannot migrate active knowledge without sources: {knowledge.noesis_id}")
+        for source in sources:
+            if is_excluded(source):
+                raise ValueError(
+                    f"cannot migrate active knowledge with excluded source: {source.noesis_id}"
+                )
+
         auditable_lineage_ids = {knowledge.noesis_id}
         supports_by_key: dict[str, list[Note]] = {}
         for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
@@ -1384,11 +1395,11 @@ def _migrate_vault_locked(
             for support in supports:
                 if (
                     is_excluded(support)
-                    or support.status == "needs-review"
-                    or support.review_state == "changes-requested"
+                    or support.status != "reviewed"
+                    or support.review_state not in MATURE_REVIEW_STATES
                 ):
                     raise ValueError(
-                        f"cannot migrate active knowledge with excluded or blocked {expected_type}: "
+                        f"cannot migrate active knowledge with excluded, blocked, or unreviewed {expected_type}: "
                         f"{support.noesis_id}"
                     )
                 auditable_lineage_ids.add(support.noesis_id)
@@ -1398,7 +1409,7 @@ def _migrate_vault_locked(
         approved_audits = [
             audit
             for audit in audits
-            if str(audit.metadata.get("decision", "")) == "approved"
+            if str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
             and any(
                 relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
                 for lineage_id in auditable_lineage_ids
@@ -1414,12 +1425,19 @@ def _migrate_vault_locked(
         for supports in supports_by_key.values():
             for support in supports:
                 support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
-                support_metadata["status"] = "reviewed"
-                support_metadata["review_state"] = "approved"
                 add_relationship_link(support_metadata, "reviewed_by", wikilink(audit.noesis_id))
                 note_updates[support.path] = (support_metadata, support.body)
                 add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
         note_updates[audit.path] = (audit_metadata, audit.body)
+
+    projected_vault = project_vault_notes(vault, note_updates)
+    projected_issues = validate_notes(projected_vault) + validate_wikilinks(projected_vault)
+    if projected_issues:
+        formatted = "; ".join(issue.format(root) for issue in projected_issues[:3])
+        remaining = len(projected_issues) - 3
+        if remaining > 0:
+            formatted += f"; and {remaining} more issue(s)"
+        raise ValueError(f"cannot migrate invalid projected vault: {formatted}")
 
     today = date.today().isoformat()
     migrated_contract = dict(contract)
@@ -1459,6 +1477,35 @@ def _migrate_vault_locked(
             atomic_write_text(target, content)
         raise
     return VaultMigration(root, from_version, CONTRACT_VERSION, False, changed_paths, backup_path)
+
+
+def project_vault_notes(
+    vault: Vault,
+    note_updates: dict[Path, tuple[dict[str, Any], str]],
+) -> Vault:
+    projected = Vault(
+        root=vault.root,
+        issues=list(vault.issues),
+        by_link=dict(vault.by_link),
+    )
+    for note in vault.notes:
+        metadata, body = note_updates.get(note.path, (note.metadata, note.body))
+        projected_note = Note(
+            path=note.path,
+            rel_path=note.rel_path,
+            metadata=metadata,
+            body=body,
+        )
+        projected.notes.append(projected_note)
+        projected.register_note_aliases(projected_note)
+        if projected_note.noesis_id:
+            if projected_note.noesis_id in projected.by_id:
+                projected.issues.append(
+                    Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}")
+                )
+            projected.by_id[projected_note.noesis_id] = projected_note
+            projected.by_link[projected_note.noesis_id] = projected_note.path
+    return projected
 
 
 @vault_write_operation(create_root=True)
@@ -2989,6 +3036,7 @@ def build_context_body(
     max_chars: int | None = None,
     freshness_excluded_notes: list[Note] | None = None,
     lifecycle_excluded_notes: list[Note] | None = None,
+    pending_notes: list[Note] | None = None,
 ) -> str:
     from .context import render_context_snapshot
 
@@ -3007,6 +3055,7 @@ def build_context_body(
             freshness_policy=freshness_policy,
             freshness_excluded_notes=freshness_excluded_notes,
             lifecycle_excluded_notes=lifecycle_excluded_notes,
+            pending_notes=pending_notes,
         ).rstrip()
         + "\n\n## Traceability\n\n"
     )
@@ -3092,6 +3141,16 @@ def append_updated_reviewed_knowledge_contexts(
         return
 
     projected_target_hash = note_content_hash(target_metadata, target_body)
+    pending_notes = [
+        Note(
+            path=path,
+            rel_path=path.relative_to(vault.root),
+            metadata=metadata,
+            body=body,
+        )
+        for path, metadata, body in writes
+        if not is_blank(metadata.get("noesis_id"))
+    ]
     for context_note in vault.notes:
         if context_note.type != "operational-context":
             continue
@@ -3120,6 +3179,7 @@ def append_updated_reviewed_knowledge_contexts(
             limit=context_budget(context_note, "context_limit"),
             max_chars=context_budget(context_note, "context_max_chars"),
             freshness_excluded_notes=context_linked_notes(vault, context_metadata, "freshness_excluded"),
+            pending_notes=pending_notes,
         )
         writes.append((context_note.path, context_metadata, context_body))
 
