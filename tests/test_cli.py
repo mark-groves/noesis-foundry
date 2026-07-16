@@ -947,6 +947,8 @@ class NoesisCliTests(unittest.TestCase):
             dashboard = (vault_path / "_dashboards" / "noesis-review-dashboard.md").read_text(encoding="utf-8")
             self.assertIn("Direct audit link checks", dashboard)
             self.assertIn("reviewed_notes", dashboard)
+            self.assertIn("--reviewer <reviewer-id>", dashboard)
+            self.assertIn('--basis "<why this lifecycle role remains valid>"', dashboard)
 
     def test_authoring_loop_creates_reviewable_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

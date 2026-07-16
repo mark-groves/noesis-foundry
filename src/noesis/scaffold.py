@@ -63,7 +63,7 @@ Use this write action after a scheduled review confirms the note still fits
 its current lifecycle role:
 
 ```bash
-PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --next-review <YYYY-MM-DD>
+PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --reviewer <reviewer-id> --basis "<why this lifecycle role remains valid>" --next-review <YYYY-MM-DD>
 ```
 
 `review renew` records the scheduled review audit and moves `next_review`

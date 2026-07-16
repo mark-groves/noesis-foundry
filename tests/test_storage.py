@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from noesis.storage import atomic_write_text
+from noesis.storage import atomic_write_text, vault_lock
 from noesis.vault import Vault, init_vault
 
 
@@ -22,6 +22,21 @@ class StorageTests(unittest.TestCase):
             atomic_write_text(path, "second\n")
             self.assertEqual(path.read_text(encoding="utf-8"), "second\n")
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_generic_vault_lock_does_not_create_invalid_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = root / "missing-vault"
+            with self.assertRaisesRegex(ValueError, "vault path is not a directory"):
+                with vault_lock(missing):
+                    pass
+            self.assertFalse(missing.exists())
+
+            invalid_file = root / "not-a-vault"
+            invalid_file.write_text("not a directory\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "vault path is not a directory"):
+                with vault_lock(invalid_file):
+                    pass
 
     def test_parallel_cli_writers_leave_a_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

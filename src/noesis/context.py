@@ -99,6 +99,10 @@ def compose_context(
         freshness_excluded + scoped_out + budgeted_out,
         key=lambda selection: (selection.status, selection.note.title.lower()),
     )
+    selection_excluded = sorted(
+        scoped_out + budgeted_out,
+        key=lambda selection: (selection.status, selection.note.title.lower()),
+    )
     lifecycle_excluded = explain_lifecycle_exclusions(vault)
     lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
     handoff = context_handoff_guidance(
@@ -125,7 +129,7 @@ def compose_context(
             limit=effective_limit,
             max_chars=effective_max_chars,
             total_candidates=len(available),
-            excluded=excluded,
+            excluded=selection_excluded,
             as_of=cutoff,
             freshness_policy=normalized_freshness_policy,
             freshness_excluded=freshness_excluded,
@@ -139,7 +143,7 @@ def compose_context(
             limit=effective_limit,
             max_chars=effective_max_chars,
             total_candidates=len(available),
-            excluded=excluded,
+            excluded=selection_excluded,
             as_of=cutoff,
             freshness_policy=normalized_freshness_policy,
             freshness_excluded=freshness_excluded,

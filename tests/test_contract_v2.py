@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import unittest
 
-from noesis.vault import Vault, compose_context, migrate_vault, write_context_note, write_note
+from noesis.vault import Vault, compose_context, migrate_vault, renew_review, write_context_note, write_note
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +53,23 @@ class ContractV2Tests(unittest.TestCase):
             invalid = Vault.load(vault_path)
             with self.assertRaisesRegex(ValueError, "cannot build context from invalid vault"):
                 compose_context(invalid, scope="lifecycle", as_of="2026-06-01")
+
+    def test_validator_rejects_active_knowledge_with_excluded_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            source = vault.find_note("source-agent-memory-session")
+            self.assertIsNotNone(source)
+            assert source is not None
+            metadata = dict(source.metadata)
+            metadata["status"] = "stale"
+            write_note(source.path, metadata, source.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "active reviewed knowledge depends on non-current source 'source-agent-memory-session'",
+                messages,
+            )
 
     def test_migration_has_dry_run_backup_and_validated_commit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +142,51 @@ class ContractV2Tests(unittest.TestCase):
             expired = compose_context(Vault.load(vault_path), scope="agent memory", as_of="2026-07-16")
             excluded = next(item for item in expired.freshness_excluded if item.note.noesis_id == target.noesis_id)
             self.assertEqual(excluded.freshness_state, "expired")
+
+    def test_context_freshness_provenance_is_not_double_counted(self) -> None:
+        vault = Vault.load(EXAMPLE_VAULT)
+        package = compose_context(
+            vault,
+            as_of="2026-07-16",
+            freshness_policy="strict",
+            profile="agent-handoff",
+        )
+
+        self.assertIn("- Excluded by scope or budget: 0", package.content)
+        self.assertIn("- Excluded by freshness: 3", package.content)
+        for selection in package.freshness_excluded:
+            self.assertEqual(
+                package.content.count(f"- {selection.note.noesis_id} (freshness_excluded"),
+                1,
+            )
+
+    def test_renewal_preserves_historical_freshness_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            created = write_context_note(
+                vault_path,
+                as_of="2026-07-16",
+                freshness_policy="strict",
+                title="Strict Freshness Snapshot",
+            )
+            context_note = Vault.load(vault_path).find_note(created.note_id)
+            self.assertIsNotNone(context_note)
+            assert context_note is not None
+            self.assertIn(
+                "[[reviewed-knowledge-agent-memory-dogfood]]",
+                context_note.metadata["freshness_excluded"],
+            )
+
+            renew_review(
+                vault_path,
+                "reviewed-knowledge-agent-memory-dogfood",
+                next_review="2026-08-16",
+                reviewer="test-human",
+                basis="The reviewed knowledge remains current after scheduled review.",
+                today="2026-07-16",
+            )
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
 
     def test_written_context_records_reproducible_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -55,10 +55,13 @@ class NoesisMcpHandlers:
         allowed_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
     ) -> None:
         self.default_vault = Path(default_vault).expanduser().resolve() if default_vault else None
-        if allowed_roots is None:
-            self.allowed_roots = (self.default_vault,) if self.default_vault is not None else ()
-        else:
-            self.allowed_roots = tuple(Path(root).expanduser().resolve() for root in allowed_roots)
+        configured_roots = (
+            tuple(Path(root).expanduser().resolve() for root in allowed_roots)
+            if allowed_roots is not None
+            else ()
+        )
+        roots = ((self.default_vault,) if self.default_vault is not None else ()) + configured_roots
+        self.allowed_roots = tuple(dict.fromkeys(roots))
         if self.default_vault is not None:
             self.ensure_allowed_vault(self.default_vault)
 

@@ -15,9 +15,12 @@ _LOCK_STATE = threading.local()
 
 
 @contextmanager
-def vault_lock(vault_path: Path | str) -> Iterator[None]:
+def vault_lock(vault_path: Path | str, *, create_root: bool = False) -> Iterator[None]:
     root = Path(vault_path).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    if create_root:
+        root.mkdir(parents=True, exist_ok=True)
+    elif not root.is_dir():
+        raise ValueError(f"vault path is not a directory: {root}")
     active_roots = getattr(_LOCK_STATE, "active_roots", set())
     if root in active_roots:
         yield
@@ -56,13 +59,18 @@ def vault_lock(vault_path: Path | str) -> Iterator[None]:
             lock_handle.close()
 
 
-def vault_write_operation(writer: Any) -> Any:
-    @wraps(writer)
-    def locked(vault_path: Path | str, *args: Any, **kwargs: Any) -> Any:
-        with vault_lock(vault_path):
-            return writer(vault_path, *args, **kwargs)
+def vault_write_operation(writer: Any = None, *, create_root: bool = False) -> Any:
+    def decorate(operation: Any) -> Any:
+        @wraps(operation)
+        def locked(vault_path: Path | str, *args: Any, **kwargs: Any) -> Any:
+            with vault_lock(vault_path, create_root=create_root):
+                return operation(vault_path, *args, **kwargs)
 
-    return locked
+        return locked
+
+    if writer is None:
+        return decorate
+    return decorate(writer)
 
 
 def atomic_write_text(path: Path, content: str) -> None:

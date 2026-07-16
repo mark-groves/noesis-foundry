@@ -77,6 +77,19 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertNotIn("absolute_path", fetched["note"])
             self.assertEqual(fetched["note"]["metadata"]["original_path"], "<local>/private-source.txt")
 
+    def test_mcp_allowed_roots_extend_the_default_vault(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault_path = root / "vault"
+            other_vault = root / "other-vault"
+            init_vault(vault_path)
+            init_vault(other_vault)
+
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[other_vault])
+
+            self.assertTrue(handlers.lint_vault()["ok"])
+            self.assertTrue(handlers.lint_vault(str(other_vault))["ok"])
+
     def test_create_server_registers_expected_mcp_surface(self) -> None:
         # FastMCP does not expose a stable public introspection API across all
         # installed versions, so this smoke test records Noesis' registration

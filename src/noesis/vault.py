@@ -1017,6 +1017,15 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
 
 def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
+    for source in relationship_notes(vault, note, "sources", expected_type="source"):
+        if is_excluded(source):
+            issues.append(
+                Issue(
+                    note.path,
+                    f"active reviewed knowledge depends on non-current source {source.noesis_id!r}",
+                )
+            )
+
     for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
         for support in relationship_notes(vault, note, key, expected_type=expected_type):
             if (
@@ -1152,20 +1161,6 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             continue
         elif not is_excluded(target):
             issues.append(Issue(note.path, f"excluded_memory reference {ref!r} is not stale, superseded, or archived"))
-
-    for ref in as_list(note.metadata.get("freshness_excluded")):
-        target = vault.find_note(str(ref))
-        if target is None:
-            continue
-        freshness_state, _, _ = note_freshness(target, as_of=as_of)
-        if context_freshness_eligible(freshness_state, policy=freshness_policy):
-            issues.append(
-                Issue(
-                    note.path,
-                    f"freshness_excluded reference {ref!r} is eligible as of {as_of.isoformat()} "
-                    f"under {freshness_policy!r} freshness policy",
-                )
-            )
 
     return issues
 
@@ -1364,7 +1359,7 @@ def _migrate_vault_locked(
     return VaultMigration(root, from_version, CONTRACT_VERSION, False, changed_paths, backup_path)
 
 
-@vault_write_operation
+@vault_write_operation(create_root=True)
 def init_vault(path: Path | str, force: bool = False) -> list[Path]:
     root = Path(path).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
