@@ -282,6 +282,30 @@ class ContractV2Tests(unittest.TestCase):
                 messages,
             )
 
+    def test_validator_rejects_approval_audits_older_than_reviewed_edits(self) -> None:
+        cases = (
+            (
+                "reviewed-knowledge-noesis-lifecycle",
+                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+            ),
+            (
+                "evidence-memory-lifecycle",
+                "active reviewed knowledge depends on unaudited evidence 'evidence-memory-lifecycle'",
+            ),
+        )
+        for note_id, expected in cases:
+            with self.subTest(note_id=note_id), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                target = Vault.load(vault_path).find_note(note_id)
+                self.assertIsNotNone(target)
+                assert target is not None
+                metadata = dict(target.metadata)
+                metadata["updated"] = "2026-05-30"
+                write_note(target.path, metadata, target.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertIn(expected, messages)
+
     def test_validator_requires_requested_change_audit_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -644,7 +668,19 @@ Not scheduled.
                 today="2026-07-16",
             )
 
-            self.assertEqual(Vault.load(vault_path).validate(), [])
+            renewed_vault = Vault.load(vault_path)
+            renewed_context = renewed_vault.find_note(created.note_id)
+            self.assertIsNotNone(renewed_context)
+            assert renewed_context is not None
+            self.assertIn(
+                "[[reviewed-knowledge-agent-memory-dogfood]]",
+                renewed_context.metadata["reviewed_knowledge"],
+            )
+            self.assertNotIn(
+                "[[reviewed-knowledge-agent-memory-dogfood]]",
+                renewed_context.metadata["freshness_excluded"],
+            )
+            self.assertEqual(renewed_vault.validate(), [])
 
     def test_renewal_updates_selected_context_input_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

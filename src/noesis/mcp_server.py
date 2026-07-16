@@ -276,10 +276,13 @@ class NoesisMcpHandlers:
         author: str = "unknown",
         source_date: str = "unknown",
     ) -> JsonObject:
+        vault_root = self.resolve_vault(vault_path)
+        source_path = Path(source_file).expanduser().resolve()
+        self.ensure_allowed_path(source_path, kind="source file")
         return self.write_result(
             ingest_source,
-            self.resolve_vault(vault_path),
-            source_file,
+            vault_root,
+            source_path,
             title,
             slug=slug,
             source_type=source_type,
@@ -297,10 +300,12 @@ class NoesisMcpHandlers:
         allow_duplicates: bool = False,
     ) -> JsonObject:
         vault_root = self.resolve_vault(vault_path)
+        resolved_bundle_path = Path(bundle_path).expanduser().resolve()
+        self.ensure_allowed_path(resolved_bundle_path, kind="bundle path")
         try:
             imported = import_source_bundle(
                 vault_root,
-                bundle_path,
+                resolved_bundle_path,
                 manifest_name=manifest,
                 create_evidence=create_evidence,
                 allow_duplicates=allow_duplicates,
@@ -516,6 +521,9 @@ class NoesisMcpHandlers:
         return resolved
 
     def ensure_allowed_vault(self, path: Path) -> None:
+        self.ensure_allowed_path(path, kind="vault path")
+
+    def ensure_allowed_path(self, path: Path, *, kind: str) -> None:
         if not self.allowed_roots:
             return
         for allowed_root in self.allowed_roots:
@@ -524,8 +532,7 @@ class NoesisMcpHandlers:
                 return
             except ValueError:
                 continue
-        roots = ", ".join(str(root) for root in self.allowed_roots)
-        raise ValueError(f"vault path is outside configured MCP roots: {path}; allowed roots: {roots}")
+        raise ValueError(f"{kind} is outside configured MCP roots")
 
     def write_result(self, writer: Any, *args: Any, **kwargs: Any) -> JsonObject:
         vault_root = Path(args[0]).expanduser().resolve() if args else None

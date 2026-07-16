@@ -69,10 +69,14 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "outside configured MCP roots"):
                 handlers.lint_vault(str(other_vault))
 
-            ingested = handlers.ingest_source(str(source_file), "Private Source")
+            with self.assertRaisesRegex(ValueError, "source file is outside configured MCP roots"):
+                handlers.ingest_source(str(source_file), "Private Source")
+
+            allowed_handlers = NoesisMcpHandlers(vault_path, allowed_roots=[root])
+            ingested = allowed_handlers.ingest_source(str(source_file), "Private Source")
             self.assertTrue(ingested["ok"], ingested)
             self.assertEqual(ingested["created"]["path"], "sources/source-private-source.md")
-            fetched = handlers.get_note("source-private-source")
+            fetched = allowed_handlers.get_note("source-private-source")
             self.assertTrue(fetched["ok"], fetched)
             self.assertNotIn("absolute_path", fetched["note"])
             self.assertEqual(fetched["note"]["metadata"]["original_path"], "<local>/private-source.txt")
@@ -794,7 +798,11 @@ None.
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             init_vault(vault_path)
-            handlers = NoesisMcpHandlers(vault_path)
+            restricted_handlers = NoesisMcpHandlers(vault_path)
+            with self.assertRaisesRegex(ValueError, "bundle path is outside configured MCP roots"):
+                restricted_handlers.import_source_bundle(str(CODEX_SESSION_BUNDLE))
+
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[CODEX_SESSION_BUNDLE])
 
             imported = handlers.import_source_bundle(
                 str(CODEX_SESSION_BUNDLE),
@@ -840,7 +848,7 @@ None.
                 "# Memory Source\n\nUseful memory needs source-backed review before reuse.\n",
                 encoding="utf-8",
             )
-            handlers = NoesisMcpHandlers(vault_path)
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[tmp_path])
 
             source = handlers.ingest_source(str(raw_source), "Memory Source", slug="memory-source")
             self.assertTrue(source["ok"], source)

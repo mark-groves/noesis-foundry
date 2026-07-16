@@ -1053,7 +1053,7 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
 
 def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
-    auditable_lineage_ids = {note.noesis_id}
+    auditable_lineage = {note.noesis_id: note}
     lineage_sources = {
         source.noesis_id: source
         for source in relationship_notes(vault, note, "sources", expected_type="source")
@@ -1061,7 +1061,7 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
 
     for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
         for support in relationship_notes(vault, note, key, expected_type=expected_type):
-            auditable_lineage_ids.add(support.noesis_id)
+            auditable_lineage[support.noesis_id] = support
             for source in relationship_notes(vault, support, "sources", expected_type="source"):
                 lineage_sources[source.noesis_id] = source
             if (
@@ -1092,16 +1092,7 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
                 )
             )
 
-    approved_audits = [
-        audit
-        for audit in relationship_notes(vault, note, "reviewed_by", expected_type="review")
-        if is_completed_review_audit(audit)
-        and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
-        and any(
-            relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
-            for lineage_id in auditable_lineage_ids
-        )
-    ]
+    approved_audits = approved_lineage_review_audits_for(vault, note, auditable_lineage.values())
     if not approved_audits:
         issues.append(
             Issue(
@@ -1433,7 +1424,7 @@ def _migrate_vault_locked(
                     f"cannot migrate active knowledge with excluded source: {source.noesis_id}"
                 )
 
-        auditable_lineage_ids = {knowledge.noesis_id}
+        auditable_lineage = {knowledge.noesis_id: knowledge}
         supports_by_key: dict[str, list[Note]] = {}
         for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
             supports = relationship_notes(vault, knowledge, key, expected_type=expected_type)
@@ -1455,20 +1446,14 @@ def _migrate_vault_locked(
                             "cannot migrate active knowledge with excluded support source: "
                             f"{source.noesis_id}"
                         )
-                auditable_lineage_ids.add(support.noesis_id)
+                auditable_lineage[support.noesis_id] = support
             supports_by_key[key] = supports
 
-        audits = relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
-        approved_audits = [
-            audit
-            for audit in audits
-            if is_completed_review_audit(audit)
-            and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
-            and any(
-                relationship_contains(vault, audit.metadata, "reviewed_notes", lineage_id)
-                for lineage_id in auditable_lineage_ids
-            )
-        ]
+        approved_audits = approved_lineage_review_audits_for(
+            vault,
+            knowledge,
+            auditable_lineage.values(),
+        )
         if not approved_audits:
             raise ValueError(
                 "cannot migrate active knowledge without an approved audit covering it or its declared lineage: "
@@ -3230,7 +3215,13 @@ def append_updated_reviewed_knowledge_contexts(
             "excluded_memory",
             target.noesis_id,
         )
-        if not included_target and not review_excluded_target:
+        freshness_excluded_target = relationship_contains(
+            vault,
+            context_note.metadata,
+            "freshness_excluded",
+            target.noesis_id,
+        )
+        if not included_target and not review_excluded_target and not freshness_excluded_target:
             continue
         context_metadata = dict(context_note.metadata)
         if review_excluded_target:
@@ -3239,10 +3230,7 @@ def append_updated_reviewed_knowledge_contexts(
             projected_target if note.noesis_id == target.noesis_id else note
             for note in context_reviewed_knowledge(vault, context_metadata)
         ]
-        if (
-            projected_target.type == "reviewed-knowledge"
-            and all(note.noesis_id != projected_target.noesis_id for note in knowledge)
-        ):
+        if projected_target.type == "reviewed-knowledge":
             context_as_of = context_as_of_date(
                 context_metadata.get("as_of", context_metadata.get("created"))
             )
@@ -3250,16 +3238,19 @@ def append_updated_reviewed_knowledge_contexts(
                 str(context_metadata.get("freshness_policy", "balanced"))
             )
             freshness_state, _, _ = note_freshness(projected_target, as_of=context_as_of)
-            already_freshness_excluded = relationship_contains(
-                vault,
-                context_metadata,
-                "freshness_excluded",
-                target.noesis_id,
-            )
             if context_freshness_eligible(freshness_state, policy=freshness_policy):
-                if not already_freshness_excluded:
+                remove_relationship_link(
+                    vault,
+                    context_metadata,
+                    "freshness_excluded",
+                    target.noesis_id,
+                )
+                if all(note.noesis_id != projected_target.noesis_id for note in knowledge):
                     knowledge.append(projected_target)
             else:
+                knowledge = [
+                    note for note in knowledge if note.noesis_id != projected_target.noesis_id
+                ]
                 add_relationship_link(
                     context_metadata,
                     "freshness_excluded",
@@ -3462,7 +3453,42 @@ def approved_review_audits_for(vault: Vault, target: Note) -> list[Note]:
         if is_completed_review_audit(audit)
         and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
         and relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id)
+        and review_audit_postdates_note(audit, target)
     ]
+
+
+def approved_lineage_review_audits_for(
+    vault: Vault,
+    knowledge: Note,
+    lineage: Iterable[Note],
+) -> list[Note]:
+    lineage_by_id = {note.noesis_id: note for note in lineage}
+    created = parse_review_date(knowledge.metadata.get("created"))
+    updated = parse_review_date(knowledge.metadata.get("updated"))
+    knowledge_was_edited = created is None or updated is None or updated > created
+    approved: list[Note] = []
+    for audit in relationship_notes(vault, knowledge, "reviewed_by", expected_type="review"):
+        if not is_completed_review_audit(audit):
+            continue
+        if str(audit.metadata.get("decision", "")) not in {"approved", "renewed"}:
+            continue
+        covered = [
+            target
+            for target in lineage_by_id.values()
+            if relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id)
+        ]
+        if not any(review_audit_postdates_note(audit, target) for target in covered):
+            continue
+        if knowledge_was_edited and not review_audit_postdates_note(audit, knowledge):
+            continue
+        approved.append(audit)
+    return approved
+
+
+def review_audit_postdates_note(audit: Note, target: Note) -> bool:
+    reviewed_at = parse_review_date(audit.metadata.get("reviewed_at"))
+    updated = parse_review_date(target.metadata.get("updated"))
+    return reviewed_at is not None and updated is not None and reviewed_at >= updated
 
 
 def review_requires_audit(note: Note) -> bool:
