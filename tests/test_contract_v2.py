@@ -877,6 +877,20 @@ Not scheduled.
             excluded = next(item for item in expired.freshness_excluded if item.note.noesis_id == target.noesis_id)
             self.assertEqual(excluded.freshness_state, "expired")
 
+    def test_validator_requires_parseable_valid_until_dates(self) -> None:
+        for invalid_value in ("{{date}}", "unknown"):
+            with self.subTest(valid_until=invalid_value), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                target = Vault.load(vault_path).find_note("reviewed-knowledge-agent-memory-dogfood")
+                self.assertIsNotNone(target)
+                assert target is not None
+                metadata = dict(target.metadata)
+                metadata["valid_until"] = invalid_value
+                write_note(target.path, metadata, target.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertIn("valid_until must be a parseable YYYY-MM-DD date", messages)
+
     def test_context_freshness_provenance_is_not_double_counted(self) -> None:
         vault = Vault.load(EXAMPLE_VAULT)
         package = compose_context(

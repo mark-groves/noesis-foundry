@@ -926,7 +926,12 @@ def validate_notes(vault: Vault) -> list[Issue]:
             "valid_until",
             "as_of",
         ):
-            if date_key in metadata and not is_date_like(metadata[date_key]):
+            if date_key not in metadata:
+                continue
+            if date_key == "valid_until":
+                if parse_review_date(metadata[date_key]) is None:
+                    issues.append(Issue(note.path, "valid_until must be a parseable YYYY-MM-DD date"))
+            elif not is_date_like(metadata[date_key]):
                 issues.append(Issue(note.path, f"{date_key} must be a date or date-like string"))
 
         issues.extend(validate_type_stage(note))

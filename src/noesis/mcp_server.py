@@ -38,6 +38,7 @@ from .vault import (
     promote_synthesis,
     propose_claim,
     renew_review,
+    resolve_bundle_manifest,
     request_review_changes,
     synthesize_claims,
     write_context_note,
@@ -138,7 +139,7 @@ class NoesisMcpHandlers:
         found = vault.find_note(note)
         if found is None:
             return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
-        return {"ok": True, "vault_path": str(vault.root), "note": note_to_dict(found, vault.root)}
+        return {"ok": True, "vault_path": str(vault.root), "note": mcp_note_to_dict(found, vault.root)}
 
     def get_review_queue(
         self,
@@ -206,7 +207,9 @@ class NoesisMcpHandlers:
         if found is None:
             return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
         try:
-            return review_workbench_to_dict(vault, found, note_ref=note, due_on=due_on)
+            payload = review_workbench_to_dict(vault, found, note_ref=note, due_on=due_on)
+            payload["note"] = mcp_note_to_dict(found, vault.root)
+            return payload
         except ValueError as exc:
             return review_error(vault, exc)
 
@@ -315,9 +318,14 @@ class NoesisMcpHandlers:
         resolved_bundle_path = Path(bundle_path).expanduser().resolve()
         self.ensure_allowed_path(resolved_bundle_path, kind="bundle path")
         try:
+            resolved_manifest_path = resolve_bundle_manifest(resolved_bundle_path, manifest)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "vault_path": str(vault_root)}
+        self.ensure_allowed_path(resolved_manifest_path, kind="bundle manifest")
+        try:
             imported = import_source_bundle(
                 vault_root,
-                resolved_bundle_path,
+                resolved_manifest_path,
                 manifest_name=manifest,
                 create_evidence=create_evidence,
                 allow_duplicates=allow_duplicates,
@@ -1017,6 +1025,12 @@ def redact_vault_path(value: str, vault_root: Path) -> str:
     raw_path = str(vault_root)
     shell_quoted_path = "'" + raw_path.replace("'", "'\"'\"'") + "'"
     return value.replace(shell_quoted_path, "'<vault>'").replace(raw_path, "<vault>")
+
+
+def mcp_note_to_dict(note: Note, vault_root: Path) -> JsonObject:
+    payload = note_to_dict(note, vault_root)
+    payload["body"] = redact_vault_path(str(payload["body"]), vault_root)
+    return payload
 
 
 def review_filter_error(

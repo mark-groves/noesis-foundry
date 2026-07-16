@@ -113,6 +113,37 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertTrue(handlers.lint_vault()["ok"])
             self.assertTrue(handlers.lint_vault(str(other_vault))["ok"])
 
+    def test_mcp_redacts_stored_handoff_bodies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            for profile in ("agent-handoff", "codex-handoff"):
+                with self.subTest(profile=profile):
+                    written = handlers.write_context(
+                        scope="noesis-roadmap",
+                        profile=profile,
+                        title=f"Stored {profile}",
+                        slug=f"stored-{profile}",
+                    )
+                    self.assertTrue(written["ok"], written)
+                    note_id = written["created"]["note_id"]
+                    stored = Vault.load(vault_path).find_note(note_id)
+                    self.assertIsNotNone(stored)
+                    assert stored is not None
+                    self.assertIn(str(vault_path.resolve()), stored.body)
+
+                    fetched = handlers.get_note(note_id)
+                    self.assertTrue(fetched["ok"], fetched)
+                    self.assertNotIn(str(vault_path.resolve()), fetched["note"]["body"])
+                    self.assertIn("<vault>", fetched["note"]["body"])
+
+                    workbench = handlers.show_review(note_id)
+                    self.assertTrue(workbench["ok"], workbench)
+                    self.assertNotIn(str(vault_path.resolve()), workbench["note"]["body"])
+                    self.assertIn("<vault>", workbench["note"]["body"])
+
     def test_create_server_registers_expected_mcp_surface(self) -> None:
         # FastMCP does not expose a stable public introspection API across all
         # installed versions, so this smoke test records Noesis' registration
@@ -885,15 +916,31 @@ Revise the unrelated source.
     def test_import_source_bundle_handler_creates_evidence_and_preserves_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
+            bundle_path = Path(tmp) / "allowed-bundle"
+            outside_manifest = Path(tmp) / "outside.yaml"
             init_vault(vault_path)
+            shutil.copytree(CODEX_SESSION_BUNDLE, bundle_path)
+            outside_manifest.write_text(
+                (bundle_path / "noesis-bundle.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
             restricted_handlers = NoesisMcpHandlers(vault_path)
             with self.assertRaisesRegex(ValueError, "bundle path is outside configured MCP roots"):
-                restricted_handlers.import_source_bundle(str(CODEX_SESSION_BUNDLE))
+                restricted_handlers.import_source_bundle(str(bundle_path))
 
-            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[CODEX_SESSION_BUNDLE])
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[bundle_path])
+            for escaped_manifest in (str(outside_manifest), "../outside.yaml"):
+                with self.subTest(manifest=escaped_manifest), self.assertRaisesRegex(
+                    ValueError,
+                    "bundle manifest is outside configured MCP roots",
+                ):
+                    handlers.import_source_bundle(
+                        str(bundle_path),
+                        manifest=escaped_manifest,
+                    )
 
             imported = handlers.import_source_bundle(
-                str(CODEX_SESSION_BUNDLE),
+                str(bundle_path),
                 create_evidence=True,
             )
 
