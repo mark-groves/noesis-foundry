@@ -1025,13 +1025,16 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
             issues.append(Issue(note.path, "review audit requires a decision"))
         elif decision not in {"approved", "changes-requested", "renewed"}:
             issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
-        if decision in {"approved", "changes-requested", "renewed"} and not is_completed_review_audit(note):
-            issues.append(
-                Issue(
-                    note.path,
-                    "review decision audit must have complete status and a mature review_state",
+        if decision in {"approved", "changes-requested", "renewed"}:
+            if not has_completed_review_state(note):
+                issues.append(
+                    Issue(
+                        note.path,
+                        "review decision audit must have complete status and a mature review_state",
+                    )
                 )
-            )
+            if parse_review_date(note.metadata.get("reviewed_at")) is None:
+                issues.append(Issue(note.path, "review decision audit requires a parseable reviewed_at date"))
         if not markdown_body_section(note.body, "Basis"):
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
         if decision == "renewed" and parse_review_date(note.metadata.get("next_review")) is None:
@@ -3240,7 +3243,28 @@ def append_updated_reviewed_knowledge_contexts(
             projected_target.type == "reviewed-knowledge"
             and all(note.noesis_id != projected_target.noesis_id for note in knowledge)
         ):
-            knowledge.append(projected_target)
+            context_as_of = context_as_of_date(
+                context_metadata.get("as_of", context_metadata.get("created"))
+            )
+            freshness_policy = resolve_freshness_policy(
+                str(context_metadata.get("freshness_policy", "balanced"))
+            )
+            freshness_state, _, _ = note_freshness(projected_target, as_of=context_as_of)
+            already_freshness_excluded = relationship_contains(
+                vault,
+                context_metadata,
+                "freshness_excluded",
+                target.noesis_id,
+            )
+            if context_freshness_eligible(freshness_state, policy=freshness_policy):
+                if not already_freshness_excluded:
+                    knowledge.append(projected_target)
+            else:
+                add_relationship_link(
+                    context_metadata,
+                    "freshness_excluded",
+                    wikilink(projected_target.noesis_id),
+                )
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in knowledge]
         context_metadata["input_hashes"] = [
             f"{note.noesis_id}="
@@ -3251,6 +3275,10 @@ def append_updated_reviewed_knowledge_contexts(
             collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis")
         )
         context_metadata["updated"] = updated_at
+        freshness_excluded_notes = [
+            projected_target if note.noesis_id == projected_target.noesis_id else note
+            for note in context_linked_notes(vault, context_metadata, "freshness_excluded")
+        ]
         context_body = build_context_body(
             vault,
             knowledge,
@@ -3262,7 +3290,7 @@ def append_updated_reviewed_knowledge_contexts(
             profile=context_profile(context_note),
             limit=context_budget(context_note, "context_limit"),
             max_chars=context_budget(context_note, "context_max_chars"),
-            freshness_excluded_notes=context_linked_notes(vault, context_metadata, "freshness_excluded"),
+            freshness_excluded_notes=freshness_excluded_notes,
             pending_notes=pending_notes,
         )
         writes.append((context_note.path, context_metadata, context_body))
@@ -3372,6 +3400,17 @@ def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> b
         target_note = vault.find_note(target)
         if target_note is not None and target_note.noesis_id == target_noesis_id:
             return True
+    if note.type == "reviewed-knowledge":
+        for key, expected_type in (
+            ("evidence", "evidence"),
+            ("claims", "claim"),
+            ("syntheses", "synthesis"),
+        ):
+            if any(
+                note_references_memory(vault, support, target_noesis_id)
+                for support in relationship_notes(vault, note, key, expected_type=expected_type)
+            ):
+                return True
     return False
 
 
@@ -3401,15 +3440,19 @@ def is_excluded(note: Note) -> bool:
 
 
 def is_context_excluded(note: Note) -> bool:
-    return is_excluded(note) or note.status == "needs-review" or note.review_state == "changes-requested"
+    return is_excluded(note) or note.review_state == "changes-requested"
 
 
-def is_completed_review_audit(note: Note) -> bool:
+def has_completed_review_state(note: Note) -> bool:
     return (
         note.type == "review"
         and note.status == "complete"
         and note.review_state in MATURE_REVIEW_STATES
     )
+
+
+def is_completed_review_audit(note: Note) -> bool:
+    return has_completed_review_state(note) and parse_review_date(note.metadata.get("reviewed_at")) is not None
 
 
 def approved_review_audits_for(vault: Vault, target: Note) -> list[Note]:

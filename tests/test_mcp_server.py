@@ -480,6 +480,55 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             )
             self.assertEqual(vault.validate(), [])
 
+    def test_context_restoration_respects_stored_freshness_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            written = handlers.write_context(
+                scope="lifecycle",
+                as_of="2026-06-01",
+                freshness_policy="strict",
+                title="Strict Lifecycle Context",
+                slug="strict-lifecycle-restoration",
+            )
+            self.assertTrue(written["ok"], written)
+            requested = handlers.request_review_changes(
+                "reviewed-knowledge-noesis-lifecycle",
+                reviewer="test-agent",
+                basis="The knowledge needs a focused correction.",
+                changes_requested="Correct the knowledge before reuse.",
+                slug="strict-lifecycle-correction",
+            )
+            self.assertTrue(requested["ok"], requested)
+            approved = handlers.approve_review(
+                "reviewed-knowledge-noesis-lifecycle",
+                reviewer="test-agent",
+                basis="The knowledge correction is complete.",
+                next_review="2026-05-31",
+                slug="strict-lifecycle-corrected",
+            )
+            self.assertTrue(approved["ok"], approved)
+
+            vault = Vault.load(vault_path)
+            context = vault.find_note("context-strict-lifecycle-restoration")
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertNotIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["reviewed_knowledge"],
+            )
+            self.assertIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["freshness_excluded"],
+            )
+            self.assertNotIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["excluded_memory"],
+            )
+            self.assertEqual(vault.validate(), [])
+
     def test_propagated_change_requests_are_open_without_direct_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"

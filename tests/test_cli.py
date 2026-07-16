@@ -2562,6 +2562,47 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn('[[stale-noesis-lifecycle-old]]', context_note)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context_note)
 
+    def test_mark_support_only_source_stale_excludes_dependent_knowledge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            evidence_path = vault_path / "evidence" / "evidence-memory-lifecycle.md"
+            evidence_path.write_text(
+                evidence_path.read_text(encoding="utf-8").replace(
+                    "[[source-noesis-readme]]",
+                    "[[source-agent-memory-session]]",
+                ),
+                encoding="utf-8",
+            )
+            before = run_noesis("vault", "validate", str(vault_path))
+            self.assertEqual(before.returncode, 0, before.stderr)
+
+            stale = run_noesis(
+                "memory",
+                "stale",
+                "source-agent-memory-session",
+                "--vault",
+                str(vault_path),
+                "--reason",
+                "The transitive support source is no longer current.",
+                "--slug",
+                "agent-memory-source-old",
+            )
+            self.assertEqual(stale.returncode, 0, stale.stderr)
+
+            vault = Vault.load(vault_path)
+            lifecycle_knowledge = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            lifecycle_context = vault.find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(lifecycle_knowledge)
+            self.assertIsNotNone(lifecycle_context)
+            assert lifecycle_knowledge is not None and lifecycle_context is not None
+            self.assertEqual(lifecycle_knowledge.status, "stale")
+            self.assertIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                lifecycle_context.metadata["excluded_memory"],
+            )
+            self.assertEqual(vault.validate(), [])
+
     def test_mark_synthesis_stale_excludes_existing_context_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"

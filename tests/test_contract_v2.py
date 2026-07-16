@@ -137,6 +137,31 @@ class ContractV2Tests(unittest.TestCase):
                 messages = [issue.message for issue in Vault.load(vault_path).validate()]
                 self.assertIn(expected, messages)
 
+    def test_validator_requires_change_request_state_for_context_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            context = vault.find_note("context-agent-memory-dogfood")
+            pending = vault.find_note("evidence-cli-authoring-loop")
+            self.assertIsNotNone(context)
+            self.assertIsNotNone(pending)
+            assert context is not None and pending is not None
+
+            pending_metadata = dict(pending.metadata)
+            pending_metadata["status"] = "needs-review"
+            pending_metadata["review_state"] = "ready-for-review"
+            write_note(pending.path, pending_metadata, pending.body)
+            context_metadata = dict(context.metadata)
+            context_metadata["excluded_memory"] = [f"[[{pending.noesis_id}]]"]
+            write_note(context.path, context_metadata, context.body)
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "excluded_memory reference '[[evidence-cli-authoring-loop]]' is not stale, "
+                "superseded, archived, or changes-requested",
+                messages,
+            )
+
     def test_validator_requires_every_review_note_to_record_a_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
@@ -185,6 +210,23 @@ class ContractV2Tests(unittest.TestCase):
                 "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
                 messages,
             )
+
+    def test_validator_requires_reviewed_at_on_completed_audit(self) -> None:
+        for reviewed_at in (None, "unknown", "{{date}}"):
+            with self.subTest(reviewed_at=reviewed_at), tempfile.TemporaryDirectory() as tmp:
+                vault_path = self.copy_example(Path(tmp))
+                audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+                self.assertIsNotNone(audit)
+                assert audit is not None
+                metadata = dict(audit.metadata)
+                if reviewed_at is None:
+                    metadata.pop("reviewed_at")
+                else:
+                    metadata["reviewed_at"] = reviewed_at
+                write_note(audit.path, metadata, audit.body)
+
+                messages = [issue.message for issue in Vault.load(vault_path).validate()]
+                self.assertIn("review decision audit requires a parseable reviewed_at date", messages)
 
     def test_validator_requires_completed_changes_requested_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
