@@ -6,7 +6,9 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from .mcp_server import (
+from .retrieval import rank_notes, tokenize
+
+from .presentation import (
     issue_to_dict,
     json_safe,
     note_summary,
@@ -20,21 +22,24 @@ from .vault import (
     ContextPackage,
     ContextLineageSummary,
     ContextSelection,
+    FRESHNESS_POLICIES,
     LIFECYCLE_STAGES,
     REVIEW_STATES,
     SOURCE_BUNDLE_SCHEMA_KIND,
+    STATUSES,
     TYPES,
     Vault,
     approve_review,
+    atomic_write_text,
     build_context,
     compose_context,
     context_lifecycle_exclusion_kind,
     extract_evidence,
-    filter_knowledge_by_scope,
     import_source_bundle,
     ingest_sources,
     init_vault,
     mark_memory_stale,
+    migrate_vault,
     promote_synthesis,
     propose_claim,
     renew_review,
@@ -72,6 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="Write structured JSON")
     doctor.set_defaults(func=cmd_vault_doctor)
 
+    migrate = vault_commands.add_parser("migrate", help="Migrate a legacy vault to the current contract")
+    migrate.add_argument("path", type=Path)
+    migrate.add_argument("--dry-run", action="store_true", help="Report changes without writing them")
+    migrate.add_argument("--no-backup", action="store_true", help="Do not create an adjacent backup copy")
+    migrate.add_argument("--json", action="store_true", help="Write structured JSON")
+    migrate.set_defaults(func=cmd_vault_migrate)
+
     ingest = subcommands.add_parser("ingest", help="Ingest source material")
     ingest_commands = ingest.add_subparsers(dest="ingest_command", required=True)
     source = ingest_commands.add_parser("source", help="Copy a raw source and create a source note")
@@ -104,6 +116,18 @@ def build_parser() -> argparse.ArgumentParser:
     bundle.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
     bundle.add_argument("--json", action="store_true", help="Write structured JSON")
     bundle.set_defaults(func=cmd_ingest_bundle)
+
+    search = subcommands.add_parser("search", help="Rank vault notes by lexical relevance")
+    search.add_argument("query", nargs="?", default="")
+    search.add_argument("--vault", type=Path, required=True)
+    search.add_argument("--type", dest="note_type", choices=sorted(TYPES), default=None)
+    search.add_argument("--stage", dest="lifecycle_stage", choices=sorted(LIFECYCLE_STAGES), default=None)
+    search.add_argument("--status", choices=sorted(STATUSES), default=None)
+    search.add_argument("--review-state", choices=sorted(REVIEW_STATES), default=None)
+    search.add_argument("--limit", type=int, default=20)
+    search.add_argument("--match", dest="match_mode", choices=("all", "any"), default="all")
+    search.add_argument("--json", action="store_true", help="Write structured JSON")
+    search.set_defaults(func=cmd_search)
 
     extract = subcommands.add_parser("extract", help="Extract lifecycle drafts")
     extract_commands = extract.add_subparsers(dest="extract_command", required=True)
@@ -161,8 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
     approve = review_commands.add_parser("approve", help="Approve a reviewable note and write an audit review")
     approve.add_argument("note")
     approve.add_argument("--vault", type=Path, required=True)
-    approve.add_argument("--reviewer", default="unknown")
-    approve.add_argument("--basis", default=None)
+    approve.add_argument("--reviewer", required=True)
+    approve.add_argument("--basis", required=True)
     approve.add_argument("--title", default=None)
     approve.add_argument("--slug", default=None)
     approve.add_argument("--next-review", default=None)
@@ -172,9 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
     request_changes = review_commands.add_parser("request-changes", help="Request changes and write an audit review")
     request_changes.add_argument("note")
     request_changes.add_argument("--vault", type=Path, required=True)
-    request_changes.add_argument("--reviewer", default="unknown")
-    request_changes.add_argument("--basis", default=None)
-    request_changes.add_argument("--changes-requested", default=None)
+    request_changes.add_argument("--reviewer", required=True)
+    request_changes.add_argument("--basis", required=True)
+    request_changes.add_argument("--changes-requested", required=True)
     request_changes.add_argument("--title", default=None)
     request_changes.add_argument("--slug", default=None)
     request_changes.add_argument("--json", action="store_true", help="Write structured JSON")
@@ -183,8 +207,8 @@ def build_parser() -> argparse.ArgumentParser:
     renew = review_commands.add_parser("renew", help="Record a scheduled review audit and reschedule a note")
     renew.add_argument("note")
     renew.add_argument("--vault", type=Path, required=True)
-    renew.add_argument("--reviewer", default="unknown")
-    renew.add_argument("--basis", default=None)
+    renew.add_argument("--reviewer", required=True)
+    renew.add_argument("--basis", required=True)
     renew.add_argument("--title", default=None)
     renew.add_argument("--slug", default=None)
     renew.add_argument("--next-review", required=True)
@@ -228,6 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     build.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
     build.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    build.add_argument("--as-of", default=None, help="Evaluate freshness on this YYYY-MM-DD date")
+    build.add_argument("--freshness-policy", choices=sorted(FRESHNESS_POLICIES), default="balanced")
     build.add_argument("--output", type=Path, default=None)
     build.add_argument("--json", action="store_true", help="Write structured JSON")
     build.set_defaults(func=cmd_context_build)
@@ -239,6 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     explain.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
     explain.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    explain.add_argument("--as-of", default=None, help="Evaluate freshness on this YYYY-MM-DD date")
+    explain.add_argument("--freshness-policy", choices=sorted(FRESHNESS_POLICIES), default="balanced")
     explain.add_argument("--json", action="store_true", help="Write structured JSON")
     explain.set_defaults(func=cmd_context_explain)
 
@@ -249,6 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
     write.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     write.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
     write.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    write.add_argument("--as-of", default=None, help="Evaluate freshness on this YYYY-MM-DD date")
+    write.add_argument("--freshness-policy", choices=sorted(FRESHNESS_POLICIES), default="balanced")
     write.add_argument("--title", default=None)
     write.add_argument("--slug", default=None)
     write.add_argument("--next-review", default=None)
@@ -317,6 +347,46 @@ def cmd_vault_doctor(args: argparse.Namespace) -> int:
             print(f"ERROR {issue.format(doctor.root)}", file=sys.stderr)
         return 1
     print("issues: 0")
+    return 0
+
+
+def cmd_vault_migrate(args: argparse.Namespace) -> int:
+    try:
+        migration = migrate_vault(
+            args.path,
+            dry_run=args.dry_run,
+            backup=not args.no_backup,
+        )
+    except ValueError as exc:
+        payload = {
+            "ok": False,
+            "vault_path": str(Path(args.path).expanduser().resolve()),
+            "error": str(exc),
+        }
+        if args.json:
+            write_json(payload)
+        else:
+            print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+
+    payload = {
+        "ok": True,
+        "vault_path": str(migration.root),
+        "from_version": migration.from_version,
+        "to_version": migration.to_version,
+        "dry_run": migration.dry_run,
+        "changed_count": len(migration.changed_paths),
+        "changed_paths": [path.relative_to(migration.root).as_posix() for path in migration.changed_paths],
+        "backup_path": str(migration.backup_path) if migration.backup_path else None,
+    }
+    if args.json:
+        write_json(payload)
+    else:
+        action = "would migrate" if migration.dry_run else "migrated"
+        print(f"{action} {migration.root} from v{migration.from_version} to v{migration.to_version}")
+        print(f"changed: {len(migration.changed_paths)}")
+        if migration.backup_path:
+            print(f"backup: {migration.backup_path}")
     return 0
 
 
@@ -472,6 +542,57 @@ def source_bundle_import_payload(imported: Any, vault_path: Path | str) -> dict[
         "skipped_count": sum(1 for result in imported.results if result.status == "skipped"),
         "results": [source_capture_result_payload(result) for result in imported.results],
     }
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    vault = Vault.load(args.vault)
+    issues = vault.validate()
+    if issues:
+        if args.json:
+            write_json(validation_error_payload(vault, issues))
+        else:
+            for issue in issues:
+                print(f"ERROR {issue.format(vault.root)}", file=sys.stderr)
+        return 1
+    candidates = [
+        note
+        for note in vault.notes
+        if (args.note_type is None or note.type == args.note_type)
+        and (args.lifecycle_stage is None or note.lifecycle_stage == args.lifecycle_stage)
+        and (args.status is None or note.status == args.status)
+        and (args.review_state is None or note.review_state == args.review_state)
+    ]
+    hits = rank_notes(candidates, args.query)
+    query_term_count = len(set(tokenize(args.query)))
+    if args.match_mode == "all" and query_term_count:
+        hits = [hit for hit in hits if len(hit.matched_terms) == query_term_count]
+    limit = max(1, min(args.limit, 100))
+    payloads: list[dict[str, Any]] = []
+    for hit in hits[:limit]:
+        payload = note_summary(hit.note, vault.root)
+        payload["relevance_score"] = hit.score
+        payload["matched_terms"] = list(hit.matched_terms)
+        payloads.append(payload)
+    if args.json:
+        write_json(
+            {
+                "ok": True,
+                "vault_path": str(vault.root),
+                "query": args.query,
+                "ranking": "field-aware-bm25-v1",
+                "match_mode": args.match_mode,
+                "count": len(payloads),
+                "total_matches": len(hits),
+                "notes": payloads,
+            }
+        )
+        return 0
+    for payload in payloads:
+        print(
+            f"{payload['relevance_score']:.6f}\t{payload['noesis_id']}\t"
+            f"{payload['type']}\t{payload['title']}"
+        )
+    return 0
 
 
 def cmd_extract_evidence(args: argparse.Namespace) -> int:
@@ -922,6 +1043,8 @@ def cmd_context_build(args: argparse.Namespace) -> int:
                 limit=args.limit,
                 max_chars=args.max_chars,
                 profile=args.profile,
+                as_of=args.as_of,
+                freshness_policy=args.freshness_policy,
             )
         except ValueError as exc:
             write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
@@ -929,7 +1052,7 @@ def cmd_context_build(args: argparse.Namespace) -> int:
         content = package.content
         output_path = None
         if args.output:
-            args.output.write_text(content, encoding="utf-8")
+            atomic_write_text(args.output, content)
             output_path = str(args.output)
         write_json(
             {
@@ -939,6 +1062,9 @@ def cmd_context_build(args: argparse.Namespace) -> int:
                 "purpose": package.purpose,
                 "profile": package.profile,
                 "profile_description": package.profile_description,
+                "as_of": package.as_of,
+                "freshness_policy": package.freshness_policy,
+                "input_hashes": list(package.input_hashes),
                 "limit": package.limit,
                 "max_chars": package.max_chars,
                 "requested_limit": package.requested_limit,
@@ -967,12 +1093,14 @@ def cmd_context_build(args: argparse.Namespace) -> int:
             limit=args.limit,
             max_chars=args.max_chars,
             profile=args.profile,
+            as_of=args.as_of,
+            freshness_policy=args.freshness_policy,
         )
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
     if args.output:
-        args.output.write_text(content, encoding="utf-8")
+        atomic_write_text(args.output, content)
         print(f"wrote {args.output}")
     else:
         print(content, end="")
@@ -994,6 +1122,8 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
                 limit=args.limit,
                 max_chars=args.max_chars,
                 profile=args.profile,
+                as_of=args.as_of,
+                freshness_policy=args.freshness_policy,
             )
         except ValueError as exc:
             write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
@@ -1006,6 +1136,9 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
                 "purpose": package.purpose,
                 "profile": package.profile,
                 "profile_description": package.profile_description,
+                "as_of": package.as_of,
+                "freshness_policy": package.freshness_policy,
+                "input_hashes": list(package.input_hashes),
                 "limit": package.limit,
                 "max_chars": package.max_chars,
                 "requested_limit": package.requested_limit,
@@ -1031,6 +1164,8 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
             limit=args.limit,
             max_chars=args.max_chars,
             profile=args.profile,
+            as_of=args.as_of,
+            freshness_policy=args.freshness_policy,
         )
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
@@ -1048,6 +1183,8 @@ def cmd_context_write(args: argparse.Namespace) -> int:
             limit=args.limit,
             max_chars=args.max_chars,
             profile=args.profile,
+            as_of=args.as_of,
+            freshness_policy=args.freshness_policy,
             title=args.title,
             slug=args.slug,
             next_review=args.next_review,
@@ -1065,6 +1202,9 @@ def context_package_selection_payload(package: ContextPackage, vault_root: Path)
         "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
         "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
         "budgeted_out": [context_selection_payload(selection, vault_root) for selection in package.budgeted_out],
+        "freshness_excluded": [
+            context_selection_payload(selection, vault_root) for selection in package.freshness_excluded
+        ],
         "lifecycle_excluded": [
             context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
         ],
@@ -1080,6 +1220,9 @@ def context_selection_payload(selection: ContextSelection, vault_root: Path) -> 
             "selection_reason": selection.reason,
             "scope_score": selection.score,
             "content_chars": selection.content_chars,
+            "freshness_state": selection.freshness_state,
+            "review_due_on": selection.review_due_on,
+            "valid_until": selection.valid_until,
             "lifecycle_exclusion_kind": (
                 context_lifecycle_exclusion_kind(selection.note)
                 if selection.status == "lifecycle_excluded"
@@ -1132,11 +1275,17 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> dict[s
         "budgeted_out_reviewed_knowledge": [
             context_selection_payload(selection, vault_root) for selection in package.budgeted_out
         ],
+        "freshness_excluded_reviewed_knowledge": [
+            context_selection_payload(selection, vault_root) for selection in package.freshness_excluded
+        ],
         "selection_provenance": {
             "included": [context_selection_payload(selection, vault_root) for selection in package.included],
             "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
             "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
             "budgeted_out": [context_selection_payload(selection, vault_root) for selection in package.budgeted_out],
+            "freshness_excluded": [
+                context_selection_payload(selection, vault_root) for selection in package.freshness_excluded
+            ],
         },
         "lineage_summaries": context_lineage_summary_payloads(package, vault_root),
         "lifecycle_exclusions": {
@@ -1155,6 +1304,7 @@ def render_context_explanation(package: ContextPackage, vault_root: Path) -> str
         lines.extend([f"Scope: {package.scope}", ""])
     if package.purpose:
         lines.extend([f"Purpose: {package.purpose}", ""])
+    lines.extend([f"As of: {package.as_of}", f"Freshness policy: {package.freshness_policy}", ""])
     if package.profile:
         lines.extend([f"Profile: {package.profile}", f"Profile defaults: {package.profile_description}", ""])
     if package.applied_profile_defaults:
@@ -1177,6 +1327,7 @@ def render_context_explanation(package: ContextPackage, vault_root: Path) -> str
             f"- Included in active context: {len(package.included)}",
             f"- Scoped out: {len(package.scoped_out)}",
             f"- Budgeted out: {len(package.budgeted_out)}",
+            f"- Freshness excluded: {len(package.freshness_excluded)}",
             f"- Lifecycle-excluded background notes: {len(package.lifecycle_excluded)}",
             "",
             "## Included Active Guidance",
@@ -1210,6 +1361,13 @@ def render_context_explanation(package: ContextPackage, vault_root: Path) -> str
     else:
         lines.append("No current reviewed knowledge was budgeted out.")
 
+    lines.extend(["", "## Freshness Excluded", ""])
+    if package.freshness_excluded:
+        for selection in package.freshness_excluded:
+            lines.append(format_selection_line(selection, vault_root))
+    else:
+        lines.append("No reviewed knowledge was excluded by freshness.")
+
     lines.extend(["", "## Lifecycle-Excluded Background", ""])
     summary = lifecycle_exclusion_summary(package.lifecycle_excluded)
     lines.append(
@@ -1235,7 +1393,7 @@ def format_selection_line(selection: ContextSelection, vault_root: Path) -> str:
     except ValueError:
         rel_path = selection.note.rel_path.as_posix()
     return (
-        f"- {selection.note.noesis_id} ({selection.status}, score={selection.score}, "
+        f"- {selection.note.noesis_id} ({selection.status}, freshness={selection.freshness_state}, score={selection.score}, "
         f"chars={selection.content_chars}) - {selection.reason}; path: {rel_path}"
     )
 

@@ -16,6 +16,11 @@ reviewed_knowledge:
   - "[[reviewed-knowledge-noesis-roadmap-phase-orchestration]]"
 excluded_memory:
   - "[[stale-noesis-roadmap-plugin-first]]"
+freshness_excluded: []
+as_of: 2026-06-15
+freshness_policy: balanced
+input_hashes:
+  - "reviewed-knowledge-noesis-roadmap-phase-orchestration=sha256:cdaf20af3d615b8e92f6c7f1f80da7908def9cfdac310706ac6a380fb1fa5bea"
 next_review: 2026-07-15
 tags:
   - noesis

@@ -51,7 +51,7 @@ class NoesisCliTests(unittest.TestCase):
         self.assertGreater(payload["note_count"], 0)
         self.assertEqual(payload["issue_count"], 0)
         self.assertEqual(payload["issues"], [])
-        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["contract"]["version"], "2")
         self.assertEqual(payload["compatible"], True)
         self.assertEqual(payload["complete"], True)
         self.assertEqual(payload["ready_for_cli_mcp"], True)
@@ -78,7 +78,7 @@ class NoesisCliTests(unittest.TestCase):
         self.assertEqual(payload["complete"], True)
         self.assertEqual(payload["ready_for_cli_mcp"], True)
         self.assertEqual(payload["contract"]["present"], True)
-        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["contract"]["version"], "2")
         self.assertEqual(payload["issue_count"], 0)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,7 +91,7 @@ class NoesisCliTests(unittest.TestCase):
             legacy_payload = parse_json_stdout(legacy)
             self.assertEqual(legacy_payload["compatible"], False)
             self.assertEqual(legacy_payload["ready_for_cli_mcp"], False)
-            self.assertIn("missing Noesis V1 contract metadata", legacy_payload["issues"][0]["message"])
+            self.assertIn("missing Noesis V2 contract metadata", legacy_payload["issues"][0]["message"])
 
         with tempfile.TemporaryDirectory() as tmp:
             file_vault = Path(tmp) / "not-a-vault.md"
@@ -110,8 +110,8 @@ class NoesisCliTests(unittest.TestCase):
             contract_path = future_vault / "noesis.vault.yaml"
             contract_path.write_text(
                 contract_path.read_text(encoding="utf-8").replace(
-                    'requires_noesis: ">=0.1.0"',
                     'requires_noesis: ">=0.2.0"',
+                    'requires_noesis: ">=0.3.0"',
                 ),
                 encoding="utf-8",
             )
@@ -129,7 +129,7 @@ class NoesisCliTests(unittest.TestCase):
             contract_path = incomplete_vault / "noesis.vault.yaml"
             contract_path.write_text(
                 contract_path.read_text(encoding="utf-8").replace(
-                    'requires_noesis: ">=0.1.0"\n',
+                    'requires_noesis: ">=0.2.0"\n',
                     "",
                 ),
                 encoding="utf-8",
@@ -250,6 +250,10 @@ class NoesisCliTests(unittest.TestCase):
                 "claim-useful-memory-requires-lifecycle",
                 "--vault",
                 str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "The claim needs clarification before reuse.",
                 "--changes-requested",
                 "Clarify the claim before it supports reviewed knowledge.",
                 "--slug",
@@ -405,6 +409,10 @@ class NoesisCliTests(unittest.TestCase):
             "source-noesis-readme",
             "--vault",
             str(EXAMPLE_VAULT),
+            "--reviewer",
+            "test-human",
+            "--basis",
+            "Invalid scheduling input should be rejected.",
             "--next-review",
             "not-a-date",
             "--json",
@@ -562,7 +570,7 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(empty_payload["ok"], False)
             self.assertEqual(empty_payload["error"], "due_on must be YYYY-MM-DD")
 
-    def test_review_workbench_treats_impossible_metadata_dates_as_unscheduled(self) -> None:
+    def test_validator_rejects_impossible_metadata_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             shutil.copytree(EXAMPLE_VAULT, vault_path)
@@ -576,45 +584,8 @@ class NoesisCliTests(unittest.TestCase):
             )
 
             validate = run_noesis("vault", "validate", str(vault_path))
-            self.assertEqual(validate.returncode, 0, validate.stderr)
-
-            queue = run_noesis("review", "queue", "--vault", str(vault_path), "--json")
-            self.assertEqual(queue.returncode, 0, queue.stderr)
-            queue_payload = parse_json_stdout(queue)
-            self.assertIn(
-                "stale-custom-plugin-first",
-                [note["noesis_id"] for note in queue_payload["notes"]],
-            )
-
-            summary = run_noesis(
-                "review",
-                "summary",
-                "--vault",
-                str(vault_path),
-                "--due-on",
-                "2026-06-13",
-                "--json",
-            )
-            self.assertEqual(summary.returncode, 0, summary.stderr)
-            summary_payload = parse_json_stdout(summary)
-            self.assertNotIn(
-                "stale-custom-plugin-first",
-                [note["noesis_id"] for note in summary_payload["due_notes"]],
-            )
-
-            show = run_noesis(
-                "review",
-                "show",
-                "stale-custom-plugin-first",
-                "--vault",
-                str(vault_path),
-                "--due-on",
-                "2026-06-13",
-                "--json",
-            )
-            self.assertEqual(show.returncode, 0, show.stderr)
-            show_payload = parse_json_stdout(show)
-            self.assertEqual(show_payload["review_due"], False)
+            self.assertNotEqual(validate.returncode, 0)
+            self.assertIn("next_review must be a date or date-like string", validate.stderr)
 
     def test_review_workbench_normalizes_metadata_datetimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2012,6 +1983,10 @@ This archived note is provenance, not active guidance.
                 "evidence-review-evidence",
                 "--vault",
                 str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "The evidence still contains placeholder text.",
                 "--changes-requested",
                 "Replace placeholder evidence with source-backed text.",
                 "--slug",
@@ -2035,6 +2010,10 @@ This archived note is provenance, not active guidance.
                 "claim-useful-memory-requires-lifecycle",
                 "--vault",
                 str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "The claim no longer safely supports active knowledge.",
                 "--changes-requested",
                 "Revise this claim before it can support reviewed knowledge.",
                 "--slug",
@@ -2111,6 +2090,8 @@ This archived note is provenance, not active guidance.
                     "source-unapproved-source",
                     "--title",
                     "Unapproved Evidence",
+                    "--evidence",
+                    "The source records an unapproved promotion scenario.",
                     "--slug",
                     "unapproved-evidence",
                 ).returncode,
@@ -2123,6 +2104,10 @@ This archived note is provenance, not active guidance.
                     "evidence-unapproved-evidence",
                     "--vault",
                     str(vault_path),
+                    "--reviewer",
+                    "test-human",
+                    "--basis",
+                    "Evidence is approved for this test setup.",
                     "--slug",
                     "unapproved-evidence",
                 ).returncode,
@@ -2138,6 +2123,8 @@ This archived note is provenance, not active guidance.
                     "evidence-unapproved-evidence",
                     "--title",
                     "Unapproved Claim",
+                    "--claim",
+                    "The unapproved synthesis must not be promoted.",
                     "--slug",
                     "unapproved-claim",
                 ).returncode,
@@ -2150,6 +2137,10 @@ This archived note is provenance, not active guidance.
                     "claim-unapproved-claim",
                     "--vault",
                     str(vault_path),
+                    "--reviewer",
+                    "test-human",
+                    "--basis",
+                    "Claim is approved for this test setup.",
                     "--slug",
                     "unapproved-claim",
                 ).returncode,
@@ -2215,6 +2206,10 @@ aliases: []
 ---
 
 # Review Ungrounded Synthesis
+
+## Basis
+
+This deliberately malformed synthesis must be rejected by contract validation.
 """,
                 encoding="utf-8",
             )
@@ -2246,7 +2241,8 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 encoding="utf-8",
             )
             validate_before_promote = run_noesis("vault", "validate", str(vault_path))
-            self.assertEqual(validate_before_promote.returncode, 0, validate_before_promote.stderr)
+            self.assertNotEqual(validate_before_promote.returncode, 0)
+            self.assertIn("synthesis requires at least one valid sources relationship", validate_before_promote.stderr)
 
             promote = run_noesis(
                 "knowledge",
@@ -2259,7 +2255,7 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 "Should Not Promote",
             )
             self.assertNotEqual(promote.returncode, 0)
-            self.assertIn("synthesis must preserve source, evidence, and claim lineage", promote.stderr)
+            self.assertIn("vault validation failed before write", promote.stderr)
             self.assertEqual(list((vault_path / "knowledge").glob("reviewed-knowledge-should-not-promote*.md")), [])
 
     def test_review_approve_rejects_stale_memory(self) -> None:
@@ -2286,6 +2282,10 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 "reviewed-knowledge-noesis-lifecycle",
                 "--vault",
                 str(vault_path),
+                "--reviewer",
+                "test-human",
+                "--basis",
+                "Stale knowledge must remain excluded.",
                 "--slug",
                 "stale-knowledge-approval",
             )
@@ -2304,6 +2304,8 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 "stale-custom-plugin-first",
                 "--vault",
                 str(vault_path),
+                "--reviewer",
+                "test-human",
                 "--basis",
                 "Stale-memory audit is still valid.",
                 "--slug",
@@ -2451,6 +2453,10 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                     "claim-draft-evidence-claim",
                     "--vault",
                     str(vault_path),
+                    "--reviewer",
+                    "test-human",
+                    "--basis",
+                    "Claim is approved only to test the downstream evidence gate.",
                     "--slug",
                     "draft-evidence-claim",
                 ).returncode,
@@ -2465,6 +2471,8 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                     "claim-draft-evidence-claim",
                     "--title",
                     "Synthesis On Draft Evidence",
+                    "--synthesis",
+                    "This synthesis remains blocked because its supporting evidence is unreviewed.",
                     "--slug",
                     "draft-evidence-synthesis",
                 ).returncode,
@@ -2477,6 +2485,10 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                     "synthesis-draft-evidence-synthesis",
                     "--vault",
                     str(vault_path),
+                    "--reviewer",
+                    "test-human",
+                    "--basis",
+                    "Synthesis is approved only to test the downstream evidence gate.",
                     "--slug",
                     "draft-evidence-synthesis",
                 ).returncode,
@@ -2805,7 +2817,8 @@ This legacy evidence note does not link to a source.
                 encoding="utf-8",
             )
             validate_before_claim = run_noesis("vault", "validate", str(vault_path))
-            self.assertEqual(validate_before_claim.returncode, 0, validate_before_claim.stderr)
+            self.assertNotEqual(validate_before_claim.returncode, 0)
+            self.assertIn("evidence requires at least one valid sources relationship", validate_before_claim.stderr)
 
             claim = run_noesis(
                 "propose",
@@ -2818,11 +2831,11 @@ This legacy evidence note does not link to a source.
                 "Ungrounded Claim",
             )
             self.assertNotEqual(claim.returncode, 0)
-            self.assertIn("claim evidence must link to at least one source note", claim.stderr)
+            self.assertIn("vault validation failed before write", claim.stderr)
             self.assertEqual(list((vault_path / "claims").glob("claim-*.md")), [])
 
             validate = run_noesis("vault", "validate", str(vault_path))
-            self.assertEqual(validate.returncode, 0, validate.stderr)
+            self.assertNotEqual(validate.returncode, 0)
 
     def test_review_queue_lists_stale_ready_note(self) -> None:
         result = run_noesis("review", "queue", "--vault", str(EXAMPLE_VAULT))
@@ -2936,6 +2949,16 @@ confidence: high
 created: 2026-05-29
 updated: 2026-05-29
 reviewed_at: 2026-05-29
+sources:
+  - "[[source-noesis-readme]]"
+evidence:
+  - "[[evidence-memory-lifecycle]]"
+claims:
+  - "[[claim-useful-memory-requires-lifecycle]]"
+syntheses:
+  - "[[synthesis-local-first-lifecycle-interface]]"
+reviewed_by:
+  - "[[review-local-first-lifecycle]]"
 tags:
   - other-topic
 aliases: []

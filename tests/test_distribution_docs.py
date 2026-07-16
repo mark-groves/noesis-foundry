@@ -82,7 +82,7 @@ class DistributionDocsTests(unittest.TestCase):
         script = (ROOT / "scripts" / "smoke-install.sh").read_text(encoding="utf-8")
 
         required_snippets = [
-            'python" -m pip install -e "$ROOT"',
+            'python" -m pip install -e "$ROOT[mcp]"',
             'rm -rf "$SMOKE_VAULT"',
             'cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"',
             "unset PYTHONPATH",

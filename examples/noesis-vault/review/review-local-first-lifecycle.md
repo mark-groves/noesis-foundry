@@ -11,6 +11,7 @@ updated: 2026-05-29
 reviewer: example-human
 reviewed_at: 2026-05-29
 reviewed_notes:
+  - "[[evidence-memory-lifecycle]]"
   - "[[claim-useful-memory-requires-lifecycle]]"
   - "[[synthesis-local-first-lifecycle-interface]]"
 decision: approved
@@ -42,4 +43,3 @@ None for the prototype.
 
 Revisit after the first CLI can initialize a vault, ingest a source, and build
 an operational context package.
-

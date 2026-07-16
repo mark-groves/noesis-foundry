@@ -55,6 +55,28 @@ def fake_fastmcp_modules() -> dict[str, types.ModuleType]:
 
 
 class NoesisMcpHandlerTests(unittest.TestCase):
+    def test_mcp_restricts_vault_roots_and_redacts_host_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault_path = root / "vault"
+            other_vault = root / "other-vault"
+            init_vault(vault_path)
+            init_vault(other_vault)
+            source_file = root / "private-source.txt"
+            source_file.write_text("private local source", encoding="utf-8")
+            handlers = NoesisMcpHandlers(vault_path)
+
+            with self.assertRaisesRegex(ValueError, "outside configured MCP roots"):
+                handlers.lint_vault(str(other_vault))
+
+            ingested = handlers.ingest_source(str(source_file), "Private Source")
+            self.assertTrue(ingested["ok"], ingested)
+            self.assertEqual(ingested["created"]["path"], "sources/source-private-source.md")
+            fetched = handlers.get_note("source-private-source")
+            self.assertTrue(fetched["ok"], fetched)
+            self.assertNotIn("absolute_path", fetched["note"])
+            self.assertEqual(fetched["note"]["metadata"]["original_path"], "<local>/private-source.txt")
+
     def test_create_server_registers_expected_mcp_surface(self) -> None:
         # FastMCP does not expose a stable public introspection API across all
         # installed versions, so this smoke test records Noesis' registration
@@ -106,7 +128,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(lint["ok"], lint)
         self.assertEqual(lint["issue_count"], 0)
         self.assertGreater(lint["note_count"], 0)
-        self.assertEqual(lint["contract"]["version"], "1")
+        self.assertEqual(lint["contract"]["version"], "2")
         self.assertEqual(lint["compatible"], True)
         self.assertEqual(lint["complete"], True)
         self.assertEqual(lint["ready_for_cli_mcp"], True)
@@ -330,12 +352,15 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             requested = handlers.request_review_changes(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The claim needs clarification before reuse.",
                 changes_requested="Clarify before approval.",
                 slug="claim-needs-clarification",
             )
             self.assertTrue(requested["ok"], requested)
             approved = handlers.approve_review(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
                 basis="Clarification is complete.",
                 slug="claim-clarification-approved",
             )
@@ -362,6 +387,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             requested_again = handlers.request_review_changes(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The follow-up review found another ambiguity.",
                 changes_requested="Clarify the follow-up cycle.",
                 slug="claim-needs-follow-up-clarification",
             )
@@ -382,6 +409,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             requested = handlers.request_review_changes(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="Active knowledge must not depend on a disputed claim.",
                 changes_requested="Revise this claim before reuse.",
                 slug="claim-propagates-review-changes",
             )
@@ -396,7 +425,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertIsNone(workbench["changes_requested"][0]["review"])
             self.assertEqual(workbench["changes_requested_history"], [])
 
-    def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
+    def test_lint_rejects_impossible_metadata_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             shutil.copytree(EXAMPLE_VAULT, vault_path)
@@ -411,25 +440,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             handlers = NoesisMcpHandlers(vault_path)
 
             lint = handlers.lint_vault()
-            self.assertTrue(lint["ok"], lint)
-
-            queue = handlers.get_review_queue()
-            self.assertTrue(queue["ok"], queue)
-            self.assertIn(
-                "stale-custom-plugin-first",
-                [note["noesis_id"] for note in queue["notes"]],
-            )
-
-            summary = handlers.get_review_summary(due_on="2026-06-13")
-            self.assertTrue(summary["ok"], summary)
-            self.assertNotIn(
-                "stale-custom-plugin-first",
-                [note["noesis_id"] for note in summary["due_notes"]],
-            )
-
-            workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
-            self.assertTrue(workbench["ok"], workbench)
-            self.assertEqual(workbench["review_due"], False)
+            self.assertFalse(lint["ok"], lint)
+            self.assertIn("next_review must be a date or date-like string", lint["issues"][0]["message"])
 
     def test_review_handlers_normalize_metadata_datetimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -475,6 +487,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             first = handlers.renew_review(
                 "context-first-cli-mcp-workflow",
                 next_review="2026-07-01",
+                reviewer="test-agent",
+                basis="The first scheduled review confirms current context.",
                 title="ZZZ Older Renewal",
                 slug="older-renewal",
             )
@@ -482,6 +496,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             second = handlers.renew_review(
                 "context-first-cli-mcp-workflow",
                 next_review="2026-08-01",
+                reviewer="test-agent",
+                basis="The second scheduled review confirms current context.",
                 title="AAA Newer Renewal",
                 slug="newer-renewal",
             )
@@ -509,7 +525,12 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             shutil.copytree(EXAMPLE_VAULT, vault_path)
             handlers = NoesisMcpHandlers(vault_path)
 
-            linked = handlers.renew_review("context-first-cli-mcp-workflow", next_review="2026-07-01")
+            linked = handlers.renew_review(
+                "context-first-cli-mcp-workflow",
+                next_review="2026-07-01",
+                reviewer="test-agent",
+                basis="The linked scheduled review confirms current context.",
+            )
             self.assertTrue(linked["ok"], linked)
             (vault_path / "review" / "review-imported-later-audit.md").write_text(
                 """---

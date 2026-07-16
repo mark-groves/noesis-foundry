@@ -16,6 +16,11 @@ reviewed_knowledge:
   - "[[reviewed-knowledge-project-memory-corpus-continuation]]"
 excluded_memory:
   - "[[stale-project-memory-corpus-bulk-import-active-context]]"
+freshness_excluded: []
+as_of: 2026-06-18
+freshness_policy: balanced
+input_hashes:
+  - "reviewed-knowledge-project-memory-corpus-continuation=sha256:d2abde538021ef7203a845ba10a8628cce5c1319afea7e3a64d5ca79e42632ef"
 next_review: 2026-07-18
 tags:
   - noesis

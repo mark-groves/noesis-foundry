@@ -14,6 +14,13 @@ EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
 
 
 class ConsoleScriptSmokeTests(unittest.TestCase):
+    def test_core_cli_does_not_require_mcp_dependency(self) -> None:
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertFalse(any(dependency.startswith("mcp") for dependency in pyproject["project"]["dependencies"]))
+        self.assertTrue(any(dependency.startswith("mcp") for dependency in pyproject["project"]["optional-dependencies"]["mcp"]))
+        cli_source = (ROOT / "src" / "noesis" / "cli.py").read_text(encoding="utf-8")
+        self.assertNotIn("from .mcp_server import", cli_source)
+
     def test_pyproject_console_script_targets_start(self) -> None:
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = pyproject["project"]["scripts"]
@@ -25,7 +32,7 @@ class ConsoleScriptSmokeTests(unittest.TestCase):
         self.assertEqual(noesis_result.returncode, 0, noesis_result.stderr)
         payload = json.loads(noesis_result.stdout)
         self.assertEqual(payload["ready_for_cli_mcp"], True)
-        self.assertEqual(payload["contract"]["version"], "1")
+        self.assertEqual(payload["contract"]["version"], "2")
 
         noesis_mcp = load_script_target(scripts["noesis-mcp"])
         mcp_help = call_script(noesis_mcp, ["--help"])

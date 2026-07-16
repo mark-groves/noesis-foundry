@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-from datetime import date, datetime
-import json
 from pathlib import Path
-import re
 from typing import Any
+
+from .retrieval import rank_notes, tokenize
+from .presentation import (
+    issue_to_dict,
+    json_safe,
+    note_summary,
+    note_to_dict,
+    review_filters,
+    review_note_summary,
+    review_summary_to_dict,
+    review_workbench_to_dict,
+)
 
 from .vault import (
     ContextLineageSummary,
@@ -25,14 +34,9 @@ from .vault import (
     extract_evidence,
     import_source_bundle,
     ingest_source,
-    is_excluded,
     mark_memory_stale,
-    note_review_due,
-    parse_review_date,
     promote_synthesis,
     propose_claim,
-    review_cutoff_date,
-    review_requires_audit,
     renew_review,
     request_review_changes,
     synthesize_claims,
@@ -44,8 +48,19 @@ JsonObject = dict[str, Any]
 
 
 class NoesisMcpHandlers:
-    def __init__(self, default_vault: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        default_vault: Path | str | None = None,
+        *,
+        allowed_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
+    ) -> None:
         self.default_vault = Path(default_vault).expanduser().resolve() if default_vault else None
+        if allowed_roots is None:
+            self.allowed_roots = (self.default_vault,) if self.default_vault is not None else ()
+        else:
+            self.allowed_roots = tuple(Path(root).expanduser().resolve() for root in allowed_roots)
+        if self.default_vault is not None:
+            self.ensure_allowed_vault(self.default_vault)
 
     def lint_vault(self, vault_path: str | None = None) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
@@ -72,10 +87,10 @@ class NoesisMcpHandlers:
         status: str | None = None,
         review_state: str | None = None,
         limit: int = 20,
+        match_mode: str = "all",
     ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
-        needle = query.casefold().strip()
-        matches: list[Note] = []
+        candidates: list[Note] = []
         for note in vault.notes:
             if note_type and note.type != note_type:
                 continue
@@ -85,26 +100,28 @@ class NoesisMcpHandlers:
                 continue
             if review_state and note.review_state != review_state:
                 continue
-            haystack = "\n".join(
-                [
-                    note.noesis_id,
-                    note.title,
-                    note.rel_path.as_posix(),
-                    note.body,
-                    json.dumps(json_safe(note.metadata), sort_keys=True),
-                ]
-            ).casefold()
-            if needle and needle not in haystack:
-                continue
-            matches.append(note)
+            candidates.append(note)
+
+        hits = rank_notes(candidates, query)
+        if match_mode not in {"all", "any"}:
+            return {
+                "ok": False,
+                "error": "match_mode must be 'all' or 'any'",
+                "vault_path": str(vault.root),
+            }
+        query_term_count = len(set(tokenize(query)))
+        if match_mode == "all" and query_term_count:
+            hits = [hit for hit in hits if len(hit.matched_terms) == query_term_count]
 
         bounded_limit = max(1, min(limit, 100))
         return {
             "ok": True,
             "vault_path": str(vault.root),
-            "count": min(len(matches), bounded_limit),
-            "total_matches": len(matches),
-            "notes": [note_summary(note, vault.root) for note in matches[:bounded_limit]],
+            "count": min(len(hits), bounded_limit),
+            "total_matches": len(hits),
+            "ranking": "field-aware-bm25-v1",
+            "match_mode": match_mode,
+            "notes": [retrieval_hit_summary(hit, vault.root) for hit in hits[:bounded_limit]],
         }
 
     def get_note(self, note: str, vault_path: str | None = None) -> JsonObject:
@@ -201,6 +218,8 @@ class NoesisMcpHandlers:
         limit: int | None = None,
         max_chars: int | None = None,
         profile: str | None = None,
+        as_of: str | None = None,
+        freshness_policy: str = "balanced",
     ) -> JsonObject:
         vault = Vault.load(self.resolve_vault(vault_path))
         issues = vault.validate()
@@ -214,6 +233,8 @@ class NoesisMcpHandlers:
                 limit=limit,
                 max_chars=max_chars,
                 profile=profile,
+                as_of=as_of,
+                freshness_policy=freshness_policy,
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc), "vault_path": str(vault.root)}
@@ -224,6 +245,9 @@ class NoesisMcpHandlers:
             "purpose": package.purpose,
             "profile": package.profile,
             "profile_description": package.profile_description,
+            "as_of": package.as_of,
+            "freshness_policy": package.freshness_policy,
+            "input_hashes": list(package.input_hashes),
             "limit": package.limit,
             "max_chars": package.max_chars,
             "requested_limit": package.requested_limit,
@@ -442,6 +466,8 @@ class NoesisMcpHandlers:
         limit: int | None = None,
         max_chars: int | None = None,
         profile: str | None = None,
+        as_of: str | None = None,
+        freshness_policy: str = "balanced",
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -454,6 +480,8 @@ class NoesisMcpHandlers:
             limit=limit,
             max_chars=max_chars,
             profile=profile,
+            as_of=as_of,
+            freshness_policy=freshness_policy,
             title=title,
             slug=slug,
             next_review=next_review,
@@ -476,10 +504,25 @@ class NoesisMcpHandlers:
 
     def resolve_vault(self, vault_path: str | None) -> Path:
         if vault_path:
-            return Path(vault_path).expanduser().resolve()
-        if self.default_vault is not None:
-            return self.default_vault
-        raise ValueError("vault_path is required when the server was not started with a default vault")
+            resolved = Path(vault_path).expanduser().resolve()
+        elif self.default_vault is not None:
+            resolved = self.default_vault
+        else:
+            raise ValueError("vault_path is required when the server was not started with a default vault")
+        self.ensure_allowed_vault(resolved)
+        return resolved
+
+    def ensure_allowed_vault(self, path: Path) -> None:
+        if not self.allowed_roots:
+            return
+        for allowed_root in self.allowed_roots:
+            try:
+                path.relative_to(allowed_root)
+                return
+            except ValueError:
+                continue
+        roots = ", ".join(str(root) for root in self.allowed_roots)
+        raise ValueError(f"vault path is outside configured MCP roots: {path}; allowed roots: {roots}")
 
     def write_result(self, writer: Any, *args: Any, **kwargs: Any) -> JsonObject:
         vault_root = Path(args[0]).expanduser().resolve() if args else None
@@ -490,13 +533,20 @@ class NoesisMcpHandlers:
         return {"ok": True, "vault_path": str(vault_root), "created": created_note_to_dict(created, vault_root)}
 
 
-def create_server(default_vault: Path | str | None = None) -> Any:
+def create_server(
+    default_vault: Path | str | None = None,
+    *,
+    allowed_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
+) -> Any:
     try:
         from mcp.server.fastmcp import FastMCP
     except ModuleNotFoundError as exc:
-        raise RuntimeError("The Noesis MCP server requires the 'mcp' package. Install this project with MCP dependencies.") from exc
+        raise RuntimeError(
+            "The Noesis MCP server requires the optional 'mcp' package. "
+            "Install with: pip install 'noesis-foundry[mcp]'"
+        ) from exc
 
-    handlers = NoesisMcpHandlers(default_vault)
+    handlers = NoesisMcpHandlers(default_vault, allowed_roots=allowed_roots)
     server = FastMCP("Noesis Foundry", json_response=True)
 
     @server.tool()
@@ -513,6 +563,7 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         status: str | None = None,
         review_state: str | None = None,
         limit: int = 20,
+        match_mode: str = "all",
     ) -> JsonObject:
         """Search Noesis notes by text plus optional lifecycle metadata filters."""
         return handlers.search_notes(
@@ -523,6 +574,7 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             status=status,
             review_state=review_state,
             limit=limit,
+            match_mode=match_mode,
         )
 
     @server.tool()
@@ -572,6 +624,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         limit: int | None = None,
         max_chars: int | None = None,
         profile: str | None = None,
+        as_of: str | None = None,
+        freshness_policy: str = "balanced",
     ) -> JsonObject:
         """Build operational context from current reviewed knowledge only."""
         return handlers.build_context(
@@ -581,6 +635,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             limit=limit,
             max_chars=max_chars,
             profile=profile,
+            as_of=as_of,
+            freshness_policy=freshness_policy,
         )
 
     @server.tool()
@@ -659,9 +715,9 @@ def create_server(default_vault: Path | str | None = None) -> Any:
     @server.tool()
     def noesis_approve_review(
         note: str,
+        reviewer: str,
+        basis: str,
         vault_path: str | None = None,
-        reviewer: str = "unknown",
-        basis: str | None = None,
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -680,10 +736,10 @@ def create_server(default_vault: Path | str | None = None) -> Any:
     @server.tool()
     def noesis_request_review_changes(
         note: str,
+        reviewer: str,
+        basis: str,
+        changes_requested: str,
         vault_path: str | None = None,
-        reviewer: str = "unknown",
-        basis: str | None = None,
-        changes_requested: str | None = None,
         title: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
@@ -702,9 +758,9 @@ def create_server(default_vault: Path | str | None = None) -> Any:
     def noesis_renew_review(
         note: str,
         next_review: str,
+        reviewer: str,
+        basis: str,
         vault_path: str | None = None,
-        reviewer: str = "unknown",
-        basis: str | None = None,
         title: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
@@ -765,6 +821,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
         limit: int | None = None,
         max_chars: int | None = None,
         profile: str | None = None,
+        as_of: str | None = None,
+        freshness_policy: str = "balanced",
         title: str | None = None,
         slug: str | None = None,
         next_review: str | None = None,
@@ -777,6 +835,8 @@ def create_server(default_vault: Path | str | None = None) -> Any:
             limit=limit,
             max_chars=max_chars,
             profile=profile,
+            as_of=as_of,
+            freshness_policy=freshness_policy,
             title=title,
             slug=slug,
             next_review=next_review,
@@ -804,149 +864,24 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("examples/noesis-vault"),
         help="Default Noesis vault path for MCP resources and tools.",
     )
+    parser.add_argument(
+        "--allow-root",
+        action="append",
+        type=Path,
+        default=None,
+        help="Permit vault paths below this root; repeat for multiple roots (defaults to the configured vault only).",
+    )
     args = parser.parse_args(argv)
-    server = create_server(args.vault)
+    server = create_server(args.vault, allowed_roots=args.allow_root)
     server.run(transport="stdio")
     return 0
 
 
-def note_summary(note: Note, vault_root: Path) -> JsonObject:
-    return {
-        "noesis_id": note.noesis_id,
-        "title": note.title,
-        "path": note.rel_path.as_posix(),
-        "absolute_path": str(note.path),
-        "type": note.type,
-        "lifecycle_stage": note.lifecycle_stage,
-        "status": note.status,
-        "review_state": note.review_state,
-        "confidence": json_safe(note.metadata.get("confidence")),
-        "updated": json_safe(note.metadata.get("updated")),
-        "next_review": json_safe(note.metadata.get("next_review")),
-    }
-
-
-def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) -> JsonObject:
-    data = note_summary(note, vault.root)
-    audits = vault.review_audits_for(note)
-    change_request_history = review_change_request_history(vault, audits)
-    open_change_requests = open_review_changes(note, audits, change_request_history)
-    data["review_schedule"] = review_due_details(note, due_on=due_on)
-    data["audit"] = {
-        "count": len(audits),
-        "requires_audit": review_requires_audit(note),
-        "has_audit": bool(audits),
-        "latest_decision": json_safe(audits[-1].metadata.get("decision")) if audits else None,
-    }
-    data["requested_changes"] = {
-        "open": bool(open_change_requests),
-        "count": len(open_change_requests),
-        "history_count": len(change_request_history),
-    }
-    data["impact"] = review_impact_counts(vault, note)
-    data["lifecycle_safety"] = review_lifecycle_safety(note)
-    return data
-
-
-def review_due_details(note: Note, *, due_on: str | None = None) -> JsonObject:
-    cutoff = review_cutoff_date(due_on)
-    next_review = parse_review_date(note.metadata.get("next_review"))
-    due = next_review is not None and next_review <= cutoff
-    overdue = next_review is not None and next_review < cutoff
-    days_overdue = (cutoff - next_review).days if overdue and next_review is not None else 0
-    if next_review is None:
-        status = "unscheduled"
-    elif overdue:
-        status = "overdue"
-    elif due:
-        status = "due"
-    else:
-        status = "scheduled"
-    return {
-        "next_review": next_review.isoformat() if next_review else json_safe(note.metadata.get("next_review")),
-        "due_on": cutoff.isoformat(),
-        "due": due,
-        "overdue": overdue,
-        "days_overdue": days_overdue,
-        "status": status,
-    }
-
-
-def review_impact_counts(vault: Vault, note: Note) -> JsonObject:
-    return {
-        "dependent_reviewed_knowledge": len(vault.dependent_reviewed_knowledge_for(note)),
-        "dependent_contexts": len(vault.dependent_contexts_for(note)),
-    }
-
-
-def review_lifecycle_safety(note: Note) -> JsonObject:
-    excluded = is_excluded(note)
-    stale_memory = note.type == "stale-memory"
-    return {
-        "excluded_from_active_context": excluded,
-        "stale_or_superseded_memory": stale_memory and excluded,
-        "renewal_preserves_lifecycle": stale_memory and excluded,
-    }
-
-
-def review_change_request_history(vault: Vault, audits: list[Note]) -> list[JsonObject]:
-    return [
-        {
-            "review": note_summary(audit, vault.root),
-            "changes_requested": markdown_section(audit.body, "Changes Requested"),
-        }
-        for audit in audits
-        if audit.metadata.get("decision") == "changes-requested"
-    ]
-
-
-def open_review_changes(
-    note: Note,
-    audits: list[Note],
-    change_request_history: list[JsonObject],
-) -> list[JsonObject]:
-    latest_decision = audits[-1].metadata.get("decision") if audits else None
-    if note.review_state == "changes-requested" or latest_decision == "changes-requested":
-        if change_request_history:
-            return [change_request_history[-1]]
-        return [
-            {
-                "review": None,
-                "changes_requested": "Current note review_state is changes-requested without a direct change-request audit.",
-            }
-        ]
-    return []
-
-
-def review_triage(
-    note: Note,
-    *,
-    schedule: JsonObject,
-    audit_status: JsonObject,
-    changes_requested: list[JsonObject],
-    dependent_reviewed_knowledge: list[Note],
-    dependent_contexts: list[Note],
-) -> JsonObject:
-    if changes_requested:
-        action = "resolve-requested-changes"
-    elif not audit_status["ok"]:
-        action = "add-missing-review-audit"
-    elif schedule["overdue"]:
-        action = "review-overdue-note"
-    elif schedule["due"]:
-        action = "review-due-note"
-    elif dependent_reviewed_knowledge or dependent_contexts:
-        action = "inspect-downstream-impact-before-changing"
-    else:
-        action = "no-review-action"
-    return {
-        "status": schedule["status"],
-        "recommended_action": action,
-        "blocked_by_requested_changes": bool(changes_requested),
-        "audit_gap": not audit_status["ok"],
-        "downstream_impact_count": len(dependent_reviewed_knowledge) + len(dependent_contexts),
-        "renewal_preserves_lifecycle": review_lifecycle_safety(note)["renewal_preserves_lifecycle"],
-    }
+def retrieval_hit_summary(hit: Any, vault_root: Path) -> JsonObject:
+    payload = note_summary(hit.note, vault_root)
+    payload["relevance_score"] = hit.score
+    payload["matched_terms"] = list(hit.matched_terms)
+    return payload
 
 
 def context_package_selection_payload(package: ContextPackage, vault_root: Path) -> JsonObject:
@@ -955,6 +890,9 @@ def context_package_selection_payload(package: ContextPackage, vault_root: Path)
         "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
         "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
         "budgeted_out": [context_selection_payload(selection, vault_root) for selection in package.budgeted_out],
+        "freshness_excluded": [
+            context_selection_payload(selection, vault_root) for selection in package.freshness_excluded
+        ],
         "lifecycle_excluded": [
             context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded
         ],
@@ -970,6 +908,9 @@ def context_selection_payload(selection: ContextSelection, vault_root: Path) -> 
             "selection_reason": selection.reason,
             "scope_score": selection.score,
             "content_chars": selection.content_chars,
+            "freshness_state": selection.freshness_state,
+            "review_due_on": selection.review_due_on,
+            "valid_until": selection.valid_until,
             "lifecycle_exclusion_kind": (
                 context_lifecycle_exclusion_kind(selection.note)
                 if selection.status == "lifecycle_excluded"
@@ -1022,11 +963,17 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
         "budgeted_out_reviewed_knowledge": [
             context_selection_payload(selection, vault_root) for selection in package.budgeted_out
         ],
+        "freshness_excluded_reviewed_knowledge": [
+            context_selection_payload(selection, vault_root) for selection in package.freshness_excluded
+        ],
         "selection_provenance": {
             "included": [context_selection_payload(selection, vault_root) for selection in package.included],
             "excluded": [context_selection_payload(selection, vault_root) for selection in package.excluded],
             "scoped_out": [context_selection_payload(selection, vault_root) for selection in package.scoped_out],
             "budgeted_out": [context_selection_payload(selection, vault_root) for selection in package.budgeted_out],
+            "freshness_excluded": [
+                context_selection_payload(selection, vault_root) for selection in package.freshness_excluded
+            ],
         },
         "lineage_summaries": context_lineage_summary_payloads(package, vault_root),
         "lifecycle_exclusions": {
@@ -1036,30 +983,6 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
                 for selection in package.lifecycle_excluded
             ],
         },
-    }
-
-
-def note_to_dict(note: Note, vault_root: Path) -> JsonObject:
-    data = note_summary(note, vault_root)
-    data["metadata"] = json_safe(note.metadata)
-    data["body"] = note.body
-    return data
-
-
-def review_filters(
-    *,
-    review_state: str | None = None,
-    note_type: str | None = None,
-    lifecycle_stage: str | None = None,
-    due: bool = False,
-    due_on: str | None = None,
-) -> JsonObject:
-    return {
-        "review_state": review_state,
-        "type": note_type,
-        "lifecycle_stage": lifecycle_stage,
-        "due": due,
-        "due_on": due_on,
     }
 
 
@@ -1088,138 +1011,6 @@ def review_filter_error(
                 "expected": sorted(allowed),
             }
     return None
-
-
-def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str | None = None) -> JsonObject:
-    return {
-        "ok": True,
-        "vault_path": str(vault.root),
-        "pending_count": summary["pending_count"],
-        "due_count": summary["due_count"],
-        "overdue_count": summary["overdue_count"],
-        "requested_changes_count": summary["requested_changes_count"],
-        "audit_gap_count": summary["audit_gap_count"],
-        "due_on": due_on,
-        "review_state_counts": json_safe(summary["review_state_counts"]),
-        "due_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["due_notes"]],
-        "overdue_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["overdue_notes"]],
-        "requested_changes_notes": [
-            review_note_summary(note, vault, due_on=due_on) for note in summary["requested_changes_notes"]
-        ],
-        "audit_gap_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["audit_gap_notes"]],
-        "next_review_notes": [
-            review_note_summary(note, vault, due_on=due_on) for note in summary["next_review_notes"]
-        ],
-    }
-
-
-def review_workbench_to_dict(vault: Vault, note: Note, *, note_ref: str, due_on: str | None = None) -> JsonObject:
-    audits = vault.review_audits_for(note)
-    support = vault.support_notes_for(note)
-    lineage = vault.lineage(note.noesis_id)
-    review_due = note_review_due(note, due_on=due_on)
-    schedule = review_due_details(note, due_on=due_on)
-    dependent_reviewed_knowledge = vault.dependent_reviewed_knowledge_for(note)
-    dependent_contexts = vault.dependent_contexts_for(note)
-    changes_requested_history = review_change_request_history(vault, audits)
-    changes_requested = open_review_changes(note, audits, changes_requested_history)
-    requires_audit = review_requires_audit(note)
-    audit_status = {
-        "requires_audit": requires_audit,
-        "has_audit": bool(audits),
-        "ok": (not requires_audit) or bool(audits),
-    }
-    return {
-        "ok": True,
-        "vault_path": str(vault.root),
-        "note_ref": note_ref,
-        "note": note_to_dict(note, vault.root),
-        "review_due": review_due,
-        "review_schedule": review_schedule_to_dict(vault, note, audits, due_on=due_on, review_due=review_due),
-        "triage": review_triage(
-            note,
-            schedule=schedule,
-            audit_status=audit_status,
-            changes_requested=changes_requested,
-            dependent_reviewed_knowledge=dependent_reviewed_knowledge,
-            dependent_contexts=dependent_contexts,
-        ),
-        "audit_status": audit_status,
-        "audit_records": [review_audit_to_dict(audit, vault.root) for audit in audits],
-        "support": {
-            key: [note_summary(support_note, vault.root) for support_note in notes]
-            for key, notes in support.items()
-        },
-        "changes_requested": changes_requested,
-        "changes_requested_history": changes_requested_history,
-        "impact": {
-            "dependent_reviewed_knowledge": [
-                note_summary(dependent, vault.root)
-                for dependent in dependent_reviewed_knowledge
-            ],
-            "dependent_contexts": [
-                note_summary(dependent, vault.root)
-                for dependent in dependent_contexts
-            ],
-            "counts": {
-                "dependent_reviewed_knowledge": len(dependent_reviewed_knowledge),
-                "dependent_contexts": len(dependent_contexts),
-            },
-        },
-        "lifecycle_safety": review_lifecycle_safety(note),
-        "lineage": [note_summary(lineage_note, vault.root) for lineage_note in lineage],
-    }
-
-
-def review_schedule_to_dict(
-    vault: Vault,
-    note: Note,
-    audits: list[Note],
-    *,
-    due_on: str | None,
-    review_due: bool,
-) -> JsonObject:
-    latest_audit = audits[-1] if audits else None
-    schedule = review_due_details(note, due_on=due_on)
-    return {
-        "next_review": schedule["next_review"],
-        "due_on": schedule["due_on"],
-        "due": review_due,
-        "overdue": schedule["overdue"],
-        "days_overdue": schedule["days_overdue"],
-        "status": schedule["status"],
-        "audit_count": len(audits),
-        "latest_audit": review_audit_to_dict(latest_audit, vault.root) if latest_audit else None,
-    }
-
-
-def review_audit_to_dict(note: Note, vault_root: Path) -> JsonObject:
-    data = note_summary(note, vault_root)
-    data["reviewer"] = json_safe(note.metadata.get("reviewer"))
-    data["reviewed_at"] = json_safe(note.metadata.get("reviewed_at"))
-    data["decision"] = json_safe(note.metadata.get("decision"))
-    data["changes_requested"] = markdown_section(note.body, "Changes Requested")
-    data["basis"] = markdown_section(note.body, "Basis")
-    return data
-
-
-def markdown_section(body: str, heading: str) -> str:
-    pattern = re.compile(
-        rf"^##\s+{re.escape(heading)}\s*$\n(?P<section>.*?)(?=^##\s+|\Z)",
-        re.MULTILINE | re.DOTALL,
-    )
-    match = pattern.search(body)
-    if match is None:
-        return ""
-    return match.group("section").strip()
-
-
-def issue_to_dict(issue: Any, vault_root: Path) -> JsonObject:
-    try:
-        rel_path = issue.path.relative_to(vault_root).as_posix()
-    except ValueError:
-        rel_path = str(issue.path)
-    return {"path": rel_path, "message": issue.message}
 
 
 def validation_error(vault: Vault, issues: list[Any]) -> JsonObject:
@@ -1266,7 +1057,7 @@ def created_note_to_dict(created: CreatedNote, vault_root: Path | None) -> JsonO
 def source_capture_result_to_dict(result: Any, vault_root: Path) -> JsonObject:
     payload: JsonObject = {
         "status": result.status,
-        "source_file": str(result.source_file),
+        "source_file": f"<local>/{Path(result.source_file).name}",
         "title": result.title,
         "content_hash": result.content_hash,
     }
@@ -1299,26 +1090,14 @@ def source_bundle_import_to_dict(imported: Any, vault_root: Path) -> JsonObject:
         "title": imported.title,
         "schema": SOURCE_BUNDLE_SCHEMA_KIND,
         "schema_version": imported.schema_version,
-        "bundle_path": str(imported.bundle_path),
-        "manifest_path": str(imported.manifest_path),
+        "bundle_path": f"<local>/{Path(imported.bundle_path).name}",
+        "manifest_path": f"<local>/{Path(imported.manifest_path).name}",
         "manifest_hash": imported.manifest_hash,
         "artifact_count": len(imported.results),
         "created_count": sum(1 for result in imported.results if result.status == "created"),
         "skipped_count": sum(1 for result in imported.results if result.status == "skipped"),
         "results": [source_capture_result_to_dict(result, vault_root) for result in imported.results],
     }
-
-
-def json_safe(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [json_safe(item) for item in value]
-    return value
 
 
 if __name__ == "__main__":

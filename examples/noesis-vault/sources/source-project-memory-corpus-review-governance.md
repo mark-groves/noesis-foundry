@@ -14,6 +14,9 @@ original_url: local-repository
 author: noesis-example
 source_date: 2026-06-18
 captured: 2026-06-18
+content_hash: sha256:bb05de512e7e0ff08abb7f4399fbc1e4a662d05b965032a028ff218ccbd39afc
+content_hash_algorithm: sha256
+source_size_bytes: 1081
 tags:
   - noesis
   - source

@@ -1,0 +1,34 @@
+schema_version: "1"
+vault: examples/noesis-vault
+recall_at: 3
+queries:
+  - id: project-memory-continuation
+    query: project memory corpus continuation
+    filters:
+      type: reviewed-knowledge
+    relevant:
+      - reviewed-knowledge-project-memory-corpus-continuation
+  - id: lifecycle-source-backing
+    query: memory lifecycle source backed
+    filters:
+      type: reviewed-knowledge
+    relevant:
+      - reviewed-knowledge-noesis-lifecycle
+  - id: agent-handoff-compaction
+    query: agent session handoff compact
+    filters:
+      type: reviewed-knowledge
+    relevant:
+      - reviewed-knowledge-agent-memory-dogfood
+  - id: roadmap-ordering
+    query: roadmap project memory first
+    filters:
+      type: reviewed-knowledge
+    relevant:
+      - reviewed-knowledge-noesis-roadmap-phase-orchestration
+  - id: rejected-plugin-first-path
+    query: custom obsidian plugin first
+    filters:
+      type: stale-memory
+    relevant:
+      - stale-custom-plugin-first

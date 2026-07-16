@@ -14,6 +14,9 @@ original_url: local-test-fixture
 author: noesis-example
 source_date: 2026-06-18
 captured: 2026-06-18
+content_hash: sha256:b29c6c59c23f4acf9de1429247accffada173d45cb84ce09225bb48818830628
+content_hash_algorithm: sha256
+source_size_bytes: 1395
 tags:
   - noesis
   - source

@@ -1,0 +1,44 @@
+schema_version: "1"
+vault: examples/noesis-vault
+thresholds:
+  min_scenario_pass_rate: 1.0
+  max_forbidden_active_leaks: 0
+  min_provenance_complete_rate: 1.0
+  min_mean_compression_ratio: 0.8
+scenarios:
+  - id: lifecycle-continuation
+    scope: managed lifecycle source backed stale context
+    purpose: Continue lifecycle implementation without reviving discarded shortcuts.
+    as_of: 2026-06-01
+    freshness_policy: strict
+    limit: 1
+    expected_top: reviewed-knowledge-noesis-lifecycle
+    forbidden_active:
+      - stale-custom-plugin-first
+  - id: agent-memory-handoff
+    scope: agent memory handoff session compact
+    purpose: Continue an agent session from compact reviewed project memory.
+    as_of: 2026-07-12
+    freshness_policy: strict
+    limit: 1
+    expected_top: reviewed-knowledge-agent-memory-dogfood
+    forbidden_active:
+      - stale-agent-memory-global-summary
+  - id: roadmap-orchestration
+    scope: roadmap project memory orchestration
+    purpose: Continue the roadmap in dependency order.
+    as_of: 2026-07-14
+    freshness_policy: strict
+    limit: 1
+    expected_top: reviewed-knowledge-noesis-roadmap-phase-orchestration
+    forbidden_active:
+      - stale-noesis-roadmap-plugin-first
+  - id: corpus-continuation
+    scope: project memory corpus continuation
+    purpose: Continue source-backed project memory work.
+    as_of: 2026-07-16
+    freshness_policy: strict
+    limit: 1
+    expected_top: reviewed-knowledge-project-memory-corpus-continuation
+    forbidden_active:
+      - stale-project-memory-corpus-bulk-import-active-context

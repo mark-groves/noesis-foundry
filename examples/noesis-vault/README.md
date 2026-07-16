@@ -60,7 +60,7 @@ The CLI context composer can scope and budget the active package without
 weakening lifecycle safety:
 
 ```bash
-PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare a future agent" --as-of 2026-07-12 --freshness-policy strict
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases"
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile agent-handoff
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope noesis-roadmap --purpose "orchestrate next Noesis phases" --profile codex-handoff
@@ -70,8 +70,10 @@ PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --
 
 `context build` prints active guidance from current reviewed knowledge only.
 `context explain` shows why reviewed notes were included, scoped out, or
-budgeted out, and labels stale/superseded/archive notes as background
-provenance only.
+budgeted out, reports `fresh`, `review-due`, or `expired` state as of the
+requested date, and labels stale/superseded/archive notes as background
+provenance only. `valid_until` is a hard expiry; `next_review` is a review due
+date and is excluded only by strict freshness.
 
 Use `--profile agent-handoff` when launching parallel work in any capable agent
 harness. That profile renders a handoff pack with the task purpose, selected
@@ -98,6 +100,19 @@ An MCP client should follow the same lifecycle through `noesis_ingest_source`
 or `noesis_import_source_bundle`, `noesis_create_evidence_draft`,
 `noesis_create_claim_draft`, review tools, and `noesis_build_context`; the
 tools are adapters over these vault files, not a separate source of truth.
+
+Run the checked-in outcome gates after changing retrieval, context selection,
+freshness, or this corpus:
+
+```bash
+python scripts/run_retrieval_eval.py
+python scripts/run_dogfood_eval.py
+```
+
+The first gates ranked retrieval. The second replays four continuation tasks
+and requires the intended reviewed knowledge at rank one, zero forbidden active
+memory, complete lineage/input-hash provenance, and at least 80% mean
+compression versus all example-vault note bodies.
 
 Open this folder as a vault in Obsidian, then start at
 `_dashboards/noesis-review-dashboard.md`.
@@ -146,5 +161,5 @@ review summary is the canonical audit-gap check because review notes can also
 link reviewed targets through `reviewed_notes`.
 
 Template note: Obsidian core Templates will replace `{{title}}` and `{{date}}`.
-Placeholders in angle brackets, such as `<slug>`, are for humans, the future
-CLI, or agent skills to fill.
+Placeholders in angle brackets, such as `<slug>`, are for humans or adapters to
+fill. V2 validation rejects unresolved placeholders once a note becomes mature.

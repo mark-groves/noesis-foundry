@@ -14,6 +14,11 @@ reviewed_knowledge:
   - "[[reviewed-knowledge-noesis-lifecycle]]"
 excluded_memory:
   - "[[stale-custom-plugin-first]]"
+freshness_excluded: []
+as_of: 2026-05-29
+freshness_policy: balanced
+input_hashes:
+  - "reviewed-knowledge-noesis-lifecycle=sha256:8fd5a670e2e5bef05c2aae60861f3687268b07850fd0ee675a5340a4e74b8c1f"
 next_review: 2026-06-29
 tags:
   - noesis
@@ -51,4 +56,3 @@ Use this note when implementing the first Noesis CLI and MCP workflow.
 - Synthesis: [[synthesis-local-first-lifecycle-interface]]
 - Review: [[review-local-first-lifecycle]]
 - Superseded memory excluded from context: [[stale-custom-plugin-first]]
-

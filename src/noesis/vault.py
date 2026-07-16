@@ -11,6 +11,9 @@ from typing import Any, Iterable, Sequence
 
 import yaml
 
+from .version import __version__
+from .storage import atomic_write_text, vault_lock, vault_write_operation
+
 
 FOLDERS = [
     "raw",
@@ -30,10 +33,11 @@ FOLDERS = [
 ]
 
 CONTRACT_FILE = Path("noesis.vault.yaml")
-CONTRACT_VERSION = "1"
+CONTRACT_VERSION = "2"
+LEGACY_CONTRACT_VERSIONS = {"1"}
 CONTRACT_KIND = "vault"
 CONTRACT_SOURCE_OF_TRUTH = "markdown-flat-yaml"
-NOESIS_VERSION = "0.1.0"
+NOESIS_VERSION = __version__
 SOURCE_BUNDLE_SCHEMA_VERSION = "1"
 SOURCE_BUNDLE_SCHEMA_KIND = "noesis-source-bundle"
 SOURCE_BUNDLE_REQUIRED_ARTIFACT_FIELDS = {"path"}
@@ -161,7 +165,37 @@ RELATIONSHIP_FIELDS = {
     "superseded_by",
     "related_notes",
     "excluded_memory",
+    "freshness_excluded",
 }
+
+RELATIONSHIP_TARGET_TYPES: dict[str, set[str]] = {
+    "sources": {"source"},
+    "evidence": {"evidence"},
+    "claims": {"claim"},
+    "syntheses": {"synthesis"},
+    "reviewed_knowledge": {"reviewed-knowledge"},
+    "reviewed_by": {"review"},
+    "freshness_excluded": {"reviewed-knowledge"},
+}
+
+REQUIRED_RELATIONSHIPS: dict[str, set[str]] = {
+    "evidence": {"sources"},
+    "claim": {"sources", "evidence"},
+    "synthesis": {"sources", "evidence", "claims"},
+    "reviewed-knowledge": {"sources", "evidence", "claims", "syntheses", "reviewed_by"},
+}
+
+MATURE_REVIEW_STATES = {"approved", "reviewed"}
+PLACEHOLDER_MARKERS = (
+    "replace this placeholder",
+    "<slug>",
+    "<source-id>",
+    "<evidence-id>",
+    "<claim-id>",
+    "<synthesis-id>",
+    "{{title}}",
+    "{{date}}",
+)
 
 WIKILINK_RE = re.compile(r"!\[\[([^\]]+)\]\]|\[\[([^\]]+)\]\]")
 FRONTMATTER_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
@@ -223,8 +257,11 @@ class ContextSelection:
     note: Note
     status: str
     reason: str
-    score: int
+    score: float
     content_chars: int
+    freshness_state: str = "not-applicable"
+    review_due_on: str | None = None
+    valid_until: str | None = None
 
 
 @dataclass(frozen=True)
@@ -254,6 +291,12 @@ class ContextHandoffGuidance:
 
 
 CONTEXT_PROFILES = {
+    "coding": ContextProfile(
+        name="coding",
+        description="Prefer architecture, commands, traps, decisions, and handoff guidance for software work.",
+        default_limit=6,
+        default_max_chars=14000,
+    ),
     "agent-handoff": ContextProfile(
         name="agent-handoff",
         description="Render a harness-agnostic handoff pack for launching parallel agent work.",
@@ -284,8 +327,15 @@ CONTEXT_PROFILES = {
         default_limit=6,
         default_max_chars=12000,
     ),
+    "study": ContextProfile(
+        name="study",
+        description="Prefer objectives, weak areas, prior mistakes, resources, and scheduled review guidance.",
+        default_limit=8,
+        default_max_chars=18000,
+    ),
 }
 CONTEXT_PROFILE_NAMES = set(CONTEXT_PROFILES)
+FRESHNESS_POLICIES = {"balanced", "strict"}
 
 
 @dataclass(frozen=True)
@@ -294,6 +344,9 @@ class ContextPackage:
     profile_description: str | None
     scope: str | None
     purpose: str | None
+    as_of: str
+    freshness_policy: str
+    input_hashes: tuple[str, ...]
     limit: int | None
     max_chars: int | None
     requested_limit: int | None
@@ -304,6 +357,7 @@ class ContextPackage:
     excluded: list[ContextSelection]
     scoped_out: list[ContextSelection]
     budgeted_out: list[ContextSelection]
+    freshness_excluded: list[ContextSelection]
     lifecycle_excluded: list[ContextSelection]
     lineage_summaries: list[ContextLineageSummary]
     handoff: ContextHandoffGuidance
@@ -359,6 +413,16 @@ class SourceBundleImportResult:
     manifest_path: Path
     manifest_hash: str
     results: list[SourceCaptureResult]
+
+
+@dataclass(frozen=True)
+class VaultMigration:
+    root: Path
+    from_version: str
+    to_version: str
+    dry_run: bool
+    changed_paths: list[Path]
+    backup_path: Path | None
 
 
 @dataclass
@@ -771,8 +835,18 @@ def validate_contract(root: Path) -> list[Issue]:
 
     if metadata.get("noesis_contract") != CONTRACT_KIND:
         issues.append(Issue(path, f"noesis_contract must be {CONTRACT_KIND!r}"))
-    if str(metadata.get("contract_version", "")) != CONTRACT_VERSION:
-        issues.append(Issue(path, f"contract_version must be supported version {CONTRACT_VERSION!r}"))
+    contract_version = str(metadata.get("contract_version", ""))
+    if contract_version != CONTRACT_VERSION:
+        if contract_version in LEGACY_CONTRACT_VERSIONS:
+            issues.append(
+                Issue(
+                    path,
+                    f"contract_version {contract_version!r} requires migration to {CONTRACT_VERSION!r}; "
+                    "run noesis vault migrate <path>",
+                )
+            )
+        else:
+            issues.append(Issue(path, f"contract_version must be supported version {CONTRACT_VERSION!r}"))
     if metadata.get("source_of_truth") != CONTRACT_SOURCE_OF_TRUTH:
         issues.append(Issue(path, f"source_of_truth must be {CONTRACT_SOURCE_OF_TRUTH!r}"))
     if "requires_noesis" in metadata:
@@ -827,12 +901,24 @@ def validate_notes(vault: Vault) -> list[Issue]:
         if "tags" in metadata and not isinstance(metadata["tags"], list):
             issues.append(Issue(note.path, "tags must be a YAML list"))
 
-        for date_key in ("created", "updated", "source_date", "captured", "reviewed_at", "next_review"):
+        for date_key in (
+            "created",
+            "updated",
+            "source_date",
+            "captured",
+            "reviewed_at",
+            "next_review",
+            "valid_until",
+            "as_of",
+        ):
             if date_key in metadata and not is_date_like(metadata[date_key]):
                 issues.append(Issue(note.path, f"{date_key} must be a date or date-like string"))
 
         issues.extend(validate_type_stage(note))
         issues.extend(validate_relationship_syntax(note))
+        issues.extend(validate_relationship_types(vault, note))
+        issues.extend(validate_note_contract(vault, note))
+        issues.extend(validate_source_integrity(vault, note))
         issues.extend(validate_context_exclusions(vault, note))
 
     return issues
@@ -873,21 +959,192 @@ def validate_relationship_syntax(note: Note) -> list[Issue]:
     return issues
 
 
+def validate_relationship_types(vault: Vault, note: Note) -> list[Issue]:
+    issues: list[Issue] = []
+    for key, expected_types in RELATIONSHIP_TARGET_TYPES.items():
+        for item in as_list(note.metadata.get(key)):
+            if not isinstance(item, str):
+                continue
+            for target in extract_wikilinks(item):
+                target_note = vault.find_note(target)
+                if target_note is None:
+                    continue
+                if target_note.type not in expected_types:
+                    expected = ", ".join(sorted(expected_types))
+                    issues.append(
+                        Issue(
+                            note.path,
+                            f"{key} relationship [[{target}]] must reference note type {expected}; "
+                            f"found {target_note.type!r}",
+                        )
+                    )
+    return issues
+
+
+def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
+    issues: list[Issue] = []
+    for key in sorted(REQUIRED_RELATIONSHIPS.get(note.type, set())):
+        if not relationship_notes(vault, note, key):
+            issues.append(Issue(note.path, f"{note.type} requires at least one valid {key} relationship"))
+
+    mature = note.review_state in MATURE_REVIEW_STATES or note.status in {"active", "reviewed"}
+    if mature:
+        lowered_body = note.body.casefold()
+        for marker in PLACEHOLDER_MARKERS:
+            if marker.casefold() in lowered_body:
+                issues.append(Issue(note.path, f"mature note contains unresolved placeholder {marker!r}"))
+
+    if note.type == "review" and note.metadata.get("decision") is not None:
+        reviewer = str(note.metadata.get("reviewer", "")).strip().casefold()
+        if reviewer in {"", "unknown", "unassigned"}:
+            issues.append(Issue(note.path, "review audit requires an identified reviewer"))
+        if not relationship_notes(vault, note, "reviewed_notes"):
+            issues.append(Issue(note.path, "review audit requires at least one reviewed_notes relationship"))
+        decision = str(note.metadata.get("decision", ""))
+        if decision not in {"approved", "changes-requested", "renewed"}:
+            issues.append(Issue(note.path, "review decision must be approved, changes-requested, or renewed"))
+        if not markdown_body_section(note.body, "Basis"):
+            issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
+
+    if (
+        note.type == "reviewed-knowledge"
+        and note.status in CURRENT_KNOWLEDGE_STATUSES
+        and not is_excluded(note)
+    ):
+        issues.extend(validate_mature_knowledge_lineage(vault, note))
+    return issues
+
+
+def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
+    issues: list[Issue] = []
+    for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
+        for support in relationship_notes(vault, note, key, expected_type=expected_type):
+            if (
+                support.status != "reviewed"
+                or support.review_state not in MATURE_REVIEW_STATES
+                or is_excluded(support)
+            ):
+                issues.append(
+                    Issue(
+                        note.path,
+                        f"active reviewed knowledge depends on non-current {expected_type} {support.noesis_id!r}",
+                    )
+                )
+
+    approved_audits = [
+        audit
+        for audit in relationship_notes(vault, note, "reviewed_by", expected_type="review")
+        if str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
+    ]
+    if not approved_audits:
+        issues.append(Issue(note.path, "active reviewed knowledge requires an approved review audit"))
+    return issues
+
+
+def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
+    if note.type != "source":
+        return []
+    issues: list[Issue] = []
+    raw_path = note.metadata.get("raw_path")
+    if not isinstance(raw_path, str) or is_blank(raw_path):
+        return [Issue(note.path, "source requires raw_path")]
+    candidate = (note.path.parent / raw_path).resolve()
+    try:
+        candidate.relative_to(vault.root)
+    except ValueError:
+        return [Issue(note.path, "raw_path must remain inside the vault")]
+    if not candidate.is_file():
+        return [Issue(note.path, f"raw_path target is missing: {raw_path}")]
+
+    expected_hash = note.metadata.get("content_hash")
+    if not isinstance(expected_hash, str) or not expected_hash.startswith("sha256:"):
+        issues.append(Issue(note.path, "source requires a sha256 content_hash"))
+    else:
+        actual_hash = file_content_hash(candidate)
+        if actual_hash != expected_hash:
+            issues.append(Issue(note.path, f"raw source content hash mismatch: expected {expected_hash}, found {actual_hash}"))
+    if note.metadata.get("content_hash_algorithm") != "sha256":
+        issues.append(Issue(note.path, "source content_hash_algorithm must be 'sha256'"))
+    expected_size = note.metadata.get("source_size_bytes")
+    if not isinstance(expected_size, int):
+        issues.append(Issue(note.path, "source requires integer source_size_bytes"))
+    elif candidate.stat().st_size != expected_size:
+        issues.append(
+            Issue(
+                note.path,
+                f"raw source size mismatch: expected {expected_size}, found {candidate.stat().st_size}",
+            )
+        )
+    return issues
+
+
 def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
     if note.type != "operational-context":
         return issues
 
+    try:
+        as_of = context_as_of_date(note.metadata.get("as_of", note.metadata.get("created")))
+    except ValueError as exc:
+        issues.append(Issue(note.path, str(exc)))
+        as_of = date.today()
+    try:
+        freshness_policy = resolve_freshness_policy(note.metadata.get("freshness_policy", "balanced"))
+    except ValueError as exc:
+        issues.append(Issue(note.path, str(exc)))
+        freshness_policy = "balanced"
+
+    input_hash_ids: set[str] | None = None
+    if "input_hashes" in note.metadata:
+        input_hashes = note.metadata["input_hashes"]
+        if not isinstance(input_hashes, list):
+            issues.append(Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings"))
+        else:
+            parsed_input_hash_ids: list[str] = []
+            for item in input_hashes:
+                match = re.fullmatch(r"([^=]+)=sha256:([0-9a-f]{64})", str(item))
+                if match is None:
+                    issues.append(
+                        Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings")
+                    )
+                    continue
+                parsed_input_hash_ids.append(match.group(1))
+            if len(parsed_input_hash_ids) != len(set(parsed_input_hash_ids)):
+                issues.append(Issue(note.path, "input_hashes must not contain duplicate noesis_id entries"))
+            input_hash_ids = set(parsed_input_hash_ids)
+
+    reviewed_knowledge_ids: set[str] = set()
     for ref in as_list(note.metadata.get("reviewed_knowledge")):
         target = vault.find_note(str(ref))
         if target is None:
             continue
+        reviewed_knowledge_ids.add(target.noesis_id)
         if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
         elif target.status not in CURRENT_KNOWLEDGE_STATUSES:
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not current reviewed knowledge"))
         elif is_excluded(target):
             issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is stale, superseded, or archived"))
+        else:
+            freshness_state, _, _ = note_freshness(target, as_of=as_of)
+            if not context_freshness_eligible(freshness_state, policy=freshness_policy):
+                issues.append(
+                    Issue(
+                        note.path,
+                        f"reviewed_knowledge reference {ref!r} is {freshness_state} as of {as_of.isoformat()} "
+                        f"under {freshness_policy!r} freshness policy",
+                    )
+                )
+
+    if input_hash_ids is not None and input_hash_ids != reviewed_knowledge_ids:
+        missing = sorted(reviewed_knowledge_ids - input_hash_ids)
+        extra = sorted(input_hash_ids - reviewed_knowledge_ids)
+        details = []
+        if missing:
+            details.append(f"missing: {', '.join(missing)}")
+        if extra:
+            details.append(f"extra: {', '.join(extra)}")
+        issues.append(Issue(note.path, f"input_hashes must match reviewed_knowledge references ({'; '.join(details)})"))
 
     for ref in as_list(note.metadata.get("excluded_memory")):
         target = vault.find_note(str(ref))
@@ -895,6 +1152,20 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             continue
         elif not is_excluded(target):
             issues.append(Issue(note.path, f"excluded_memory reference {ref!r} is not stale, superseded, or archived"))
+
+    for ref in as_list(note.metadata.get("freshness_excluded")):
+        target = vault.find_note(str(ref))
+        if target is None:
+            continue
+        freshness_state, _, _ = note_freshness(target, as_of=as_of)
+        if context_freshness_eligible(freshness_state, policy=freshness_policy):
+            issues.append(
+                Issue(
+                    note.path,
+                    f"freshness_excluded reference {ref!r} is eligible as of {as_of.isoformat()} "
+                    f"under {freshness_policy!r} freshness policy",
+                )
+            )
 
     return issues
 
@@ -960,6 +1231,140 @@ def validate_canvases(root: Path) -> list[Issue]:
     return issues
 
 
+def migrate_vault(
+    path: Path | str,
+    *,
+    dry_run: bool = False,
+    backup: bool = True,
+) -> VaultMigration:
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"vault path is not a directory: {root}")
+    if dry_run:
+        return _migrate_vault_locked(root, dry_run=True, backup=backup)
+    with vault_lock(root):
+        return _migrate_vault_locked(root, dry_run=dry_run, backup=backup)
+
+
+def _migrate_vault_locked(
+    path: Path | str,
+    *,
+    dry_run: bool = False,
+    backup: bool = True,
+) -> VaultMigration:
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"vault path is not a directory: {root}")
+    contract_path = root / CONTRACT_FILE
+    contract = read_contract(root)
+    from_version = str(contract.get("contract_version", ""))
+    if from_version == CONTRACT_VERSION:
+        return VaultMigration(root, from_version, CONTRACT_VERSION, dry_run, [], None)
+    if from_version not in LEGACY_CONTRACT_VERSIONS:
+        raise ValueError(
+            f"cannot migrate contract_version {from_version!r}; supported legacy versions: "
+            f"{', '.join(sorted(LEGACY_CONTRACT_VERSIONS))}"
+        )
+
+    vault = Vault.load(root)
+    if vault.issues:
+        formatted = "; ".join(issue.format(root) for issue in vault.issues[:3])
+        raise ValueError(f"cannot migrate unreadable vault: {formatted}")
+
+    note_updates: dict[Path, tuple[dict[str, Any], str]] = {}
+    for note in vault.notes:
+        metadata = dict(note.metadata)
+        if note.type == "source":
+            raw_path = metadata.get("raw_path")
+            if isinstance(raw_path, str) and not is_blank(raw_path):
+                raw_target = (note.path.parent / raw_path).resolve()
+                try:
+                    raw_target.relative_to(root)
+                except ValueError as exc:
+                    raise ValueError(f"cannot migrate source with external raw_path: {note.rel_path}") from exc
+                if not raw_target.is_file():
+                    raise ValueError(f"cannot migrate source with missing raw file: {note.rel_path}")
+                metadata["content_hash"] = file_content_hash(raw_target)
+                metadata["content_hash_algorithm"] = "sha256"
+                metadata["source_size_bytes"] = raw_target.stat().st_size
+        if note.noesis_id == "review-queue" and note.type == "review" and metadata.get("decision") is None:
+            metadata["type"] = "dashboard"
+            metadata.pop("reviewer", None)
+        if note.type == "operational-context":
+            metadata.setdefault("as_of", metadata.get("created", date.today().isoformat()))
+            metadata.setdefault("freshness_policy", "balanced")
+            metadata.setdefault("freshness_excluded", [])
+            context_inputs = context_reviewed_knowledge(vault, metadata)
+            metadata["input_hashes"] = [
+                f"{context_input.noesis_id}={file_content_hash(context_input.path)}"
+                for context_input in context_inputs
+            ]
+        if metadata != note.metadata:
+            note_updates[note.path] = (metadata, note.body)
+
+    for knowledge in vault.notes:
+        if knowledge.type != "reviewed-knowledge" or knowledge.status not in CURRENT_KNOWLEDGE_STATUSES:
+            continue
+        audits = relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
+        approved_audits = [audit for audit in audits if str(audit.metadata.get("decision", "")) == "approved"]
+        if not approved_audits:
+            raise ValueError(f"cannot migrate active knowledge without approved audit: {knowledge.noesis_id}")
+        audit = approved_audits[-1]
+        audit_metadata = dict(note_updates.get(audit.path, (audit.metadata, audit.body))[0])
+        for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
+            supports = relationship_notes(vault, knowledge, key, expected_type=expected_type)
+            if not supports:
+                raise ValueError(f"cannot migrate active knowledge without {key}: {knowledge.noesis_id}")
+            for support in supports:
+                support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
+                support_metadata["status"] = "reviewed"
+                support_metadata["review_state"] = "approved"
+                add_relationship_link(support_metadata, "reviewed_by", wikilink(audit.noesis_id))
+                note_updates[support.path] = (support_metadata, support.body)
+                add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
+        note_updates[audit.path] = (audit_metadata, audit.body)
+
+    today = date.today().isoformat()
+    migrated_contract = dict(contract)
+    migrated_contract["contract_version"] = CONTRACT_VERSION
+    migrated_contract["requires_noesis"] = f">={NOESIS_VERSION}"
+    migrated_contract["updated"] = today
+    changed_paths = sorted([*note_updates, contract_path], key=lambda item: item.as_posix())
+    if dry_run:
+        return VaultMigration(root, from_version, CONTRACT_VERSION, True, changed_paths, None)
+
+    backup_path: Path | None = None
+    if backup:
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        backup_path = root.parent / f"{root.name}.backup-v{from_version}-{timestamp}"
+        suffix = 2
+        while backup_path.exists():
+            backup_path = root.parent / f"{root.name}.backup-v{from_version}-{timestamp}-{suffix}"
+            suffix += 1
+        shutil.copytree(root, backup_path)
+
+    original_text = {target: target.read_text(encoding="utf-8") for target in changed_paths}
+    try:
+        with vault_lock(root):
+            for target, (metadata, body) in note_updates.items():
+                write_note(target, metadata, body)
+            atomic_write_text(
+                contract_path,
+                yaml.safe_dump(migrated_contract, sort_keys=False, allow_unicode=False),
+            )
+            migrated = Vault.load(root)
+            issues = migrated.validate()
+            if issues:
+                formatted = "; ".join(issue.format(root) for issue in issues[:5])
+                raise ValueError(f"migration produced invalid vault: {formatted}")
+    except Exception:
+        for target, content in original_text.items():
+            atomic_write_text(target, content)
+        raise
+    return VaultMigration(root, from_version, CONTRACT_VERSION, False, changed_paths, backup_path)
+
+
+@vault_write_operation
 def init_vault(path: Path | str, force: bool = False) -> list[Path]:
     root = Path(path).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -977,12 +1382,13 @@ def init_vault(path: Path | str, force: bool = False) -> list[Path]:
         if target.exists() and not force:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        atomic_write_text(target, content)
         created.append(target)
 
     return created
 
 
+@vault_write_operation
 def ingest_source(
     vault_path: Path | str,
     source_file: Path | str,
@@ -1013,6 +1419,7 @@ def ingest_source(
     return result.note
 
 
+@vault_write_operation
 def ingest_sources(
     vault_path: Path | str,
     source_files: Sequence[Path | str],
@@ -1074,6 +1481,7 @@ def ingest_sources(
     return results
 
 
+@vault_write_operation
 def import_source_bundle(
     vault_path: Path | str,
     bundle_path: Path | str,
@@ -1235,6 +1643,7 @@ def import_source_bundle(
     )
 
 
+@vault_write_operation
 def capture_source(
     vault_path: Path | str,
     source_file: Path | str,
@@ -1497,6 +1906,7 @@ def validate_flat_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+@vault_write_operation
 def extract_evidence(
     vault_path: Path | str,
     source_ref: str,
@@ -1556,6 +1966,7 @@ Generated as a reviewable evidence draft.
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+@vault_write_operation
 def propose_claim(
     vault_path: Path | str,
     evidence_refs: list[str],
@@ -1623,6 +2034,7 @@ def propose_claim(
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+@vault_write_operation
 def synthesize_claims(
     vault_path: Path | str,
     claim_refs: list[str],
@@ -1745,6 +2157,7 @@ def request_review_changes(
     )
 
 
+@vault_write_operation
 def renew_review(
     vault_path: Path | str,
     note_ref: str,
@@ -1758,6 +2171,10 @@ def renew_review(
 ) -> CreatedNote:
     if title is not None and is_blank(title):
         raise ValueError("title must not be blank")
+    if is_blank(reviewer) or str(reviewer).strip().casefold() in {"unknown", "unassigned"}:
+        raise ValueError("reviewer must identify the human or agent performing the review")
+    if is_blank(basis):
+        raise ValueError("basis is required for a scheduled review")
     parsed_next_review = parse_review_date(next_review)
     if parsed_next_review is None:
         raise ValueError("next_review must be YYYY-MM-DD")
@@ -1811,7 +2228,7 @@ def renew_review(
         target_metadata["review_state"] = "reviewed"
     add_relationship_link(target_metadata, "reviewed_by", review_link)
 
-    basis_text = basis or "Scheduled lifecycle review confirmed the note remains fit for its current lifecycle role."
+    basis_text = str(basis).strip()
     body = f"""# {note_title}
 
 ## Decision
@@ -1838,6 +2255,7 @@ None.
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+@vault_write_operation
 def write_review_decision(
     vault_path: Path | str,
     note_ref: str,
@@ -1855,6 +2273,12 @@ def write_review_decision(
         raise ValueError("decision must be approved or changes-requested")
     if title is not None and is_blank(title):
         raise ValueError("title must not be blank")
+    if is_blank(reviewer) or str(reviewer).strip().casefold() in {"unknown", "unassigned"}:
+        raise ValueError("reviewer must identify the human or agent performing the review")
+    if is_blank(basis):
+        raise ValueError("basis is required for a review decision")
+    if decision == "changes-requested" and is_blank(changes_requested):
+        raise ValueError("changes_requested is required when requesting changes")
     if next_review is not None and not is_date_like(next_review):
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     root = ensure_valid_vault(vault_path)
@@ -1908,8 +2332,8 @@ def write_review_decision(
         target_metadata["review_state"] = "changes-requested"
     add_relationship_link(target_metadata, "reviewed_by", review_link)
 
-    basis_text = basis or "Reviewed against linked source, evidence, and lifecycle context."
-    requested_changes_text = changes_requested or ("None." if decision == "approved" else "Changes requested before approval.")
+    basis_text = str(basis).strip()
+    requested_changes_text = "None." if decision == "approved" else str(changes_requested).strip()
     body = f"""# {note_title}
 
 ## Decision
@@ -1942,6 +2366,7 @@ def write_review_decision(
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+@vault_write_operation
 def promote_synthesis(
     vault_path: Path | str,
     synthesis_ref: str,
@@ -2052,6 +2477,7 @@ Recheck this note when its source, evidence, claims, or synthesis are superseded
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+@vault_write_operation
 def mark_memory_stale(
     vault_path: Path | str,
     note_ref: str,
@@ -2155,6 +2581,10 @@ Keep this note so future context builders can explain why {target_link} no longe
         context_metadata = dict(context_note.metadata)
         remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
+        if "input_hashes" in context_metadata:
+            context_metadata["input_hashes"] = [
+                f"{note.noesis_id}={file_content_hash(note.path)}" for note in remaining_knowledge
+            ]
         context_metadata["syntheses"] = sorted(
             collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
         )
@@ -2177,6 +2607,7 @@ Keep this note so future context builders can explain why {target_link} no longe
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+@vault_write_operation
 def write_context_note(
     vault_path: Path | str,
     *,
@@ -2185,6 +2616,8 @@ def write_context_note(
     limit: int | None = None,
     max_chars: int | None = None,
     profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
     title: str | None = None,
     slug: str | None = None,
     next_review: str | None = None,
@@ -2204,6 +2637,8 @@ def write_context_note(
         limit=limit,
         max_chars=max_chars,
         profile=profile,
+        as_of=as_of,
+        freshness_policy=freshness_policy,
     )
     knowledge = package.reviewed_knowledge
     if not knowledge:
@@ -2217,6 +2652,7 @@ def write_context_note(
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
     excluded_links = sorted(wikilink(note.noesis_id) for note in vault.notes if is_excluded(note))
+    freshness_excluded_links = [wikilink(selection.note.noesis_id) for selection in package.freshness_excluded]
     metadata: dict[str, Any] = {
         "title": note_title,
         "noesis_id": note_id,
@@ -2230,6 +2666,10 @@ def write_context_note(
         "syntheses": synthesis_links,
         "reviewed_knowledge": reviewed_knowledge_links,
         "excluded_memory": excluded_links,
+        "freshness_excluded": freshness_excluded_links,
+        "as_of": package.as_of,
+        "freshness_policy": package.freshness_policy,
+        "input_hashes": list(package.input_hashes),
         "tags": ["noesis", "context"],
         "aliases": [],
     }
@@ -2272,691 +2712,16 @@ def ensure_valid_vault(vault_path: Path | str) -> Path:
 
 
 def default_vault_files(today: str) -> dict[Path, str]:
-    return {
-        CONTRACT_FILE: f"""noesis_contract: {CONTRACT_KIND}
-contract_version: "{CONTRACT_VERSION}"
-source_of_truth: {CONTRACT_SOURCE_OF_TRUTH}
-requires_noesis: ">={NOESIS_VERSION}"
-created: {today}
-updated: {today}
-""",
-        Path("_dashboards/noesis-review-dashboard.md"): f"""---
-title: Noesis Review Dashboard
-noesis_id: dashboard-review
-type: dashboard
-lifecycle_stage: review
-status: active
-review_state: none
-confidence: unknown
-created: {today}
-updated: {today}
-tags:
-  - noesis
-  - dashboard
----
+    from .scaffold import default_vault_files as implementation
 
-# Noesis Review Dashboard
-
-## Review Queue
-
-![[review-queue.base]]
-
-## CLI Review Workbench
-
-Use these read-only inspection commands from the repo root when a row needs
-closer inspection:
-
-```bash
-PYTHONPATH=src python -m noesis review summary --vault <vault-path>
-PYTHONPATH=src python -m noesis review queue --vault <vault-path> --due --due-on {today}
-PYTHONPATH=src python -m noesis review show <note-id> --vault <vault-path>
-```
-
-`review summary`, `review queue`, and `review show` report overdue review
-status, audit gaps, requested changes, downstream reviewed-knowledge/context
-impact, and complete lineage.
-
-Use this write action after a scheduled review confirms the note still fits
-its current lifecycle role:
-
-```bash
-PYTHONPATH=src python -m noesis review renew <note-id> --vault <vault-path> --next-review <YYYY-MM-DD>
-```
-
-`review renew` records the scheduled review audit and moves `next_review`
-without changing active, stale, or superseded lifecycle status.
-
-Use the Direct audit link checks Base view as a frontmatter shortcut only; the
-CLI review summary remains authoritative for audit gaps because review notes
-can also link targets through `reviewed_notes`.
-
-## Lifecycle Dashboard
-
-![[lifecycle-dashboard.base]]
-
-## Traceability Workbench
-
-![[traceability-workbench.base]]
-
-Use this Base to inspect lineage links, review audit notes, active context
-packages, and excluded memory before changing lifecycle state. It is a view over
-frontmatter and wikilinks only; notes remain canonical.
-
-## Visual Map
-
-Open [[noesis-lifecycle.canvas]].
-""",
-        Path("review/review-queue.md"): f"""---
-title: Review Queue
-noesis_id: review-queue
-type: review
-lifecycle_stage: review
-status: active
-review_state: none
-confidence: unknown
-created: {today}
-updated: {today}
-reviewer: unassigned
-next_review: {today}
-tags:
-  - noesis
-  - review
-  - queue
-aliases:
-  - Noesis review queue
----
-
-# Review Queue
-
-The canonical sortable queue is [[review-queue.base]].
-
-## Ready For Review
-
-## Overdue Scheduled Reviews
-
-Use `review show <note-id>` before renewing a stale or superseded note. Renewal
-records the audit and reschedules `next_review` without making stale memory
-active context again.
-
-## Requested Changes
-
-Notes here should be resolved before they support new synthesis, reviewed
-knowledge, or operational context.
-
-## Downstream Impact Checks
-
-Inspect dependent reviewed knowledge and context before changing or retiring a
-note with support links, `reviewed_knowledge`, `excluded_memory`, or
-`superseded_by` metadata.
-
-## Recently Approved
-""",
-        Path("_bases/review-queue.base"): """filters:
-  and:
-    - file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale")
-views:
-  - type: table
-    name: Open review queue
-    filters:
-      and:
-        - review_state != "none"
-        - review_state != "reviewed"
-        - review_state != "approved"
-    groupBy:
-      property: review_state
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - confidence
-      - next_review
-      - updated
-  - type: table
-    name: Due and scheduled reviews
-    filters:
-      and:
-        - next_review != null
-        - review_state != "none"
-        - type != "review"
-    groupBy:
-      property: next_review
-      direction: ASC
-    order:
-      - next_review
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - reviewed_by
-      - superseded_by
-  - type: table
-    name: Requested changes
-    filters:
-      and:
-        - review_state == "changes-requested"
-    groupBy:
-      property: lifecycle_stage
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - reviewed_by
-      - updated
-  - type: table
-    name: Downstream impact cues
-    filters:
-      and:
-        - reviewed_knowledge != null || excluded_memory != null || superseded_by != null
-    groupBy:
-      property: type
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - reviewed_knowledge
-      - excluded_memory
-      - superseded_by
-      - updated
-  - type: table
-    name: Direct audit link checks
-    filters:
-      and:
-        - review_state == "approved" || review_state == "reviewed"
-        - type == "evidence" || type == "claim" || type == "synthesis" || type == "reviewed-knowledge"
-        - reviewed_by == null
-    groupBy:
-      property: type
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - reviewed_by
-      - updated
-""",
-        Path("_bases/lifecycle-dashboard.base"): """filters:
-  and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
-    - noesis_id != null
-views:
-  - type: table
-    name: Lifecycle dashboard
-    groupBy:
-      property: lifecycle_stage
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - confidence
-      - updated
-  - type: table
-    name: Active, stale, and archived state
-    groupBy:
-      property: status
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - superseded_by
-      - next_review
-      - updated
-  - type: table
-    name: Review readiness by stage
-    filters:
-      and:
-        - review_state != "none"
-    groupBy:
-      property: review_state
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - review_state
-      - confidence
-      - next_review
-""",
-        Path("_bases/traceability-workbench.base"): """filters:
-  and:
-    - file.inFolder("sources") || file.inFolder("evidence") || file.inFolder("claims") || file.inFolder("syntheses") || file.inFolder("review") || file.inFolder("knowledge") || file.inFolder("context") || file.inFolder("stale") || file.inFolder("archive") || file.inFolder("archive/history")
-    - noesis_id != null
-views:
-  - type: table
-    name: Lineage support links
-    filters:
-      and:
-        - type != "dashboard"
-        - type != "review"
-    groupBy:
-      property: lifecycle_stage
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - lifecycle_stage
-      - status
-      - sources
-      - evidence
-      - claims
-      - syntheses
-      - reviewed_knowledge
-  - type: table
-    name: Review audit records
-    filters:
-      and:
-        - type == "review"
-        - reviewed_notes != null
-    groupBy:
-      property: decision
-      direction: ASC
-    order:
-      - reviewed_at
-      - file.name
-      - decision
-      - reviewer
-      - reviewed_notes
-      - next_review
-  - type: table
-    name: Active context packages
-    filters:
-      and:
-        - type == "operational-context"
-        - status == "active"
-    groupBy:
-      property: review_state
-      direction: ASC
-    order:
-      - file.name
-      - reviewed_knowledge
-      - excluded_memory
-      - next_review
-      - updated
-  - type: table
-    name: Context exclusions and superseded memory
-    filters:
-      and:
-        - excluded_memory != null || superseded_by != null || status == "stale" || status == "superseded" || status == "archived" || lifecycle_stage == "archive"
-    groupBy:
-      property: lifecycle_stage
-      direction: ASC
-    order:
-      - file.name
-      - type
-      - status
-      - review_state
-      - excluded_memory
-      - superseded_by
-      - next_review
-      - updated
-""",
-        Path("_canvas/noesis-lifecycle.canvas"): json.dumps(
-            {
-                "nodes": [
-                    {
-                        "id": "dashboard",
-                        "type": "file",
-                        "file": "_dashboards/noesis-review-dashboard.md",
-                        "x": 0,
-                        "y": 0,
-                        "width": 360,
-                        "height": 180,
-                    },
-                    {
-                        "id": "review-queue-note",
-                        "type": "file",
-                        "file": "review/review-queue.md",
-                        "x": 440,
-                        "y": 0,
-                        "width": 320,
-                        "height": 180,
-                    },
-                    {
-                        "id": "review-base",
-                        "type": "file",
-                        "file": "_bases/review-queue.base",
-                        "x": 0,
-                        "y": 260,
-                        "width": 320,
-                        "height": 160,
-                    },
-                    {
-                        "id": "lifecycle-base",
-                        "type": "file",
-                        "file": "_bases/lifecycle-dashboard.base",
-                        "x": 380,
-                        "y": 260,
-                        "width": 320,
-                        "height": 160,
-                    },
-                    {
-                        "id": "traceability-base",
-                        "type": "file",
-                        "file": "_bases/traceability-workbench.base",
-                        "x": 760,
-                        "y": 260,
-                        "width": 320,
-                        "height": 160,
-                    },
-                    {
-                        "id": "review-template",
-                        "type": "file",
-                        "file": "_templates/review.md",
-                        "x": 0,
-                        "y": 500,
-                        "width": 320,
-                        "height": 160,
-                    },
-                    {
-                        "id": "context-template",
-                        "type": "file",
-                        "file": "_templates/operational-context.md",
-                        "x": 380,
-                        "y": 500,
-                        "width": 320,
-                        "height": 160,
-                    }
-                ],
-                "edges": [
-                    {
-                        "id": "dashboard-review-note",
-                        "fromNode": "dashboard",
-                        "fromSide": "right",
-                        "toNode": "review-queue-note",
-                        "toSide": "left",
-                    },
-                    {
-                        "id": "dashboard-review-base",
-                        "fromNode": "dashboard",
-                        "fromSide": "bottom",
-                        "toNode": "review-base",
-                        "toSide": "top",
-                    },
-                    {
-                        "id": "review-base-lifecycle-base",
-                        "fromNode": "review-base",
-                        "fromSide": "right",
-                        "toNode": "lifecycle-base",
-                        "toSide": "left",
-                    },
-                    {
-                        "id": "lifecycle-base-traceability-base",
-                        "fromNode": "lifecycle-base",
-                        "fromSide": "right",
-                        "toNode": "traceability-base",
-                        "toSide": "left",
-                    },
-                    {
-                        "id": "traceability-base-review-template",
-                        "fromNode": "traceability-base",
-                        "fromSide": "bottom",
-                        "toNode": "review-template",
-                        "toSide": "top",
-                    },
-                    {
-                        "id": "traceability-base-context-template",
-                        "fromNode": "traceability-base",
-                        "fromSide": "bottom",
-                        "toNode": "context-template",
-                        "toSide": "top",
-                    },
-                ],
-            },
-            indent=2,
-        )
-        + "\n",
-        Path(".obsidian/core-plugins.json"): json.dumps(
-            {
-                "file-explorer": True,
-                "global-search": True,
-                "switcher": True,
-                "graph": True,
-                "backlink": True,
-                "canvas": True,
-                "outgoing-link": True,
-                "properties": True,
-                "templates": True,
-                "command-palette": True,
-                "bookmarks": True,
-                "file-recovery": True,
-                "bases": True,
-            },
-            indent=2,
-        )
-        + "\n",
-        Path(".obsidian/app.json"): "{}\n",
-        Path(".obsidian/appearance.json"): "{}\n",
-        Path(".obsidian/graph.json"): "{}\n",
-        Path(".obsidian/workspace.json"): "{}\n",
-        **template_files(today),
-    }
+    return implementation(today)
 
 
 def template_files(today: str) -> dict[Path, str]:
-    templates: dict[str, str] = {
-        "source": """---
-title: "{{title}}"
-noesis_id: "source-<slug>"
-type: source
-lifecycle_stage: source
-status: captured
-review_state: none
-confidence: unknown
-created: "{{date}}"
-updated: "{{date}}"
-source_type: unknown
-raw_path: "../raw/<raw_filename>"
-original_url: unknown
-author: unknown
-source_date: unknown
-captured: "{{date}}"
-content_hash: unknown
-content_hash_algorithm: sha256
-source_size_bytes: unknown
-original_path: unknown
-tags:
-  - noesis
-  - source
-aliases: []
----
+    from .scaffold import template_files as implementation
 
-# {{title}}
+    return implementation(today)
 
-Raw source: [<raw_filename>](../raw/<raw_filename>)
-
-## Summary
-
-## Key Claims
-
-## Evidence Candidates
-
-## Open Questions
-""",
-        "evidence": """---
-title: "{{title}}"
-noesis_id: "evidence-<slug>"
-type: evidence
-lifecycle_stage: evidence
-status: extracted
-review_state: none
-confidence: medium
-created: "{{date}}"
-updated: "{{date}}"
-sources:
-  - "[[<source-note>]]"
-tags:
-  - noesis
-  - evidence
-aliases: []
----
-
-# {{title}}
-
-## Evidence
-
-## Source Basis
-
-## Extraction Notes
-
-## Candidate Claims
-""",
-        "claim": """---
-title: "{{title}}"
-noesis_id: "claim-<slug>"
-type: claim
-lifecycle_stage: claim
-status: draft
-review_state: ready-for-review
-confidence: medium
-created: "{{date}}"
-updated: "{{date}}"
-sources:
-  - "[[<source-note>]]"
-evidence:
-  - "[[<evidence-note>]]"
-tags:
-  - noesis
-  - claim
-aliases: []
----
-
-# {{title}}
-
-## Claim
-
-## Supporting Evidence
-
-## Limits
-
-## Review Notes
-
-## Lifecycle Impact
-
-## Context Safety
-""",
-        "synthesis": """---
-title: "{{title}}"
-noesis_id: "synthesis-<slug>"
-type: synthesis
-lifecycle_stage: synthesis
-status: draft
-review_state: ready-for-review
-confidence: medium
-created: "{{date}}"
-updated: "{{date}}"
-sources:
-  - "[[<source-note>]]"
-evidence:
-  - "[[<evidence-note>]]"
-claims:
-  - "[[<claim-note>]]"
-tags:
-  - noesis
-  - synthesis
-aliases: []
----
-
-# {{title}}
-
-## Synthesis
-
-## Supporting Claims
-
-## Tensions Or Gaps
-
-## Implications
-
-## Context Safety
-""",
-        "review": """---
-title: "{{title}}"
-noesis_id: "review-<slug>"
-type: review
-lifecycle_stage: review
-status: complete
-review_state: approved
-confidence: medium
-created: "{{date}}"
-updated: "{{date}}"
-reviewer: unknown
-reviewed_at: "{{date}}"
-reviewed_notes:
-  - "[[<note-under-review>]]"
-decision: approved
-tags:
-  - noesis
-  - review
-aliases: []
----
-
-# {{title}}
-
-## Decision
-
-## Basis
-
-## Changes Requested
-
-## Lineage Checked
-
-## Context Safety
-
-## Next Review
-""",
-        "operational-context": """---
-title: "{{title}}"
-noesis_id: "context-<slug>"
-type: operational-context
-lifecycle_stage: context
-status: active
-review_state: reviewed
-confidence: medium
-created: "{{date}}"
-updated: "{{date}}"
-syntheses:
-  - "[[<synthesis-note>]]"
-reviewed_knowledge:
-  - "[[<reviewed-knowledge-note>]]"
-excluded_memory: []
-next_review: "{{date}}"
-tags:
-  - noesis
-  - context
-aliases: []
----
-
-# {{title}}
-
-## Use This Context For
-
-## Current Guidance
-
-## Do Not Use
-
-## Context Exclusions
-
-## Traceability
-""",
-    }
-    return {Path(f"_templates/{name}.md"): content for name, content in templates.items()}
 
 
 def build_context(
@@ -2967,15 +2732,21 @@ def build_context(
     limit: int | None = None,
     max_chars: int | None = None,
     profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
 ) -> str:
-    return compose_context(
+    from .context import build_context as implementation
+
+    return implementation(
         vault,
         scope=scope,
         purpose=purpose,
         limit=limit,
         max_chars=max_chars,
         profile=profile,
-    ).content
+        as_of=as_of,
+        freshness_policy=freshness_policy,
+    )
 
 
 def compose_context(
@@ -2986,553 +2757,57 @@ def compose_context(
     limit: int | None = None,
     max_chars: int | None = None,
     profile: str | None = None,
+    as_of: str | date | None = None,
+    freshness_policy: str = "balanced",
 ) -> ContextPackage:
-    validate_context_budget(limit=limit, max_chars=max_chars)
-    profile_definition = resolve_context_profile(profile)
-    effective_limit, effective_max_chars, applied_profile_defaults = apply_context_profile_defaults(
-        profile_definition,
+    from .context import compose_context as implementation
+
+    return implementation(
+        vault,
+        scope=scope,
+        purpose=purpose,
         limit=limit,
         max_chars=max_chars,
+        profile=profile,
+        as_of=as_of,
+        freshness_policy=freshness_policy,
     )
-    validate_context_budget(limit=effective_limit, max_chars=effective_max_chars)
-    available = vault.current_reviewed_knowledge()
-    selected, scoped_out = select_knowledge_for_context(
-        available,
-        scope,
-        profile=profile_definition,
-        applied_profile_defaults=applied_profile_defaults,
-    )
-    included, budgeted_out = apply_context_budget(
-        selected,
-        limit=effective_limit,
-        max_chars=effective_max_chars,
-    )
-    excluded = sorted(
-        scoped_out + budgeted_out,
-        key=lambda selection: (selection.status, selection.note.title.lower()),
-    )
-    lifecycle_excluded = explain_lifecycle_exclusions(vault)
-    lineage_summaries = [context_lineage_summary(vault, selection.note) for selection in included]
-    handoff = context_handoff_guidance(
-        vault_path=vault.root,
-        scope=scope,
-        purpose=purpose,
-        profile=profile_definition,
-        limit=effective_limit,
-        max_chars=effective_max_chars,
-        included=included,
-        excluded=excluded,
-        lifecycle_excluded=lifecycle_excluded,
-    )
-    if is_handoff_profile(profile_definition):
-        content = render_context_handoff(
-            included,
-            lineage_summaries,
-            lifecycle_excluded,
-            handoff,
-            scope=scope,
-            profile=profile_definition,
-            limit=effective_limit,
-            max_chars=effective_max_chars,
-            total_candidates=len(available),
-            excluded=excluded,
-        )
-    else:
-        content = render_context(
-            [selection.note for selection in included],
-            scope=scope,
-            purpose=purpose,
-            profile=profile_definition,
-            limit=effective_limit,
-            max_chars=effective_max_chars,
-            total_candidates=len(available),
-            excluded=excluded,
-        )
-    return ContextPackage(
-        profile=profile_definition.name if profile_definition else None,
-        profile_description=profile_definition.description if profile_definition else None,
-        scope=scope,
-        purpose=purpose,
-        limit=effective_limit,
-        max_chars=effective_max_chars,
-        requested_limit=limit,
-        requested_max_chars=max_chars,
-        applied_profile_defaults=applied_profile_defaults,
-        available_count=len(available),
-        included=included,
-        excluded=excluded,
-        scoped_out=scoped_out,
-        budgeted_out=budgeted_out,
-        lifecycle_excluded=lifecycle_excluded,
-        lineage_summaries=lineage_summaries,
-        handoff=handoff,
-        content=content,
-    )
-
-
-def is_handoff_profile(profile: ContextProfile | None) -> bool:
-    return profile is not None and profile.name in {"agent-handoff", "codex-handoff"}
 
 
 def validate_context_budget(*, limit: int | None = None, max_chars: int | None = None) -> None:
-    if limit is not None and limit < 1:
-        raise ValueError("limit must be greater than zero")
-    if max_chars is not None and max_chars < 1:
-        raise ValueError("max_chars must be greater than zero")
+    from .context import validate_context_budget as implementation
+
+    implementation(limit=limit, max_chars=max_chars)
 
 
-def resolve_context_profile(profile: str | None) -> ContextProfile | None:
-    if profile is None or not profile.strip():
-        return None
-    key = profile.strip().lower()
-    profile_definition = CONTEXT_PROFILES.get(key)
-    if profile_definition is None:
-        expected = ", ".join(sorted(CONTEXT_PROFILE_NAMES))
-        raise ValueError(f"profile must be one of: {expected}")
-    return profile_definition
+def context_as_of_date(value: str | date | None) -> date:
+    from .context import context_as_of_date as implementation
+
+    return implementation(value)
 
 
-def apply_context_profile_defaults(
-    profile: ContextProfile | None,
-    *,
-    limit: int | None,
-    max_chars: int | None,
-) -> tuple[int | None, int | None, tuple[str, ...]]:
-    if profile is None:
-        return limit, max_chars, ()
-    applied: list[str] = []
-    effective_limit = limit
-    effective_max_chars = max_chars
-    if effective_limit is None and profile.default_limit is not None:
-        effective_limit = profile.default_limit
-        applied.append("limit")
-    if effective_max_chars is None and profile.default_max_chars is not None:
-        effective_max_chars = profile.default_max_chars
-        applied.append("max_chars")
-    return effective_limit, effective_max_chars, tuple(applied)
+def resolve_freshness_policy(value: str | None) -> str:
+    from .context import resolve_freshness_policy as implementation
+
+    return implementation(value)
 
 
-def select_knowledge_for_context(
-    knowledge: list[Note],
-    scope: str | None,
-    *,
-    profile: ContextProfile | None = None,
-    applied_profile_defaults: tuple[str, ...] = (),
-) -> tuple[list[ContextSelection], list[ContextSelection]]:
-    scope_terms = context_scope_terms(scope)
-    selected: list[ContextSelection] = []
-    scoped_out: list[ContextSelection] = []
-    for note in knowledge:
-        score = context_scope_score(note, scope_terms)
-        selection = ContextSelection(
-            note=note,
-            status="included",
-            reason=context_include_reason(scope, score, profile, applied_profile_defaults),
-            score=score,
-            content_chars=len(note.body.strip()),
-        )
-        if scope_terms and score == 0:
-            scoped_out.append(
-                ContextSelection(
-                    note=note,
-                    status="scoped_out",
-                    reason=context_scoped_out_reason(scope, profile, applied_profile_defaults),
-                    score=score,
-                    content_chars=selection.content_chars,
-                )
-            )
-        else:
-            selected.append(selection)
-    selected.sort(key=lambda selection: (-selection.score, selection.note.title.lower()))
-    return selected, scoped_out
+def note_freshness(note: Note, *, as_of: date) -> tuple[str, date | None, date | None]:
+    from .context import note_freshness as implementation
+
+    return implementation(note, as_of=as_of)
 
 
-def apply_context_budget(
-    selections: list[ContextSelection],
-    *,
-    limit: int | None = None,
-    max_chars: int | None = None,
-) -> tuple[list[ContextSelection], list[ContextSelection]]:
-    included: list[ContextSelection] = []
-    budgeted_out: list[ContextSelection] = []
-    used_chars = 0
-    for index, selection in enumerate(selections):
-        if limit is not None and len(included) >= limit:
-            budgeted_out.extend(
-                ContextSelection(
-                    note=remaining.note,
-                    status="budgeted_out",
-                    reason=f"excluded by limit {limit}",
-                    score=remaining.score,
-                    content_chars=remaining.content_chars,
-                )
-                for remaining in selections[index:]
-            )
-            break
-        if max_chars is not None and used_chars + selection.content_chars > max_chars:
-            remaining_chars = max(max_chars - used_chars, 0)
-            budgeted_out.append(
-                ContextSelection(
-                    note=selection.note,
-                    status="budgeted_out",
-                    reason=(
-                        f"excluded by max_chars {max_chars}: "
-                        f"{selection.content_chars} chars exceeds remaining budget {remaining_chars}"
-                    ),
-                    score=selection.score,
-                    content_chars=selection.content_chars,
-                )
-            )
-            continue
-        included.append(selection)
-        used_chars += selection.content_chars
-    return included, budgeted_out
+def context_freshness_eligible(state: str, *, policy: str) -> bool:
+    from .context import context_freshness_eligible as implementation
 
-
-def context_scope_terms(scope: str | None) -> list[str]:
-    if scope is None or not scope.strip():
-        return []
-    return [term for term in re.split(r"[\s,]+", scope.strip().lower()) if term]
-
-
-def context_scope_score(note: Note, scope_terms: list[str]) -> int:
-    if not scope_terms:
-        return 0
-    searchable = searchable_note_text(note)
-    return sum(1 for term in scope_terms if term in searchable)
-
-
-def context_include_reason(
-    scope: str | None,
-    score: int,
-    profile: ContextProfile | None = None,
-    applied_profile_defaults: tuple[str, ...] = (),
-) -> str:
-    if scope is None or not scope.strip():
-        reason = "included because no scope filter was requested"
-    else:
-        reason = f"matches scope {scope!r} with score {score}"
-    reason += context_profile_reason_suffix(profile, applied_profile_defaults)
-    return reason
-
-
-def context_scoped_out_reason(
-    scope: str | None,
-    profile: ContextProfile | None = None,
-    applied_profile_defaults: tuple[str, ...] = (),
-) -> str:
-    reason = f"does not match scope {scope!r}"
-    reason += context_profile_reason_suffix(profile, applied_profile_defaults)
-    return reason
-
-
-def context_profile_reason_suffix(
-    profile: ContextProfile | None,
-    applied_profile_defaults: tuple[str, ...] = (),
-) -> str:
-    if profile is None:
-        return ""
-    if applied_profile_defaults:
-        defaults = ", ".join(applied_profile_defaults)
-        return f"; profile {profile.name!r} supplied context defaults: {defaults}"
-    return f"; profile {profile.name!r} selected with explicit context budgets"
-
-
-def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
-    selections: list[ContextSelection] = []
-    for note in vault.notes:
-        if not is_excluded(note):
-            continue
-        selections.append(
-            ContextSelection(
-                note=note,
-                status="lifecycle_excluded",
-                reason=(
-                    f"{note.type} has status {note.status!r} "
-                    f"and lifecycle_stage {note.lifecycle_stage!r}; "
-                    f"intentionally excluded as {context_lifecycle_exclusion_kind(note)} note"
-                ),
-                score=0,
-                content_chars=len(note.body.strip()),
-            )
-        )
-    return sorted(selections, key=lambda selection: selection.note.title.lower())
+    return implementation(state, policy=policy)
 
 
 def context_lifecycle_exclusion_kind(note: Note) -> str:
-    if note.lifecycle_stage == "archive" or note.status == "archived":
-        return "archived"
-    if note.status == "superseded":
-        return "superseded"
-    if note.status == "stale":
-        return "stale"
-    return "excluded"
+    from .context import context_lifecycle_exclusion_kind as implementation
 
-
-def context_lineage_summary(vault: Vault, note: Note) -> ContextLineageSummary:
-    return ContextLineageSummary(
-        reviewed_knowledge=note,
-        sources=context_relationship_notes(vault, note, "sources", expected_type="source"),
-        evidence=context_relationship_notes(vault, note, "evidence", expected_type="evidence"),
-        claims=context_relationship_notes(vault, note, "claims", expected_type="claim"),
-        syntheses=context_relationship_notes(vault, note, "syntheses", expected_type="synthesis"),
-        reviews=context_relationship_notes(vault, note, "reviewed_by", expected_type="review"),
-    )
-
-
-def context_relationship_notes(
-    vault: Vault,
-    note: Note,
-    key: str,
-    *,
-    expected_type: str | None = None,
-) -> list[Note]:
-    notes_by_id: dict[str, Note] = {}
-    for item in as_list(note.metadata.get(key)):
-        if not isinstance(item, str):
-            continue
-        for target in extract_wikilinks(item):
-            target_note = vault.find_note(target)
-            if target_note is None:
-                continue
-            if expected_type is not None and target_note.type != expected_type:
-                continue
-            notes_by_id[target_note.noesis_id] = target_note
-    return sorted(notes_by_id.values(), key=lambda item: item.rel_path.as_posix())
-
-
-def context_handoff_guidance(
-    *,
-    vault_path: Path,
-    scope: str | None,
-    purpose: str | None,
-    profile: ContextProfile | None,
-    limit: int | None,
-    max_chars: int | None,
-    included: list[ContextSelection],
-    excluded: list[ContextSelection],
-    lifecycle_excluded: list[ContextSelection],
-) -> ContextHandoffGuidance:
-    vault_flag = f" --vault {shell_quote(str(vault_path))}"
-    scope_flag = f" --scope {shell_quote(scope)}" if scope else ""
-    purpose_flag = f" --purpose {shell_quote(purpose)}" if purpose else ""
-    profile_flag = f" --profile {profile.name}" if profile is not None else ""
-    limit_flag = f" --limit {limit}" if limit is not None else ""
-    max_chars_flag = f" --max-chars {max_chars}" if max_chars is not None else ""
-    task_purpose = purpose or "Continue the task using the selected current reviewed knowledge."
-    assumptions = [
-        "Active guidance is limited to current reviewed knowledge selected for this package.",
-        (
-            "Stale, superseded, and archived notes are exclusion provenance only "
-            "and must not be treated as active instructions."
-        ),
-        "Noesis handoff output is harness-agnostic; Codex is one adapter for dogfood runs.",
-    ]
-    if scope:
-        assumptions.append(
-            f"The requested scope is {scope!r}; "
-            "scoped-out reviewed notes need a separate handoff if they matter."
-        )
-    if excluded:
-        assumptions.append(
-            "Some current reviewed notes were omitted by scope or budget; "
-            "inspect selection provenance before widening work."
-        )
-    if lifecycle_excluded:
-        assumptions.append(
-            "Lifecycle-excluded memory remains traceable for audit but is excluded from active context."
-        )
-
-    validation_commands = [
-        "git diff --check",
-        f"PYTHONPATH=src python -m noesis vault doctor {shell_quote(str(vault_path))} --json",
-        (
-            "PYTHONPATH=src python -m noesis context build"
-            f"{vault_flag}"
-            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
-        ),
-        (
-            "PYTHONPATH=src python -m noesis context explain"
-            f"{vault_flag}"
-            f"{scope_flag}{purpose_flag}{profile_flag}{limit_flag}{max_chars_flag} --json"
-        ),
-        "PYTHONPATH=src python -m unittest discover -s tests -v",
-    ]
-    next_steps = [
-        "Use the selected reviewed knowledge as the active task brief.",
-        "Check the lineage summaries before changing source-backed claims or syntheses.",
-        "Keep lifecycle-excluded notes out of active guidance unless they are renewed through review.",
-        "Run the validation commands before handing work back.",
-    ]
-    if included:
-        selected = ", ".join(selection.note.noesis_id for selection in included)
-        next_steps.insert(1, f"Start from selected reviewed knowledge: {selected}.")
-    return ContextHandoffGuidance(
-        task_purpose=task_purpose,
-        assumptions=assumptions,
-        validation_commands=validation_commands,
-        next_steps=next_steps,
-    )
-
-
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
-
-
-def context_lifecycle_exclusion_counts(selections: list[ContextSelection]) -> dict[str, int]:
-    summary = {"stale": 0, "superseded": 0, "archived": 0, "excluded": 0}
-    for selection in selections:
-        kind = context_lifecycle_exclusion_kind(selection.note)
-        summary[kind] = summary.get(kind, 0) + 1
-    return summary
-
-
-def render_context_handoff(
-    included: list[ContextSelection],
-    lineage_summaries: list[ContextLineageSummary],
-    lifecycle_excluded: list[ContextSelection],
-    handoff: ContextHandoffGuidance,
-    *,
-    scope: str | None = None,
-    profile: ContextProfile | None = None,
-    limit: int | None = None,
-    max_chars: int | None = None,
-    total_candidates: int | None = None,
-    excluded: list[ContextSelection] | None = None,
-) -> str:
-    title = "Noesis Codex Handoff Pack" if profile and profile.name == "codex-handoff" else "Noesis Agent Handoff Pack"
-    lines = [f"# {title}", ""]
-    if scope:
-        lines.extend([f"Scope: {scope}", ""])
-    lines.extend([f"Purpose: {handoff.task_purpose}", ""])
-    if profile is not None:
-        lines.extend([f"Profile: {profile.name}", ""])
-    if limit is not None or max_chars is not None:
-        budget = []
-        if limit is not None:
-            budget.append(f"limit {limit}")
-        if max_chars is not None:
-            budget.append(f"max_chars {max_chars}")
-        lines.extend([f"Budget: {', '.join(budget)}", ""])
-    lines.extend(
-        [
-            "Active guidance in this pack is built from current reviewed knowledge only.",
-            "Stale, superseded, and archived memory is listed only as excluded provenance.",
-            "The handoff contract is Markdown plus flat YAML; harness-specific launchers are adapters.",
-            "",
-            "## Task Purpose",
-            "",
-            handoff.task_purpose,
-            "",
-            "## Active Reviewed Knowledge",
-            "",
-        ]
-    )
-    if included:
-        for selection in included:
-            note = selection.note
-            lines.extend(
-                [
-                    f"### {note.title}",
-                    "",
-                    f"- noesis_id: {note.noesis_id}",
-                    f"- path: {note.rel_path.as_posix()}",
-                    f"- confidence: {note.metadata.get('confidence', 'unknown')}",
-                    f"- reviewed_at: {note.metadata.get('reviewed_at', 'unknown')}",
-                    f"- selection_reason: {selection.reason}",
-                    "",
-                    note.body.strip(),
-                    "",
-                ]
-            )
-    else:
-        lines.extend(["No current reviewed knowledge selected.", ""])
-
-    lines.extend(["## Selection Provenance", ""])
-    available_count = total_candidates if total_candidates is not None else len(included)
-    lines.append(f"- Current reviewed knowledge available: {available_count}")
-    lines.append(f"- Included in active handoff: {len(included)}")
-    lines.append(f"- Excluded by scope or budget: {len(excluded or [])}")
-    lines.append("")
-    for selection in included:
-        lines.append(format_handoff_selection(selection))
-    if excluded:
-        for selection in excluded:
-            lines.append(format_handoff_selection(selection))
-    if not included and not excluded:
-        lines.append("No selection provenance available.")
-
-    scoped_out = [selection for selection in excluded or [] if selection.status == "scoped_out"]
-    budgeted_out = [selection for selection in excluded or [] if selection.status == "budgeted_out"]
-    lines.extend(["", "## Scoped-Out Reviewed Knowledge", ""])
-    if scoped_out:
-        for selection in scoped_out:
-            lines.append(format_handoff_selection(selection))
-    else:
-        lines.append("No current reviewed knowledge was scoped out.")
-
-    lines.extend(["", "## Budgeted-Out Reviewed Knowledge", ""])
-    if budgeted_out:
-        for selection in budgeted_out:
-            lines.append(format_handoff_selection(selection))
-    else:
-        lines.append("No current reviewed knowledge was budgeted out.")
-
-    lines.extend(["", "## Relevant Lineage", ""])
-    if lineage_summaries:
-        for summary in lineage_summaries:
-            lines.append(format_handoff_lineage(summary))
-    else:
-        lines.append("No included reviewed knowledge lineage to summarize.")
-
-    lines.extend(["", "## Lifecycle Exclusions", ""])
-    summary = context_lifecycle_exclusion_counts(lifecycle_excluded)
-    lines.append(
-        "Summary: "
-        f"stale={summary['stale']}, "
-        f"superseded={summary['superseded']}, "
-        f"archived={summary['archived']}, "
-        f"other={summary['excluded']}"
-    )
-    lines.append("")
-    if lifecycle_excluded:
-        for selection in lifecycle_excluded:
-            lines.append(format_handoff_selection(selection))
-    else:
-        lines.append("No stale, superseded, or archived reviewed memory found.")
-
-    lines.extend(["", "## Assumptions", ""])
-    lines.extend(f"- {assumption}" for assumption in handoff.assumptions)
-    lines.extend(["", "## Validation Commands", ""])
-    lines.extend(f"- `{command}`" for command in handoff.validation_commands)
-    lines.extend(["", "## Next Steps", ""])
-    lines.extend(f"- {step}" for step in handoff.next_steps)
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def format_handoff_selection(selection: ContextSelection) -> str:
-    suffix = ""
-    if selection.status == "lifecycle_excluded":
-        suffix = f", kind={context_lifecycle_exclusion_kind(selection.note)}"
-    return (
-        f"- {selection.note.noesis_id} ({selection.status}{suffix}, score={selection.score}, "
-        f"chars={selection.content_chars}) - {selection.reason}; path: {selection.note.rel_path.as_posix()}"
-    )
-
-
-def format_handoff_lineage(summary: ContextLineageSummary) -> str:
-    parts = [
-        f"sources={format_handoff_note_ids(summary.sources)}",
-        f"evidence={format_handoff_note_ids(summary.evidence)}",
-        f"claims={format_handoff_note_ids(summary.claims)}",
-        f"syntheses={format_handoff_note_ids(summary.syntheses)}",
-        f"reviews={format_handoff_note_ids(summary.reviews)}",
-    ]
-    return f"- {summary.reviewed_knowledge.noesis_id}: " + "; ".join(parts)
-
-
-def format_handoff_note_ids(notes: list[Note]) -> str:
-    return ", ".join(note.noesis_id for note in notes) if notes else "none"
+    return implementation(note)
 
 
 def render_context(
@@ -3545,59 +2820,26 @@ def render_context(
     max_chars: int | None = None,
     total_candidates: int | None = None,
     excluded: list[ContextSelection] | None = None,
+    as_of: date | None = None,
+    freshness_policy: str = "balanced",
+    freshness_excluded: list[ContextSelection] | None = None,
 ) -> str:
-    title = "Noesis Operational Context"
-    lines = [f"# {title}", ""]
-    if scope:
-        lines.extend([f"Scope: {scope}", ""])
-    if purpose:
-        lines.extend([f"Purpose: {purpose}", ""])
-    if profile is not None:
-        lines.extend([f"Profile: {profile.name}", ""])
-    if limit is not None or max_chars is not None:
-        budget = []
-        if limit is not None:
-            budget.append(f"limit {limit}")
-        if max_chars is not None:
-            budget.append(f"max_chars {max_chars}")
-        lines.extend([f"Budget: {', '.join(budget)}", ""])
-    lines.extend(
-        [
-            "This context package is built from reviewed knowledge only.",
-            "Stale, superseded, and archived memory is excluded.",
-            "",
-        ]
+    from .context import render_context as implementation
+
+    return implementation(
+        knowledge,
+        scope=scope,
+        purpose=purpose,
+        profile=profile,
+        limit=limit,
+        max_chars=max_chars,
+        total_candidates=total_candidates,
+        excluded=excluded,
+        as_of=as_of,
+        freshness_policy=freshness_policy,
+        freshness_excluded=freshness_excluded,
     )
 
-    if total_candidates is not None or excluded:
-        lines.extend(["## Selection Summary", ""])
-        lines.append(f"- Current reviewed knowledge available: {total_candidates if total_candidates is not None else len(knowledge)}")
-        lines.append(f"- Included in active context: {len(knowledge)}")
-        if excluded:
-            lines.append(f"- Excluded by scope or budget: {len(excluded)}")
-        lines.append("")
-
-    if not knowledge:
-        lines.extend(["## Reviewed Knowledge", "", "No current reviewed knowledge found.", ""])
-        return "\n".join(lines)
-
-    lines.extend(["## Reviewed Knowledge", ""])
-    for note in knowledge:
-        lines.extend(
-            [
-                f"### {note.title}",
-                "",
-                f"- noesis_id: {note.noesis_id}",
-                f"- path: {note.rel_path.as_posix()}",
-                f"- confidence: {note.metadata.get('confidence', 'unknown')}",
-                f"- reviewed_at: {note.metadata.get('reviewed_at', 'unknown')}",
-                "",
-                note.body.strip(),
-                "",
-            ]
-        )
-
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def build_context_body(
@@ -3645,6 +2887,10 @@ def append_dependent_memory_review_changes(
         context_metadata = dict(context_note.metadata)
         remaining_knowledge = remaining_context_knowledge(vault, context_metadata, target.noesis_id)
         context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in remaining_knowledge]
+        if "input_hashes" in context_metadata:
+            context_metadata["input_hashes"] = [
+                f"{note.noesis_id}={file_content_hash(note.path)}" for note in remaining_knowledge
+            ]
         context_metadata["syntheses"] = sorted(
             collect_relationship_links(vault, remaining_knowledge, "syntheses", expected_type="synthesis")
         )
@@ -3739,10 +2985,11 @@ def note_references_memory(vault: Vault, note: Note, target_noesis_id: str) -> b
 
 
 def filter_knowledge_by_scope(knowledge: list[Note], scope: str | None) -> list[Note]:
-    scope_terms = context_scope_terms(scope)
-    if not scope_terms:
+    if scope is None or not scope.strip():
         return knowledge
-    return [note for note in knowledge if context_scope_score(note, scope_terms) > 0]
+    from .retrieval import rank_notes
+
+    return [hit.note for hit in rank_notes(knowledge, scope)]
 
 
 def searchable_note_text(note: Note) -> str:
@@ -3821,7 +3068,7 @@ def parse_review_date(value: Any) -> date | None:
 def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frontmatter = yaml.safe_dump(metadata, sort_keys=False, allow_unicode=False)
-    path.write_text(f"---\n{frontmatter}---\n\n{body.rstrip()}\n", encoding="utf-8")
+    atomic_write_text(path, f"---\n{frontmatter}---\n\n{body.rstrip()}\n")
 
 
 def write_note_and_validate(
@@ -3856,7 +3103,7 @@ def write_notes_and_validate(root: Path, writes: list[tuple[Path, dict[str, Any]
             if text is None:
                 path.unlink(missing_ok=True)
             else:
-                path.write_text(text, encoding="utf-8")
+                atomic_write_text(path, text)
         raise
 
 
@@ -3909,6 +3156,36 @@ def collect_relationship_links(
                     continue
                 links.add(wikilink(target_note.noesis_id))
     return links
+
+
+def relationship_notes(
+    vault: Vault,
+    note: Note,
+    key: str,
+    *,
+    expected_type: str | None = None,
+) -> list[Note]:
+    notes: dict[str, Note] = {}
+    for item in as_list(note.metadata.get(key)):
+        if not isinstance(item, str):
+            continue
+        for target in extract_wikilinks(item):
+            target_note = vault.find_note(target)
+            if target_note is None:
+                continue
+            if expected_type is not None and target_note.type != expected_type:
+                continue
+            notes[target_note.noesis_id] = target_note
+    return sorted(notes.values(), key=lambda item: item.rel_path.as_posix())
+
+
+def markdown_body_section(body: str, heading: str) -> str:
+    pattern = re.compile(
+        rf"^##\s+{re.escape(heading)}\s*$\n(.*?)(?=^##\s+|\Z)",
+        re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    match = pattern.search(body)
+    return match.group(1).strip() if match else ""
 
 
 def add_relationship_link(metadata: dict[str, Any], key: str, link: str) -> None:
@@ -4002,7 +3279,13 @@ def is_date_like(value: Any) -> bool:
     if isinstance(value, str):
         if value in {"unknown", "{{date}}"}:
             return True
-        return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return False
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return False
+        return True
     return False
 
 

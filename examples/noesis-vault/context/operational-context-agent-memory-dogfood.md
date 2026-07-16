@@ -16,6 +16,11 @@ reviewed_knowledge:
   - "[[reviewed-knowledge-agent-memory-dogfood]]"
 excluded_memory:
   - "[[stale-agent-memory-global-summary]]"
+freshness_excluded: []
+as_of: 2026-06-13
+freshness_policy: balanced
+input_hashes:
+  - "reviewed-knowledge-agent-memory-dogfood=sha256:dba0a59eac8c4a560f212c4c86abfecac6ff469034da7bbabfc66f36d143f419"
 next_review: 2026-07-13
 tags:
   - noesis

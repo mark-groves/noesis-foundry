@@ -2,7 +2,7 @@
 
 Status: implemented CLI/MCP/portable-skill adapter baseline
 Date: 2026-05-29
-Updated: 2026-06-13
+Updated: 2026-07-16
 Scope: current local-first Noesis vault contract, CLI, MCP server, portable skills, and deferred app adapters
 
 ## Starting Point
@@ -21,7 +21,7 @@ The durable source of truth is the vault: ordinary Markdown files with YAML
 properties. Obsidian is the human workbench. The CLI, MCP server, and
 repo-local portable Agent Skills are implemented agent-facing adapters over the
 same files.
-The V1 contract spine is a root-level `noesis.vault.yaml` metadata file, so
+The V2 contract spine is a root-level `noesis.vault.yaml` metadata file, so
 compatibility can be checked without rewriting every Markdown note.
 
 ## Research Snapshot
@@ -100,24 +100,26 @@ _bases/                 Obsidian Base views
 _canvas/                Obsidian Canvas maps
 _dashboards/            human-facing dashboard notes
 _templates/             copyable note templates
-noesis.vault.yaml       V1 contract/version metadata for the vault
+noesis.vault.yaml       V2 contract/version metadata for the vault
 ```
 
 The contract metadata file is flat YAML:
 
 ```yaml
 noesis_contract: vault
-contract_version: "1"
+contract_version: "2"
 source_of_truth: markdown-flat-yaml
-requires_noesis: ">=0.1.0"
-created: 2026-06-13
-updated: 2026-06-13
+requires_noesis: ">=0.2.0"
+created: 2026-07-16
+updated: 2026-07-16
 ```
 
 `noesis vault init <path>` creates this file for initialized vaults. Running it
 against an existing vault adds missing scaffold files without rewriting notes
 unless `--force` is passed. `noesis vault doctor <path>` reports whether the
-contract is present, supported, complete, and ready for CLI/MCP use.
+contract is present, supported, complete, and ready for CLI/MCP use. Existing
+V1 vaults use `noesis vault migrate <path> --dry-run` before a backup-backed,
+post-validated migration.
 
 ### Required Properties
 
@@ -162,7 +164,11 @@ and agents can parse links mechanically.
 | `superseded_by` | stale, old knowledge | Newer notes that replace this note. |
 | `reviewer` | review | Human or agent reviewer. |
 | `reviewed_at` | review and knowledge | Review date. |
-| `next_review` | review, knowledge, context | Date for staleness check. |
+| `next_review` | review, knowledge, context | Review due date; visible under balanced freshness and excluded under strict freshness once due. |
+| `valid_until` | reviewed knowledge | Last date the note may guide active work; expiry always excludes it. |
+| `as_of` | operational context | Date used for freshness decisions in this context artifact. |
+| `freshness_policy` | operational context | `balanced` includes review-due notes visibly; `strict` excludes them. |
+| `input_hashes` | operational context | Content hashes of selected reviewed-knowledge notes at build time. |
 
 ## Architecture
 
@@ -192,7 +198,9 @@ Current commands:
 | Command | Purpose |
 | --- | --- |
 | `noesis vault init <path>` | Create the folder schema, Bases, dashboard, and templates. |
-| `noesis vault doctor <path>` | Report V1 contract compatibility, validation completeness, and CLI/MCP readiness. |
+| `noesis vault doctor <path>` | Report V2 contract compatibility, validation completeness, and CLI/MCP readiness. |
+| `noesis vault migrate <path>` | Preview or migrate V1 vaults with backup, raw hash repair, review-link repair, and post-write validation. |
+| `noesis search <query> --vault <path>` | Rank summary results with field-aware lexical relevance and lifecycle filters. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw source, record provenance and content hash metadata, skip duplicate content by default, and create a source note. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order and optionally create one evidence draft per new source. |
 | `noesis ingest bundle --vault <path> <bundle-path> --evidence-drafts` | Import a local manifest-driven v1 artifact bundle in deterministic artifact-path order, preserve raw artifacts, record flat bundle provenance, and optionally create evidence drafts. |
@@ -204,10 +212,10 @@ Current commands:
 | `noesis review request-changes <note-id> --vault <path>` | Write a review note and keep the reviewed note in the queue. |
 | `noesis knowledge promote --vault <path> --synthesis <id>` | Promote an approved synthesis to reviewed knowledge. |
 | `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded and update affected context exclusions. |
-| `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context from reviewed knowledge only, with stale/superseded exclusions. |
+| `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context with relevance, exact selected-content budgets, freshness policy, `as_of`, input hashes, and lifecycle exclusions. |
 | `noesis context write --vault <path> --purpose <purpose>` | Write an operational context note from reviewed knowledge. |
 | `noesis trace <note-id> --vault <path>` | Print source -> evidence -> claim -> synthesis -> knowledge lineage. |
-| `noesis vault validate <path>` | Validate V1 contract metadata, frontmatter, links, lifecycle values, Base YAML, Canvas JSON, and context exclusions. |
+| `noesis vault validate <path>` | Validate V2 metadata, per-type relationships, mature lineage, review identity/basis, raw hashes and sizes, dates, links, views, and context exclusions. |
 
 ### MCP Boundary
 
@@ -215,7 +223,9 @@ The implemented MCP server exposes curated tools rather than raw filesystem
 access. Tools call the same parser, validator, lineage tracer, review queue,
 context builder, and lifecycle write functions as the CLI. MCP is an adapter
 over the vault contract; it is not a custom Obsidian plugin, a database, or a
-second schema.
+second schema. The configured vault is the only allowed filesystem root by
+default; additional roots require explicit `--allow-root` authorization.
+Responses use vault-relative note paths and redact absolute provenance paths.
 
 For handoff rendering, `agent-handoff` is the harness-agnostic profile for
 launching separate agent threads in any capable harness. `codex-handoff`
@@ -225,12 +235,12 @@ Current tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `noesis_lint_vault` | Validate V1 contract metadata, required folders, flat YAML properties, lifecycle values, wikilinks, Base files, Canvas files, and context exclusions. |
-| `noesis_search_notes` | Search notes by text, type, lifecycle stage, status, and review state. |
+| `noesis_lint_vault` | Validate V2 contract and trust-kernel invariants, required folders, flat YAML, lifecycle values, source integrity, links, views, and context exclusions. |
+| `noesis_search_notes` | Rank note summaries by field-aware lexical relevance with all/any term and lifecycle filters. |
 | `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
 | `noesis_get_review_queue` | Return notes that need human or agent review. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
-| `noesis_build_context` | Return current operational context from reviewed knowledge, excluding stale and superseded notes, with optional profile-specific formatting for agent handoffs. |
+| `noesis_build_context` | Return current operational context with freshness state, relevance and budget provenance, input hashes, and optional profile-specific handoff rendering. |
 | `noesis_ingest_source` | Copy immutable raw source material and create a linked source note. |
 | `noesis_import_source_bundle` | Import a local manifest-driven artifact bundle into source notes and optional evidence drafts. |
 | `noesis_create_evidence_draft` | Create a reviewable evidence draft linked to a source note. |
@@ -250,7 +260,7 @@ Current resources:
 | `noesis://note/{note}` | Parsed note from the default vault. |
 
 The write surface is intentionally smaller than direct file access. It only
-allows lifecycle operations already implemented in `src/noesis/vault.py`, and
+allows lifecycle operations implemented in the shared lifecycle modules, and
 tool responses are structured objects rather than CLI text.
 
 ### Portable Agent Skills
@@ -290,6 +300,8 @@ The implemented baseline lets a human open the example vault and see:
    synthesis, review, reviewed knowledge, operational context, stale memory,
    and archived history.
 
-The next implementation work should stay adapter-oriented: portable skills and
-optional Obsidian app integrations can build on the same vault contract without
-moving the schema out of Markdown and flat YAML.
+Further implementation should stay evidence-led and adapter-oriented. The
+checked-in retrieval and context-dogfood gates must remain green; new research,
+project, study, or coding behavior should begin as a profile and evaluation
+before it expands the shared schema. Optional Obsidian integrations can build
+on the same contract without moving truth out of Markdown and flat YAML.
