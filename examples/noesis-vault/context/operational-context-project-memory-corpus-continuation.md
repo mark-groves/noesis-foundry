@@ -42,8 +42,21 @@ Scope: project-memory-corpus
 
 Purpose: continue expanding Noesis Foundry project memory
 
+As of: 2026-06-18
+Freshness policy: balanced
+
+Budget: limit 1
+
 This context package is built from reviewed knowledge only.
-Stale, superseded, and archived memory is excluded.
+Stale, superseded, archived, and expired memory is excluded.
+Review-due knowledge is explicitly marked and is excluded when strict freshness is requested.
+
+## Selection Summary
+
+- Current reviewed knowledge available: 4
+- Included in active context: 1
+- Excluded by scope or budget: 3
+- Excluded by freshness: 0
 
 ## Reviewed Knowledge
 
@@ -53,6 +66,7 @@ Stale, superseded, and archived memory is excluded.
 - path: knowledge/reviewed-knowledge-project-memory-corpus-continuation.md
 - confidence: high
 - reviewed_at: 2026-06-18
+- freshness: fresh
 
 # Project Memory Corpus Continuation Knowledge
 

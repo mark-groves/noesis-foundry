@@ -10,6 +10,7 @@ import unittest
 
 import yaml
 
+import noesis.vault as vault_module
 from noesis.vault import Vault, reviewed_note_content_hash, wikilink, write_note
 
 
@@ -26,6 +27,13 @@ def run_noesis(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]
         capture_output=True,
         check=False,
     )
+
+
+def refresh_context_snapshots(vault_path: Path, *, updated_at: str) -> None:
+    vault = Vault.load(vault_path)
+    writes = []
+    vault_module.append_updated_reviewed_knowledge_contexts(vault, updated_at, writes)
+    vault_module.write_notes_and_validate(vault_path, writes)
 
 
 def parse_json_stdout(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
@@ -975,6 +983,8 @@ class NoesisCliTests(unittest.TestCase):
             dashboard = (vault_path / "_dashboards" / "noesis-review-dashboard.md").read_text(encoding="utf-8")
             self.assertIn("Direct audit link checks", dashboard)
             self.assertIn("reviewed_notes", dashboard)
+            self.assertIn("noesis review summary --vault <vault-path>", dashboard)
+            self.assertNotIn("PYTHONPATH=src python -m noesis review", dashboard)
             self.assertIn("--reviewer <reviewer-id>", dashboard)
             self.assertIn('--basis "<why this lifecycle role remains valid>"', dashboard)
 
@@ -1968,15 +1978,7 @@ This archived note is provenance, not active guidance.
 """,
                 encoding="utf-8",
             )
-            vault = Vault.load(vault_path)
-            for context in vault.notes:
-                if context.type != "operational-context":
-                    continue
-                metadata = dict(context.metadata)
-                metadata["excluded_memory"] = sorted(
-                    [*metadata["excluded_memory"], wikilink("archived-context-note")]
-                )
-                write_note(context.path, metadata, context.body)
+            refresh_context_snapshots(vault_path, updated_at="2026-06-13")
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
@@ -3115,6 +3117,7 @@ This note covers a separate topic for an unrelated handoff.
 """,
                 encoding="utf-8",
             )
+            refresh_context_snapshots(vault_path, updated_at="2026-05-29")
 
             result = run_noesis(
                 "context",

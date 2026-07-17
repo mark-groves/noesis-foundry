@@ -19,8 +19,8 @@ from .vault import (
     Vault,
     as_list,
     extract_wikilinks,
-    file_content_hash,
     is_context_excluded,
+    note_content_hash,
     parse_review_date,
     review_support_lineage,
     searchable_note_text,
@@ -499,7 +499,8 @@ def apply_context_freshness(
 
 
 def note_input_hash(note: Note) -> str:
-    return f"{note.noesis_id}={file_content_hash(note.path)}"
+    digest = note.loaded_content_hash or note_content_hash(note.metadata, note.body)
+    return f"{note.noesis_id}={digest}"
 
 
 def resolve_context_profile(profile: str | None) -> ContextProfile | None:
@@ -843,7 +844,7 @@ def context_handoff_guidance(
             f"The requested scope is {scope!r}; "
             "scoped-out reviewed notes need a separate handoff if they matter."
         )
-    if excluded:
+    if any(selection.status in {"scoped_out", "budgeted_out"} for selection in excluded):
         assumptions.append(
             "Some current reviewed notes were omitted by scope or budget; "
             "inspect selection provenance before widening work."

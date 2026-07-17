@@ -41,8 +41,19 @@ Scope: agent-memory
 
 Purpose: prepare a future agent to continue Noesis project work
 
+As of: 2026-06-13
+Freshness policy: balanced
+
 This context package is built from reviewed knowledge only.
-Stale, superseded, and archived memory is excluded.
+Stale, superseded, archived, and expired memory is excluded.
+Review-due knowledge is explicitly marked and is excluded when strict freshness is requested.
+
+## Selection Summary
+
+- Current reviewed knowledge available: 4
+- Included in active context: 1
+- Excluded by scope or budget: 3
+- Excluded by freshness: 0
 
 ## Reviewed Knowledge
 
@@ -52,6 +63,7 @@ Stale, superseded, and archived memory is excluded.
 - path: knowledge/reviewed-knowledge-agent-memory-dogfood.md
 - confidence: high
 - reviewed_at: 2026-06-13
+- freshness: fresh
 
 # Agent Memory Dogfood Knowledge
 

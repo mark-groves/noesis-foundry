@@ -220,6 +220,7 @@ class Note:
     rel_path: Path
     metadata: dict[str, Any]
     body: str
+    loaded_content_hash: str | None = None
 
     @property
     def noesis_id(self) -> str:
@@ -739,7 +740,8 @@ def is_noesis_note(rel_path: Path) -> bool:
 
 
 def read_note(root: Path, path: Path) -> Note | Issue:
-    text = path.read_text(encoding="utf-8")
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
     match = FRONTMATTER_RE.match(text)
     if not match:
         return Issue(path, "missing YAML frontmatter")
@@ -758,6 +760,7 @@ def read_note(root: Path, path: Path) -> Note | Issue:
         rel_path=path.relative_to(root),
         metadata=metadata,
         body=text[match.end() :],
+        loaded_content_hash=f"sha256:{hashlib.sha256(raw).hexdigest()}",
     )
 
 
@@ -1285,6 +1288,19 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
         else:
             stored_profile = normalized_profile
 
+    stored_scope_value = note.metadata.get("scope")
+    stored_scope = (
+        stored_scope_value
+        if isinstance(stored_scope_value, str) and not is_blank(stored_scope_value)
+        else None
+    )
+    stored_purpose_value = note.metadata.get("purpose")
+    stored_purpose = (
+        stored_purpose_value
+        if isinstance(stored_purpose_value, str) and not is_blank(stored_purpose_value)
+        else None
+    )
+
     stored_budgets: dict[str, int | None] = {}
     for budget_key in ("context_limit", "context_max_chars"):
         stored_budget = context_budget(note, budget_key)
@@ -1345,19 +1361,18 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                         )
                     )
 
+    expected_knowledge: list[Note] | None = None
     if selection_contract_valid:
-        expected_knowledge_id_order = [
-            selected.noesis_id
-            for selected in context_selected_knowledge(
-                vault.current_reviewed_knowledge(),
-                scope=context_scope(note),
-                profile=stored_profile,
-                limit=stored_budgets["context_limit"],
-                max_chars=stored_budgets["context_max_chars"],
-                as_of=as_of,
-                freshness_policy=freshness_policy,
-            )
-        ]
+        expected_knowledge = context_selected_knowledge(
+            vault.current_reviewed_knowledge(),
+            scope=stored_scope,
+            profile=stored_profile,
+            limit=stored_budgets["context_limit"],
+            max_chars=stored_budgets["context_max_chars"],
+            as_of=as_of,
+            freshness_policy=freshness_policy,
+        )
+        expected_knowledge_id_order = [selected.noesis_id for selected in expected_knowledge]
         if reviewed_knowledge_id_order != expected_knowledge_id_order:
             expected = ", ".join(expected_knowledge_id_order) or "none"
             found = ", ".join(reviewed_knowledge_id_order) or "none"
@@ -1440,6 +1455,39 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                 Issue(
                     note.path,
                     f"input_hashes digest for reviewed knowledge {note_id!r} does not match its file content",
+                )
+            )
+
+    if expected_knowledge is not None:
+        available_knowledge = vault.current_reviewed_knowledge()
+        freshness_excluded = [
+            candidate
+            for candidate in available_knowledge
+            if not context_freshness_eligible(
+                note_freshness(candidate, as_of=as_of)[0],
+                policy=freshness_policy,
+            )
+        ]
+        lifecycle_excluded = context_excluded_notes(vault)
+        expected_body = build_context_body(
+            vault,
+            expected_knowledge,
+            [wikilink(candidate.noesis_id) for candidate in lifecycle_excluded],
+            scope=stored_scope,
+            purpose=stored_purpose,
+            as_of=as_of,
+            freshness_policy=freshness_policy,
+            profile=stored_profile,
+            limit=stored_budgets["context_limit"],
+            max_chars=stored_budgets["context_max_chars"],
+            freshness_excluded_notes=freshness_excluded,
+            lifecycle_excluded_notes=lifecycle_excluded,
+        )
+        if note.body.strip() != expected_body.strip():
+            issues.append(
+                Issue(
+                    note.path,
+                    "operational context body does not match its deterministic input snapshot",
                 )
             )
 
@@ -1914,8 +1962,8 @@ def rebuild_context_snapshot(
     available = projected_vault.current_reviewed_knowledge()
     knowledge = context_selected_knowledge(
         available,
-        scope=context_scope(context_note),
-        profile=context_profile(context_note),
+        scope=context_metadata_text(context_note, "scope"),
+        profile=context_metadata_text(context_note, "context_profile"),
         limit=context_budget(context_note, "context_limit"),
         max_chars=context_budget(context_note, "context_max_chars"),
         as_of=context_as_of,
@@ -1957,11 +2005,11 @@ def rebuild_context_snapshot(
         projected_vault,
         knowledge,
         excluded_links,
-        scope=context_scope(context_note),
-        purpose=context_purpose(context_note),
+        scope=context_metadata_text(context_note, "scope"),
+        purpose=context_metadata_text(context_note, "purpose"),
         as_of=context_as_of,
         freshness_policy=freshness_policy,
-        profile=context_profile(context_note),
+        profile=context_metadata_text(context_note, "context_profile"),
         limit=context_budget(context_note, "context_limit"),
         max_chars=context_budget(context_note, "context_max_chars"),
         freshness_excluded_notes=freshness_excluded,
@@ -3330,13 +3378,20 @@ def write_context_note(
     if package.max_chars is not None:
         metadata["context_max_chars"] = package.max_chars
 
-    body = package.content
-    body = body.rstrip() + "\n\n## Traceability\n\n"
-    body += f"- Reviewed knowledge: {format_inline_links(reviewed_knowledge_links)}\n"
-    if synthesis_links:
-        body += f"- Syntheses: {format_inline_links(synthesis_links)}\n"
-    if excluded_links:
-        body += f"- Excluded memory: {format_inline_links(excluded_links)}\n"
+    body = build_context_body(
+        vault,
+        knowledge,
+        excluded_links,
+        scope=scope,
+        purpose=purpose,
+        as_of=package.as_of,
+        freshness_policy=package.freshness_policy,
+        profile=package.profile,
+        limit=package.limit,
+        max_chars=package.max_chars,
+        freshness_excluded_notes=[selection.note for selection in package.freshness_excluded],
+        lifecycle_excluded_notes=[selection.note for selection in package.lifecycle_excluded],
+    )
 
     write_note_and_validate(root, note_path, metadata, body)
     return CreatedNote(note_id=note_id, path=note_path)
@@ -3641,24 +3696,31 @@ def append_updated_reviewed_knowledge_contexts(
 
 
 def context_scope(context_note: Note) -> str | None:
-    scope = context_note.metadata.get("scope")
-    if isinstance(scope, str) and not is_blank(scope):
+    scope = context_metadata_text(context_note, "scope")
+    if scope is not None:
         return scope
     return context_body_field(context_note, "Scope")
 
 
 def context_purpose(context_note: Note) -> str | None:
-    purpose = context_note.metadata.get("purpose")
-    if isinstance(purpose, str) and not is_blank(purpose):
+    purpose = context_metadata_text(context_note, "purpose")
+    if purpose is not None:
         return purpose
     return context_body_field(context_note, "Purpose")
 
 
 def context_profile(context_note: Note) -> str | None:
-    profile = context_note.metadata.get("context_profile")
-    if isinstance(profile, str) and not is_blank(profile):
+    profile = context_metadata_text(context_note, "context_profile")
+    if profile is not None:
         return profile
     return context_body_field(context_note, "Profile")
+
+
+def context_metadata_text(context_note: Note, key: str) -> str | None:
+    value = context_note.metadata.get(key)
+    if isinstance(value, str) and not is_blank(value):
+        return value
+    return None
 
 
 def context_budget(context_note: Note, key: str) -> int | None:

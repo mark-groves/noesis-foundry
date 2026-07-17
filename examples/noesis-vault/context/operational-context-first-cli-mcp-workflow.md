@@ -34,31 +34,63 @@ aliases:
   - first CLI MCP context
 ---
 
-# Operational Context - First CLI/MCP Workflow
+# Noesis Operational Context
 
-## Use This Context For
+Scope: lifecycle
 
-Use this note when implementing the first Noesis CLI and MCP workflow.
+As of: 2026-05-29
+Freshness policy: balanced
 
-## Current Guidance
+Budget: limit 1
 
-- Treat Markdown files with flat YAML properties as the durable source of truth.
-- Build CLI commands against the vault schema before exposing MCP tools.
-- Let Obsidian Bases and dashboards read from note properties rather than
-  maintaining a second review database.
-- Context building should include reviewed knowledge and exclude notes marked
-  stale, superseded, or archived.
+This context package is built from reviewed knowledge only.
+Stale, superseded, archived, and expired memory is excluded.
+Review-due knowledge is explicitly marked and is excluded when strict freshness is requested.
 
-## Do Not Use
+## Selection Summary
 
-- Do not build a custom Obsidian plugin for the first implementation slice.
-- Do not make Dataview, Tasks, or Templater required for the storage contract.
-- Do not let stale notes shape generated operational context unless they are
-  included explicitly as historical background.
+- Current reviewed knowledge available: 4
+- Included in active context: 1
+- Excluded by scope or budget: 3
+- Excluded by freshness: 0
+
+## Reviewed Knowledge
+
+### Noesis Lifecycle Knowledge
+
+- noesis_id: reviewed-knowledge-noesis-lifecycle
+- path: knowledge/reviewed-knowledge-noesis-lifecycle.md
+- confidence: high
+- reviewed_at: 2026-05-29
+- freshness: fresh
+
+# Noesis Lifecycle Knowledge
+
+## Current Knowledge
+
+Noesis should represent memory as a lifecycle with explicit stages for source
+material, extracted evidence, source-backed claims, synthesis, reviewed
+knowledge, operational context, stale or superseded memory, and archived
+history.
+
+## Why It Is Trusted
+
+- It is grounded in [[source-noesis-readme]].
+- The supporting evidence is recorded in [[evidence-memory-lifecycle]].
+- The interpretation was approved in [[review-local-first-lifecycle]].
+
+## Use In Future Work
+
+Use this as current guidance when implementing vault initialization, ingest,
+review queues, context building, and stale-memory exclusion.
+
+## Staleness Rule
+
+Recheck this note if the CLI/MCP implementation discovers that the schema is
+too rigid, too loose, or incompatible with Obsidian Bases.
 
 ## Traceability
 
 - Reviewed knowledge: [[reviewed-knowledge-noesis-lifecycle]]
-- Synthesis: [[synthesis-local-first-lifecycle-interface]]
-- Review: [[review-local-first-lifecycle]]
+- Syntheses: [[synthesis-local-first-lifecycle-interface]]
 - Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]
