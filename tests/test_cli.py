@@ -10,7 +10,7 @@ import unittest
 
 import yaml
 
-from noesis.vault import Vault, wikilink, write_note
+from noesis.vault import Vault, reviewed_note_content_hash, wikilink, write_note
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2622,6 +2622,22 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
                 ),
                 encoding="utf-8",
             )
+            vault = Vault.load(vault_path)
+            evidence = vault.find_note("evidence-memory-lifecycle")
+            audit = vault.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(evidence)
+            self.assertIsNotNone(audit)
+            assert evidence is not None and audit is not None
+            audit_metadata = dict(audit.metadata)
+            audit_metadata["reviewed_content_hashes"] = [
+                value
+                for value in audit_metadata["reviewed_content_hashes"]
+                if not value.startswith("evidence-memory-lifecycle=")
+            ]
+            audit_metadata["reviewed_content_hashes"].append(
+                f"{evidence.noesis_id}={reviewed_note_content_hash(evidence)}"
+            )
+            write_note(audit.path, audit_metadata, audit.body)
             before = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(before.returncode, 0, before.stderr)
 

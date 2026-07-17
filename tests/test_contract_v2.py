@@ -4,6 +4,9 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import noesis.vault as vault_module
 
 from noesis.vault import (
     Vault,
@@ -13,6 +16,8 @@ from noesis.vault import (
     mark_memory_stale,
     migrate_vault,
     promote_synthesis,
+    remove_relationship_link,
+    reviewed_note_content_hash,
     renew_review,
     wikilink,
     write_context_note,
@@ -848,11 +853,22 @@ Revise the operational guidance before reuse.
                 wikilink("source-agent-memory-session"),
             ]
             write_note(synthesis.path, synthesis_metadata, synthesis.body)
+            nested_vault = Vault.load(vault_path)
+            nested_evidence = nested_vault.find_note(evidence_id)
+            nested_claim = nested_vault.find_note(claim_id)
+            self.assertIsNotNone(nested_evidence)
+            self.assertIsNotNone(nested_claim)
+            assert nested_evidence is not None and nested_claim is not None
             audit_metadata = dict(audit.metadata)
             audit_metadata["reviewed_notes"] = [
                 *audit_metadata["reviewed_notes"],
                 wikilink(evidence_id),
                 wikilink(claim_id),
+            ]
+            audit_metadata["reviewed_content_hashes"] = [
+                *audit_metadata["reviewed_content_hashes"],
+                f"{evidence_id}={reviewed_note_content_hash(nested_evidence)}",
+                f"{claim_id}={reviewed_note_content_hash(nested_claim)}",
             ]
             write_note(audit.path, audit_metadata, audit.body)
 
@@ -1154,6 +1170,38 @@ Not scheduled.
             assert nested is not None and audit is not None
             self.assertIn(wikilink(audit.noesis_id), nested.metadata["reviewed_by"])
             self.assertIn(wikilink(nested_id), audit.metadata["reviewed_notes"])
+            self.assertEqual(migrated.validate(), [])
+
+    def test_migration_hashes_the_final_rebuilt_context_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            renewed = renew_review(
+                vault_path,
+                "context-first-cli-mcp-workflow",
+                next_review="2026-09-01",
+                reviewer="migration-test",
+                basis="The legacy context remains suitable for migration.",
+                slug="migration-context-review",
+                today="2026-07-16",
+            )
+            context = Vault.load(vault_path).find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(context)
+            assert context is not None
+            write_note(context.path, context.metadata, f"{context.body}\nLegacy-only rendering.\n")
+            self.downgrade_contract_to_v1(vault_path)
+
+            migrate_vault(vault_path, backup=False)
+
+            migrated = Vault.load(vault_path)
+            context = migrated.find_note("context-first-cli-mcp-workflow")
+            audit = migrated.find_note(renewed.note_id)
+            self.assertIsNotNone(context)
+            self.assertIsNotNone(audit)
+            assert context is not None and audit is not None
+            self.assertIn(
+                f"{context.noesis_id}={reviewed_note_content_hash(context)}",
+                audit.metadata["reviewed_content_hashes"],
+            )
             self.assertEqual(migrated.validate(), [])
 
     def test_migration_rejects_excluded_or_blocked_active_lineage(self) -> None:
@@ -1850,3 +1898,71 @@ Not scheduled.
             self.assertTrue(note.metadata["input_hashes"])
             self.assertTrue(all("=sha256:" in value for value in note.metadata["input_hashes"]))
             self.assertEqual(Vault.load(vault_path).validate(), [])
+
+    def test_review_approval_is_invalidated_by_same_date_content_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            target = Vault.load(vault_path).find_note("synthesis-local-first-lifecycle-interface")
+            self.assertIsNotNone(target)
+            assert target is not None
+
+            write_note(target.path, target.metadata, f"{target.body}\nUnreviewed same-date edit.\n")
+
+            messages = [issue.message for issue in Vault.load(vault_path).validate()]
+            self.assertIn(
+                "review audit content hash must match reviewed note "
+                "'synthesis-local-first-lifecycle-interface'",
+                messages,
+            )
+
+    def test_multi_note_write_rolls_back_after_write_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            vault = Vault.load(vault_path)
+            first = vault.find_note("evidence-memory-lifecycle")
+            second = vault.find_note("claim-useful-memory-requires-lifecycle")
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            assert first is not None and second is not None
+            original_text = {
+                first.path: first.path.read_text(encoding="utf-8"),
+                second.path: second.path.read_text(encoding="utf-8"),
+            }
+            original_write_note = vault_module.write_note
+            call_count = 0
+
+            def fail_second_write(path: Path, metadata: dict[str, object], body: str) -> None:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise OSError("simulated write failure")
+                original_write_note(path, metadata, body)
+
+            writes = [
+                (first.path, first.metadata, f"{first.body}\nChanged first.\n"),
+                (second.path, second.metadata, f"{second.body}\nChanged second.\n"),
+            ]
+            with patch("noesis.vault.write_note", side_effect=fail_second_write):
+                with self.assertRaisesRegex(OSError, "simulated write failure"):
+                    vault_module.write_notes_and_validate(vault_path, writes)
+
+            for path, text in original_text.items():
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_removing_relationship_link_preserves_annotations(self) -> None:
+        vault = Vault.load(EXAMPLE_VAULT)
+        metadata = {
+            "claims": [
+                "[[claim-useful-memory-requires-lifecycle]] then "
+                "[[claim-agent-memory-dogfood]] # selected"
+            ]
+        }
+
+        remove_relationship_link(
+            vault,
+            metadata,
+            "claims",
+            "claim-useful-memory-requires-lifecycle",
+        )
+
+        self.assertEqual(metadata["claims"], ["then [[claim-agent-memory-dogfood]] # selected"])

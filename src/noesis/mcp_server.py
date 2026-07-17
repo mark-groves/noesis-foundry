@@ -64,6 +64,8 @@ class NoesisMcpHandlers:
         )
         roots = ((self.default_vault,) if self.default_vault is not None else ()) + configured_roots
         self.allowed_roots = tuple(dict.fromkeys(roots))
+        if not self.allowed_roots:
+            raise ValueError("a default_vault or at least one allowed_root is required")
         if self.default_vault is not None:
             self.ensure_allowed_vault(self.default_vault)
 
@@ -558,7 +560,7 @@ class NoesisMcpHandlers:
 
     def ensure_allowed_path(self, path: Path, *, kind: str) -> None:
         if not self.allowed_roots:
-            return
+            raise ValueError("an explicit MCP filesystem boundary is required")
         for allowed_root in self.allowed_roots:
             try:
                 path.relative_to(allowed_root)

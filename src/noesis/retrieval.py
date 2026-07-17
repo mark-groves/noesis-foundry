@@ -39,7 +39,8 @@ def rank_notes(notes: Sequence[Any], query: str | None) -> list[RetrievalHit]:
     exact title phrases receive an additional boost.
     """
 
-    query_terms = tuple(dict.fromkeys(tokenize(query or "")))
+    phrase_terms = tuple(tokenize(query or ""))
+    query_terms = tuple(dict.fromkeys(phrase_terms))
     if not query_terms:
         return [RetrievalHit(note, 0.0, ()) for note in sorted(notes, key=note_sort_key)]
 
@@ -49,7 +50,6 @@ def rank_notes(notes: Sequence[Any], query: str | None) -> list[RetrievalHit]:
         for term in query_terms
     }
     document_count = max(len(notes), 1)
-    phrase = " ".join(query_terms)
     hits: list[RetrievalHit] = []
     for note, weighted_terms in zip(notes, documents, strict=True):
         matched = tuple(term for term in query_terms if term in weighted_terms)
@@ -63,7 +63,11 @@ def rank_notes(notes: Sequence[Any], query: str | None) -> list[RetrievalHit]:
             )
             score += inverse_document_frequency * (frequency * 2.2) / (frequency + 1.2)
         title_tokens = tokenize(getattr(note, "title", ""))
-        if phrase and phrase in " ".join(title_tokens):
+        phrase_length = len(phrase_terms)
+        if phrase_terms and any(
+            tuple(title_tokens[index : index + phrase_length]) == phrase_terms
+            for index in range(len(title_tokens) - phrase_length + 1)
+        ):
             score += 3.0
         if len(matched) == len(query_terms):
             score += 1.5

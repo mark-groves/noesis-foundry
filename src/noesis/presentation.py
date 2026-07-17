@@ -213,11 +213,11 @@ def review_due_details(note: Note, *, due_on: str | None = None) -> JsonObject:
 def review_lifecycle_safety(note: Note) -> JsonObject:
     context_excluded = is_context_excluded(note)
     excluded = is_excluded(note)
-    stale_memory = note.type == "stale-memory"
+    stale_or_superseded = note.type == "stale-memory" or note.status in {"stale", "superseded"}
     return {
         "excluded_from_active_context": context_excluded,
-        "stale_or_superseded_memory": stale_memory and excluded,
-        "renewal_preserves_lifecycle": stale_memory and excluded,
+        "stale_or_superseded_memory": stale_or_superseded and excluded,
+        "renewal_preserves_lifecycle": stale_or_superseded and excluded,
     }
 
 

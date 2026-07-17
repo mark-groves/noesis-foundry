@@ -42,6 +42,20 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual([hit.note.noesis_id for hit in hits], ["lifecycle"])
         self.assertEqual(hits[0].matched_terms, ("source", "backed", "lifecycle"))
 
+    def test_title_phrase_boost_uses_exact_contiguous_tokens(self) -> None:
+        plural_title = note("plural", "Agents", "agent")
+        no_title_match = note("other", "Other", "agent")
+        repeated_title = note("repeated", "Agent Agent", "agent")
+        separated_title = note("separated", "Agent Handbook Agent", "agent")
+
+        partial_hits = rank_notes([plural_title, no_title_match], "agent")
+        scores = {hit.note.noesis_id: hit.score for hit in partial_hits}
+        self.assertEqual(scores["plural"], scores["other"])
+
+        repeated_hits = rank_notes([separated_title, repeated_title], "agent agent")
+        self.assertEqual(repeated_hits[0].note.noesis_id, "repeated")
+        self.assertGreater(repeated_hits[0].score, repeated_hits[1].score)
+
     def test_retrieval_evaluation_rejects_unknown_filters(self) -> None:
         specification = {
             "queries": [

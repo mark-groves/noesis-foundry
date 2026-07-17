@@ -6,7 +6,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
+from unittest.mock import patch
 
 from noesis.storage import atomic_write_text, vault_lock
 from noesis.vault import Vault, init_vault
@@ -23,6 +25,40 @@ class StorageTests(unittest.TestCase):
             atomic_write_text(path, "second\n")
             self.assertEqual(path.read_text(encoding="utf-8"), "second\n")
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_atomic_write_syncs_permissions_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.md"
+            atomic_write_text(path, "first\n")
+
+            with (
+                patch("noesis.storage.os.fsync", wraps=os.fsync) as fsync,
+                patch("noesis.storage.fsync_directory") as fsync_directory,
+            ):
+                atomic_write_text(path, "second\n")
+
+            self.assertGreaterEqual(fsync.call_count, 2)
+            fsync_directory.assert_called_once_with(path.parent)
+
+    def test_windows_lock_acquisition_and_release_use_byte_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            vault_path.mkdir()
+            (vault_path / ".noesis.lock").write_text("existing lock file", encoding="utf-8")
+            positions: list[int] = []
+            msvcrt = types.ModuleType("msvcrt")
+            msvcrt.LK_LOCK = 1
+            msvcrt.LK_UNLCK = 2
+
+            def record_lock_position(file_descriptor: int, mode: int, count: int) -> None:
+                positions.append(os.lseek(file_descriptor, 0, os.SEEK_CUR))
+
+            msvcrt.locking = record_lock_position
+            with patch.dict(sys.modules, {"fcntl": None, "msvcrt": msvcrt}):
+                with vault_lock(vault_path):
+                    pass
+
+            self.assertEqual(positions, [0, 0])
 
     def test_generic_vault_lock_does_not_create_invalid_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1043,6 +1043,27 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
                 )
             if parse_review_date(note.metadata.get("reviewed_at")) is None:
                 issues.append(Issue(note.path, "review decision audit requires a parseable reviewed_at date"))
+            for target in relationship_notes(vault, note, "reviewed_notes"):
+                if not review_audit_has_content_hash(note, target):
+                    issues.append(
+                        Issue(
+                            note.path,
+                            f"review audit must record a content hash for reviewed note {target.noesis_id!r}",
+                        )
+                    )
+                elif (
+                    decision in {"approved", "renewed"}
+                    and review_requires_audit(target)
+                    and (completed_audits := completed_review_audits_covering(vault, target))
+                    and completed_audits[-1].noesis_id == note.noesis_id
+                    and not review_audit_content_hash_matches(note, target)
+                ):
+                    issues.append(
+                        Issue(
+                            note.path,
+                            f"review audit content hash must match reviewed note {target.noesis_id!r}",
+                        )
+                    )
         if not markdown_body_section(note.body, "Basis"):
             issues.append(Issue(note.path, "review audit requires a non-empty Basis section"))
         if decision == "renewed" and parse_review_date(note.metadata.get("next_review")) is None:
@@ -1658,6 +1679,16 @@ def _migrate_vault_locked(
         if metadata != note.metadata or body != note.body:
             note_updates[note.path] = (metadata, body)
 
+    vault = project_vault_notes(vault, note_updates)
+    for audit in (note for note in vault.notes if note.type == "review"):
+        audit_metadata = dict(audit.metadata)
+        audit_metadata["reviewed_content_hashes"] = [
+            f"{target.noesis_id}={reviewed_note_content_hash(target)}"
+            for target in relationship_notes(vault, audit, "reviewed_notes")
+        ]
+        note_updates[audit.path] = (audit_metadata, audit.body)
+    vault = project_vault_notes(vault, note_updates)
+
     for knowledge in vault.notes:
         if knowledge.type != "reviewed-knowledge" or knowledge.status not in CURRENT_KNOWLEDGE_STATUSES:
             continue
@@ -1713,7 +1744,7 @@ def _migrate_vault_locked(
                 )
                 if is_completed_review_audit(audit)
                 and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
-                and review_audit_postdates_note(audit, knowledge)
+                and review_audit_date_postdates_note(audit, knowledge)
                 and any(
                     relationship_contains(
                         vault,
@@ -1721,6 +1752,7 @@ def _migrate_vault_locked(
                         "reviewed_notes",
                         lineage_note.noesis_id,
                     )
+                    and review_audit_content_hash_matches(audit, lineage_note)
                     for lineage_note in auditable_lineage.values()
                     if lineage_note.noesis_id != knowledge.noesis_id
                 )
@@ -1732,11 +1764,22 @@ def _migrate_vault_locked(
             )
         audit = approved_audits[-1]
         audit_metadata = dict(note_updates.get(audit.path, (audit.metadata, audit.body))[0])
+        reviewed_content_hashes = [
+            value
+            for value in as_list(audit_metadata.get("reviewed_content_hashes"))
+            if isinstance(value, str)
+        ]
         for support in supports:
             support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
             add_relationship_link(support_metadata, "reviewed_by", wikilink(audit.noesis_id))
             note_updates[support.path] = (support_metadata, support.body)
             add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
+            prefix = f"{support.noesis_id}="
+            reviewed_content_hashes = [
+                value for value in reviewed_content_hashes if not value.startswith(prefix)
+            ]
+            reviewed_content_hashes.append(f"{prefix}{reviewed_note_content_hash(support)}")
+        audit_metadata["reviewed_content_hashes"] = reviewed_content_hashes
         note_updates[audit.path] = (audit_metadata, audit.body)
 
     today = date.today().isoformat()
@@ -2778,6 +2821,9 @@ def renew_review(
         "reviewer": reviewer,
         "reviewed_at": renewed_at,
         "reviewed_notes": [target_link],
+        "reviewed_content_hashes": [
+            f"{target.noesis_id}={reviewed_note_content_hash(target)}"
+        ],
         "decision": "renewed",
         "next_review": scheduled_for,
         "tags": ["noesis", "review"],
@@ -2821,6 +2867,9 @@ None.
         renewed_at,
         writes,
     )
+    review_metadata["reviewed_content_hashes"] = [
+        f"{target.noesis_id}={reviewed_body_content_hash(last_written_body(target, writes))}"
+    ]
     write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
 
@@ -2880,6 +2929,9 @@ def write_review_decision(
         "reviewer": reviewer,
         "reviewed_at": reviewed_at,
         "reviewed_notes": [target_link],
+        "reviewed_content_hashes": [
+            f"{target.noesis_id}={reviewed_note_content_hash(target)}"
+        ],
         "decision": decision,
         "tags": ["noesis", "review"],
         "aliases": [],
@@ -2938,6 +2990,9 @@ def write_review_decision(
             reviewed_at,
             writes,
         )
+    review_metadata["reviewed_content_hashes"] = [
+        f"{target.noesis_id}={reviewed_body_content_hash(last_written_body(target, writes))}"
+    ]
     write_notes_and_validate(root, writes)
     return CreatedNote(note_id=note_id, path=note_path)
 
@@ -3830,9 +3885,31 @@ def approved_lineage_review_audits_for(
 
 
 def review_audit_postdates_note(audit: Note, target: Note) -> bool:
+    return review_audit_date_postdates_note(audit, target) and review_audit_content_hash_matches(
+        audit,
+        target,
+    )
+
+
+def review_audit_date_postdates_note(audit: Note, target: Note) -> bool:
     reviewed_at = parse_review_date(audit.metadata.get("reviewed_at"))
     updated = parse_review_date(target.metadata.get("updated"))
     return reviewed_at is not None and updated is not None and reviewed_at >= updated
+
+
+def review_audit_content_hash_matches(audit: Note, target: Note) -> bool:
+    expected = f"{target.noesis_id}={reviewed_note_content_hash(target)}"
+    return expected in as_list(audit.metadata.get("reviewed_content_hashes"))
+
+
+def review_audit_has_content_hash(audit: Note, target: Note) -> bool:
+    prefix = f"{target.noesis_id}=sha256:"
+    return any(
+        isinstance(value, str)
+        and value.startswith(prefix)
+        and re.fullmatch(r"[0-9a-f]{64}", value[len(prefix) :]) is not None
+        for value in as_list(audit.metadata.get("reviewed_content_hashes"))
+    )
 
 
 def review_requires_audit(note: Note) -> bool:
@@ -3901,6 +3978,25 @@ def note_content_hash(metadata: dict[str, Any], body: str) -> str:
     return f"sha256:{digest}"
 
 
+def reviewed_note_content_hash(note: Note) -> str:
+    return reviewed_body_content_hash(note.body)
+
+
+def reviewed_body_content_hash(body: str) -> str:
+    digest = hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def last_written_body(
+    target: Note,
+    writes: list[tuple[Path, dict[str, Any], str]],
+) -> str:
+    return next(
+        (body for path, _, body in reversed(writes) if path == target.path),
+        target.body,
+    )
+
+
 def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, render_note_text(metadata, body))
@@ -3933,7 +4029,7 @@ def write_notes_and_validate(root: Path, writes: list[tuple[Path, dict[str, Any]
         for path, metadata, body in writes:
             write_note(path, metadata, body)
         ensure_valid_vault(root)
-    except ValueError:
+    except Exception:
         for path, text in original_text.items():
             if text is None:
                 path.unlink(missing_ok=True)
@@ -4041,22 +4137,22 @@ def remove_relationship_link(
         if not isinstance(item, str):
             kept.append(item)
             continue
-        remove_item = False
-        remaining_links: list[str] = []
-        for target in extract_wikilinks(item):
+        removed = False
+
+        def remove_target(match: re.Match[str]) -> str:
+            nonlocal removed
+            target = normalize_wikilink_target(match.group(1) or match.group(2))
             target_note = vault.find_note(target)
             if target_note is not None and target_note.noesis_id == target_noesis_id:
-                remove_item = True
-                continue
-            remaining_links.append(
-                wikilink(target_note.noesis_id if target_note is not None else target)
-            )
-        if remove_item:
-            for link in remaining_links:
-                if link not in kept:
-                    kept.append(link)
-        else:
+                removed = True
+                return ""
+            return match.group(0)
+
+        updated_item = WIKILINK_RE.sub(remove_target, item).strip()
+        if not removed:
             kept.append(item)
+        elif extract_wikilinks(updated_item) and updated_item not in kept:
+            kept.append(updated_item)
     metadata[key] = kept
 
 

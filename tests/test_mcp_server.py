@@ -9,7 +9,15 @@ import unittest
 from unittest.mock import patch
 
 from noesis.mcp_server import NoesisMcpHandlers, create_server
-from noesis.vault import Vault, build_context, init_vault, write_note
+from noesis.presentation import review_lifecycle_safety
+from noesis.vault import (
+    Note,
+    Vault,
+    build_context,
+    init_vault,
+    reviewed_note_content_hash,
+    write_note,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +63,10 @@ def fake_fastmcp_modules() -> dict[str, types.ModuleType]:
 
 
 class NoesisMcpHandlerTests(unittest.TestCase):
+    def test_mcp_requires_an_explicit_filesystem_boundary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "default_vault or at least one allowed_root"):
+            NoesisMcpHandlers()
+
     def test_mcp_restricts_vault_roots_and_redacts_host_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -756,8 +768,11 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 basis="The linked scheduled review confirms current context.",
             )
             self.assertTrue(linked["ok"], linked)
+            target = Vault.load(vault_path).find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(target)
+            assert target is not None
             (vault_path / "review" / "review-imported-later-audit.md").write_text(
-                """---
+                f"""---
 title: Imported Later Audit
 noesis_id: review-imported-later-audit
 type: review
@@ -771,6 +786,8 @@ reviewer: imported
 reviewed_at: 2026-08-01
 reviewed_notes:
   - "[[context-first-cli-mcp-workflow]]"
+reviewed_content_hashes:
+  - context-first-cli-mcp-workflow={reviewed_note_content_hash(target)}
 decision: renewed
 next_review: 2026-09-01
 tags:
@@ -804,9 +821,6 @@ None.
                 encoding="utf-8",
             )
 
-            target = Vault.load(vault_path).find_note("context-first-cli-mcp-workflow")
-            self.assertIsNotNone(target)
-            assert target is not None
             target_metadata = dict(target.metadata)
             target_metadata["next_review"] = "2026-09-01"
             write_note(target.path, target_metadata, target.body)
@@ -878,7 +892,7 @@ None.
             self.assertEqual(audit_record["changes_requested"], "None for the prototype.")
 
     def test_invalid_vault_errors_are_structured(self) -> None:
-        handlers = NoesisMcpHandlers()
+        handlers = NoesisMcpHandlers(allowed_roots=[Path("/tmp")])
 
         result = handlers.get_review_queue("/tmp/noesis-missing-vault")
 
@@ -915,12 +929,34 @@ None.
         self.assertEqual(lineage["error"], "vault validation failed")
         self.assertEqual(lineage["issue_count"], 16)
 
+    def test_directly_staled_knowledge_reports_lifecycle_safety(self) -> None:
+        path = Path("knowledge/reviewed-knowledge-stale.md")
+        note = Note(
+            path=path,
+            rel_path=path,
+            metadata={
+                "noesis_id": "reviewed-knowledge-stale",
+                "title": "Stale Knowledge",
+                "type": "reviewed-knowledge",
+                "status": "stale",
+            },
+            body="Stale content.",
+        )
+
+        safety = review_lifecycle_safety(note)
+
+        self.assertEqual(safety["stale_or_superseded_memory"], True)
+        self.assertEqual(safety["renewal_preserves_lifecycle"], True)
+
     def test_review_presenter_ignores_non_covering_target_side_audit_links(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             shutil.copytree(EXAMPLE_VAULT, vault_path)
             target_id = "claim-useful-memory-requires-lifecycle"
             unrelated_id = "review-unrelated-changes-requested"
+            source = Vault.load(vault_path).find_note("source-agent-memory-session")
+            self.assertIsNotNone(source)
+            assert source is not None
             write_note(
                 vault_path / "review" / f"{unrelated_id}.md",
                 {
@@ -936,6 +972,9 @@ None.
                     "reviewer": "test-human",
                     "reviewed_at": "2026-07-17",
                     "reviewed_notes": ["[[source-agent-memory-session]]"],
+                    "reviewed_content_hashes": [
+                        f"source-agent-memory-session={reviewed_note_content_hash(source)}"
+                    ],
                     "decision": "changes-requested",
                     "tags": ["noesis", "review"],
                     "aliases": [],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import errno
 from functools import wraps
 import os
 from pathlib import Path
@@ -44,6 +45,7 @@ def vault_lock(vault_path: Path | str, *, create_root: bool = False) -> Iterator
             except ModuleNotFoundError:
                 import msvcrt
 
+                lock_handle.seek(0)
                 msvcrt.locking(lock_handle.fileno(), msvcrt.LK_LOCK, 1)
             active_roots = set(active_roots)
             active_roots.add(root)
@@ -101,7 +103,28 @@ def atomic_write_text(path: Path, content: str) -> None:
             temp_path = Path(handle.name)
         if mode is not None:
             os.chmod(temp_path, mode)
+            with temp_path.open("rb") as handle:
+                os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        fsync_directory(path.parent)
     finally:
         if temp_path is not None and temp_path.exists():
             temp_path.unlink()
+
+
+def fsync_directory(path: Path) -> None:
+    try:
+        directory_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(directory_fd)
+        except OSError as exc:
+            unsupported = {errno.EBADF, errno.EINVAL}
+            if hasattr(errno, "ENOTSUP"):
+                unsupported.add(errno.ENOTSUP)
+            if exc.errno not in unsupported:
+                raise
+    finally:
+        os.close(directory_fd)

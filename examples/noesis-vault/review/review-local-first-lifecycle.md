@@ -14,6 +14,10 @@ reviewed_notes:
   - "[[evidence-memory-lifecycle]]"
   - "[[claim-useful-memory-requires-lifecycle]]"
   - "[[synthesis-local-first-lifecycle-interface]]"
+reviewed_content_hashes:
+  - evidence-memory-lifecycle=sha256:24a001c35d48c9c1f4a1dad91fbbc218975931cdadefc3d8ac8361165ba5f3d1
+  - claim-useful-memory-requires-lifecycle=sha256:5b8817c63db5177023e305540d1138f7160e95ee9e0cc82bc2acfc5dab9bc1cf
+  - synthesis-local-first-lifecycle-interface=sha256:256d7363c30e518875a7a90999b12a4450d8f6ec72fc4b8be2d899976ee09843
 decision: approved
 next_review: 2026-06-29
 tags:

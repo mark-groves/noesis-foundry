@@ -4,7 +4,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from importlib import import_module
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tomllib
 import unittest
 
@@ -18,8 +21,34 @@ class ConsoleScriptSmokeTests(unittest.TestCase):
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertFalse(any(dependency.startswith("mcp") for dependency in pyproject["project"]["dependencies"]))
         self.assertTrue(any(dependency.startswith("mcp") for dependency in pyproject["project"]["optional-dependencies"]["mcp"]))
-        cli_source = (ROOT / "src" / "noesis" / "cli.py").read_text(encoding="utf-8")
-        self.assertNotIn("from .mcp_server import", cli_source)
+        runtime_smoke = f"""
+import importlib.abc
+import sys
+
+sys.path.insert(0, {str(ROOT / "src")!r})
+
+class RejectMcpImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "mcp" or fullname.startswith("mcp."):
+            raise ModuleNotFoundError("MCP imports are unavailable in the base installation")
+        return None
+
+sys.meta_path.insert(0, RejectMcpImports())
+from noesis.cli import main
+raise SystemExit(main(["vault", "doctor", {str(EXAMPLE_VAULT)!r}, "--json"]))
+"""
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-c", runtime_smoke],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["ready_for_cli_mcp"], True)
 
     def test_pyproject_console_script_targets_start(self) -> None:
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
