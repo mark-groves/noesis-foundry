@@ -11,7 +11,7 @@ import unittest
 import yaml
 
 import noesis.vault as vault_module
-from noesis.vault import Vault, reviewed_note_content_hash, wikilink, write_note
+from noesis.vault import Vault, reviewed_note_content_hash, write_note
 
 
 ROOT = Path(__file__).resolve().parents[1]
