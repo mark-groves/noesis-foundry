@@ -16,6 +16,12 @@ reviewed_notes:
   - "[[evidence-project-memory-corpus-review-gate]]"
   - "[[claim-project-memory-corpus-continuation]]"
   - "[[synthesis-project-memory-corpus-continuation]]"
+reviewed_content_hashes:
+  - evidence-project-memory-corpus-contract=sha256:83371a06765dffca31db41fc2dbe5c5f1a03f50ceff273ca247a495b55adc6e7
+  - evidence-project-memory-corpus-import-fixture=sha256:7283a6540237f701c73b1305313c3a98b57af9a55195f0f19ae7b1a69c9c8856
+  - evidence-project-memory-corpus-review-gate=sha256:18ffb59d59eba7de9853570f1ecb7a038626f9d0f0db365b708d74384fa173ee
+  - claim-project-memory-corpus-continuation=sha256:d6e773a19dc62176ade83f6e69a2c5ff3a2ff968446a1d0bd79424ec60561f20
+  - synthesis-project-memory-corpus-continuation=sha256:e6e05677d2bf5b46a66c3a3a3eed92658a749bb6ba9c32bd3fe7caff9c90edec
 decision: approved
 tags:
   - noesis

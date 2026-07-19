@@ -14,6 +14,9 @@ original_url: unknown
 author: unknown
 source_date: unknown
 captured: '2026-06-06'
+content_hash: sha256:99e9d5e0443076c6c4bf1dc36511db09d07956ed629072ef29108574b3ee9629
+content_hash_algorithm: sha256
+source_size_bytes: 129
 tags:
 - noesis
 - source

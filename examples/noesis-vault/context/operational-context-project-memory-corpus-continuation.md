@@ -10,12 +10,22 @@ created: 2026-06-18
 updated: 2026-06-18
 scope: project-memory-corpus
 purpose: continue expanding Noesis Foundry project memory
+context_limit: 1
 syntheses:
   - "[[synthesis-project-memory-corpus-continuation]]"
 reviewed_knowledge:
   - "[[reviewed-knowledge-project-memory-corpus-continuation]]"
 excluded_memory:
+  - "[[archive-2026-05-29-first-lifecycle]]"
+  - "[[stale-agent-memory-global-summary]]"
+  - "[[stale-custom-plugin-first]]"
+  - "[[stale-noesis-roadmap-plugin-first]]"
   - "[[stale-project-memory-corpus-bulk-import-active-context]]"
+freshness_excluded: []
+as_of: 2026-06-18
+freshness_policy: balanced
+input_hashes:
+  - "reviewed-knowledge-project-memory-corpus-continuation=sha256:d2abde538021ef7203a845ba10a8628cce5c1319afea7e3a64d5ca79e42632ef"
 next_review: 2026-07-18
 tags:
   - noesis
@@ -32,8 +42,21 @@ Scope: project-memory-corpus
 
 Purpose: continue expanding Noesis Foundry project memory
 
+As of: 2026-06-18
+Freshness policy: balanced
+
+Budget: limit 1
+
 This context package is built from reviewed knowledge only.
-Stale, superseded, and archived memory is excluded.
+Stale, superseded, archived, and expired memory is excluded.
+Review-due knowledge is explicitly marked and is excluded when strict freshness is requested.
+
+## Selection Summary
+
+- Current reviewed knowledge available: 4
+- Included in active context: 1
+- Excluded by scope or budget: 3
+- Excluded by freshness: 0
 
 ## Reviewed Knowledge
 
@@ -43,6 +66,7 @@ Stale, superseded, and archived memory is excluded.
 - path: knowledge/reviewed-knowledge-project-memory-corpus-continuation.md
 - confidence: high
 - reviewed_at: 2026-06-18
+- freshness: fresh
 
 # Project Memory Corpus Continuation Knowledge
 
@@ -85,4 +109,4 @@ unreviewed evidence drafts to appear as active operational context.
 
 - Reviewed knowledge: [[reviewed-knowledge-project-memory-corpus-continuation]]
 - Syntheses: [[synthesis-project-memory-corpus-continuation]]
-- Excluded memory: [[stale-project-memory-corpus-bulk-import-active-context]]
+- Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]

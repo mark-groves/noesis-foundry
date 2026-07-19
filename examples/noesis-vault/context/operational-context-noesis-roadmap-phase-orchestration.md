@@ -15,7 +15,16 @@ syntheses:
 reviewed_knowledge:
   - "[[reviewed-knowledge-noesis-roadmap-phase-orchestration]]"
 excluded_memory:
+  - "[[archive-2026-05-29-first-lifecycle]]"
+  - "[[stale-agent-memory-global-summary]]"
+  - "[[stale-custom-plugin-first]]"
   - "[[stale-noesis-roadmap-plugin-first]]"
+  - "[[stale-project-memory-corpus-bulk-import-active-context]]"
+freshness_excluded: []
+as_of: 2026-06-15
+freshness_policy: balanced
+input_hashes:
+  - "reviewed-knowledge-noesis-roadmap-phase-orchestration=sha256:cdaf20af3d615b8e92f6c7f1f80da7908def9cfdac310706ac6a380fb1fa5bea"
 next_review: 2026-07-15
 tags:
   - noesis
@@ -32,8 +41,19 @@ Scope: noesis-roadmap
 
 Purpose: orchestrate next Noesis phases
 
+As of: 2026-06-15
+Freshness policy: balanced
+
 This context package is built from reviewed knowledge only.
-Stale, superseded, and archived memory is excluded.
+Stale, superseded, archived, and expired memory is excluded.
+Review-due knowledge is explicitly marked and is excluded when strict freshness is requested.
+
+## Selection Summary
+
+- Current reviewed knowledge available: 4
+- Included in active context: 1
+- Excluded by scope or budget: 3
+- Excluded by freshness: 0
 
 ## Reviewed Knowledge
 
@@ -43,6 +63,7 @@ Stale, superseded, and archived memory is excluded.
 - path: knowledge/reviewed-knowledge-noesis-roadmap-phase-orchestration.md
 - confidence: high
 - reviewed_at: 2026-06-15
+- freshness: fresh
 
 # Noesis Roadmap Phase Orchestration Knowledge
 
@@ -88,4 +109,4 @@ for the basic review and context workflow.
 
 - Reviewed knowledge: [[reviewed-knowledge-noesis-roadmap-phase-orchestration]]
 - Syntheses: [[synthesis-noesis-roadmap-phase-orchestration]]
-- Excluded memory: [[stale-noesis-roadmap-plugin-first]]
+- Excluded memory: [[archive-2026-05-29-first-lifecycle]], [[stale-agent-memory-global-summary]], [[stale-custom-plugin-first]], [[stale-noesis-roadmap-plugin-first]], [[stale-project-memory-corpus-bulk-import-active-context]]

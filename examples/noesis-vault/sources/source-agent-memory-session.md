@@ -14,6 +14,9 @@ original_url: local-example-vault
 author: noesis-example
 source_date: 2026-06-13
 captured: 2026-06-13
+content_hash: sha256:18e887be0ddb51f8b0bba25a23493dbbda7d6077445e449e2d5f2400c9104bce
+content_hash_algorithm: sha256
+source_size_bytes: 677
 tags:
   - noesis
   - source

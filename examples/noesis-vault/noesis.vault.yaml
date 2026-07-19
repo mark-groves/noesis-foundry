@@ -1,6 +1,6 @@
 noesis_contract: vault
-contract_version: "1"
+contract_version: "2"
 source_of_truth: markdown-flat-yaml
-requires_noesis: ">=0.1.0"
+requires_noesis: ">=0.2.0"
 created: 2026-06-13
-updated: 2026-06-18
+updated: 2026-07-16

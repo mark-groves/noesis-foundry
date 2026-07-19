@@ -9,7 +9,15 @@ import unittest
 from unittest.mock import patch
 
 from noesis.mcp_server import NoesisMcpHandlers, create_server
-from noesis.vault import Vault, build_context, init_vault
+from noesis.presentation import review_lifecycle_safety
+from noesis.vault import (
+    Note,
+    Vault,
+    build_context,
+    init_vault,
+    reviewed_note_content_hash,
+    write_note,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +63,99 @@ def fake_fastmcp_modules() -> dict[str, types.ModuleType]:
 
 
 class NoesisMcpHandlerTests(unittest.TestCase):
+    def test_mcp_requires_an_explicit_filesystem_boundary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "default_vault or at least one allowed_root"):
+            NoesisMcpHandlers()
+
+    def test_mcp_restricts_vault_roots_and_redacts_host_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault_path = root / "vault"
+            other_vault = root / "other-vault"
+            init_vault(vault_path)
+            init_vault(other_vault)
+            source_file = root / "private-source.txt"
+            source_file.write_text("private local source", encoding="utf-8")
+            handlers = NoesisMcpHandlers(vault_path)
+
+            with self.assertRaisesRegex(ValueError, "outside configured MCP roots"):
+                handlers.lint_vault(str(other_vault))
+
+            with self.assertRaisesRegex(ValueError, "source file is outside configured MCP roots"):
+                handlers.ingest_source(str(source_file), "Private Source")
+
+            allowed_handlers = NoesisMcpHandlers(vault_path, allowed_roots=[root])
+            ingested = allowed_handlers.ingest_source(str(source_file), "Private Source")
+            self.assertTrue(ingested["ok"], ingested)
+            self.assertEqual(ingested["created"]["path"], "sources/source-private-source.md")
+            fetched = allowed_handlers.get_note("source-private-source")
+            self.assertTrue(fetched["ok"], fetched)
+            self.assertNotIn("absolute_path", fetched["note"])
+            self.assertEqual(fetched["note"]["metadata"]["original_path"], "<local>/private-source.txt")
+
+            for profile in ("agent-handoff", "codex-handoff"):
+                with self.subTest(profile=profile):
+                    handoff = handlers.build_context(profile=profile)
+                    self.assertTrue(handoff["ok"], handoff)
+                    self.assertNotIn(str(vault_path.resolve()), handoff["content"])
+                    self.assertTrue(
+                        all(
+                            str(vault_path.resolve()) not in command
+                            for command in handoff["handoff"]["validation_commands"]
+                        )
+                    )
+                    self.assertIn("'<vault>'", handoff["content"])
+                    self.assertTrue(
+                        all(
+                            "'<vault>'" in command
+                            for command in handoff["handoff"]["validation_commands"][1:4]
+                        )
+                    )
+
+    def test_mcp_allowed_roots_extend_the_default_vault(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault_path = root / "vault"
+            other_vault = root / "other-vault"
+            init_vault(vault_path)
+            init_vault(other_vault)
+
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[other_vault])
+
+            self.assertTrue(handlers.lint_vault()["ok"])
+            self.assertTrue(handlers.lint_vault(str(other_vault))["ok"])
+
+    def test_mcp_redacts_stored_handoff_bodies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            for profile in ("agent-handoff", "codex-handoff"):
+                with self.subTest(profile=profile):
+                    written = handlers.write_context(
+                        scope="noesis-roadmap",
+                        profile=profile,
+                        title=f"Stored {profile}",
+                        slug=f"stored-{profile}",
+                    )
+                    self.assertTrue(written["ok"], written)
+                    note_id = written["created"]["note_id"]
+                    stored = Vault.load(vault_path).find_note(note_id)
+                    self.assertIsNotNone(stored)
+                    assert stored is not None
+                    self.assertIn(str(vault_path.resolve()), stored.body)
+
+                    fetched = handlers.get_note(note_id)
+                    self.assertTrue(fetched["ok"], fetched)
+                    self.assertNotIn(str(vault_path.resolve()), fetched["note"]["body"])
+                    self.assertIn("<vault>", fetched["note"]["body"])
+
+                    workbench = handlers.show_review(note_id)
+                    self.assertTrue(workbench["ok"], workbench)
+                    self.assertNotIn(str(vault_path.resolve()), workbench["note"]["body"])
+                    self.assertIn("<vault>", workbench["note"]["body"])
+
     def test_create_server_registers_expected_mcp_surface(self) -> None:
         # FastMCP does not expose a stable public introspection API across all
         # installed versions, so this smoke test records Noesis' registration
@@ -106,7 +207,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(lint["ok"], lint)
         self.assertEqual(lint["issue_count"], 0)
         self.assertGreater(lint["note_count"], 0)
-        self.assertEqual(lint["contract"]["version"], "1")
+        self.assertEqual(lint["contract"]["version"], "2")
         self.assertEqual(lint["compatible"], True)
         self.assertEqual(lint["complete"], True)
         self.assertEqual(lint["ready_for_cli_mcp"], True)
@@ -229,6 +330,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                 for note in handoff_context["handoff"]["scoped_out_reviewed_knowledge"]
             ],
         )
+
         self.assertEqual(handoff_context["handoff"]["budgeted_out_reviewed_knowledge"], [])
         self.assertTrue(
             any(
@@ -266,6 +368,33 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertFalse(invalid_profile["ok"])
         self.assertIn("profile must be one of", invalid_profile["error"])
 
+    def test_get_note_rejects_absolute_source_raw_path_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+            source_id = "source-noesis-readme"
+            relative = handlers.get_note(source_id)
+            self.assertTrue(relative["ok"], relative)
+            self.assertFalse(Path(relative["note"]["metadata"]["raw_path"]).is_absolute())
+
+            source = Vault.load(vault_path).find_note(source_id)
+            self.assertIsNotNone(source)
+            assert source is not None
+            metadata = dict(source.metadata)
+            metadata["raw_path"] = str(
+                (source.path.parent / str(source.metadata["raw_path"])).resolve()
+            )
+            write_note(source.path, metadata, source.body)
+
+            blocked = handlers.get_note(source_id)
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertEqual(blocked["error"], "vault validation failed")
+            self.assertIn(
+                "raw_path must be vault-relative",
+                [issue["message"] for issue in blocked["issues"]],
+            )
+
     def test_search_notes_filters_by_text_and_metadata(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
 
@@ -279,6 +408,24 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual(result["notes"][0]["noesis_id"], "claim-useful-memory-requires-lifecycle")
+
+    def test_search_notes_rejects_invalid_metadata_filters(self) -> None:
+        handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
+
+        cases = (
+            ("type", {"note_type": "reviewed_knowlege"}),
+            ("lifecycle_stage", {"lifecycle_stage": "knowlege"}),
+            ("status", {"status": "actve"}),
+            ("review_state", {"review_state": "aproved"}),
+        )
+        for field, kwargs in cases:
+            with self.subTest(field=field):
+                result = handlers.search_notes(**kwargs)
+                self.assertEqual(result["ok"], False)
+                self.assertEqual(result["field"], field)
+                self.assertIn(f"invalid {field}", result["error"])
+                self.assertIsInstance(result["expected"], list)
+                self.assertGreater(len(result["expected"]), 0)
 
     def test_review_queue_rejects_invalid_mcp_filters(self) -> None:
         handlers = NoesisMcpHandlers(EXAMPLE_VAULT)
@@ -330,12 +477,15 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             requested = handlers.request_review_changes(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The claim needs clarification before reuse.",
                 changes_requested="Clarify before approval.",
                 slug="claim-needs-clarification",
             )
             self.assertTrue(requested["ok"], requested)
             approved = handlers.approve_review(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
                 basis="Clarification is complete.",
                 slug="claim-clarification-approved",
             )
@@ -362,6 +512,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             requested_again = handlers.request_review_changes(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The follow-up review found another ambiguity.",
                 changes_requested="Clarify the follow-up cycle.",
                 slug="claim-needs-follow-up-clarification",
             )
@@ -374,6 +526,102 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertIn("follow-up cycle", follow_up["changes_requested"][0]["changes_requested"])
             self.assertEqual(len(follow_up["changes_requested_history"]), 2)
 
+    def test_resolved_change_requests_restore_context_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            requested = handlers.request_review_changes(
+                "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The claim needs clarification before reuse.",
+                changes_requested="Clarify before approval.",
+                slug="claim-context-clarification",
+            )
+            self.assertTrue(requested["ok"], requested)
+            claim_approved = handlers.approve_review(
+                "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="The claim clarification is complete.",
+                slug="claim-context-approved",
+            )
+            self.assertTrue(claim_approved["ok"], claim_approved)
+            knowledge_approved = handlers.approve_review(
+                "reviewed-knowledge-noesis-lifecycle",
+                reviewer="test-agent",
+                basis="The dependent knowledge is safe after the claim correction.",
+                slug="knowledge-context-restored",
+            )
+            self.assertTrue(knowledge_approved["ok"], knowledge_approved)
+
+            vault = Vault.load(vault_path)
+            context = vault.find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["reviewed_knowledge"],
+            )
+            self.assertNotIn(
+                "[[claim-useful-memory-requires-lifecycle]]",
+                context.metadata["excluded_memory"],
+            )
+            self.assertNotIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["excluded_memory"],
+            )
+            self.assertEqual(vault.validate(), [])
+
+    def test_context_restoration_respects_stored_freshness_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+
+            written = handlers.write_context(
+                scope="lifecycle",
+                as_of="2026-06-01",
+                freshness_policy="strict",
+                title="Strict Lifecycle Context",
+                slug="strict-lifecycle-restoration",
+            )
+            self.assertTrue(written["ok"], written)
+            requested = handlers.request_review_changes(
+                "reviewed-knowledge-noesis-lifecycle",
+                reviewer="test-agent",
+                basis="The knowledge needs a focused correction.",
+                changes_requested="Correct the knowledge before reuse.",
+                slug="strict-lifecycle-correction",
+            )
+            self.assertTrue(requested["ok"], requested)
+            approved = handlers.approve_review(
+                "reviewed-knowledge-noesis-lifecycle",
+                reviewer="test-agent",
+                basis="The knowledge correction is complete.",
+                next_review="2026-05-31",
+                slug="strict-lifecycle-corrected",
+            )
+            self.assertTrue(approved["ok"], approved)
+
+            vault = Vault.load(vault_path)
+            context = vault.find_note("context-strict-lifecycle-restoration")
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertNotIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["reviewed_knowledge"],
+            )
+            self.assertIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["freshness_excluded"],
+            )
+            self.assertNotIn(
+                "[[reviewed-knowledge-noesis-lifecycle]]",
+                context.metadata["excluded_memory"],
+            )
+            self.assertEqual(vault.validate(), [])
+
     def test_propagated_change_requests_are_open_without_direct_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
@@ -382,6 +630,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
 
             requested = handlers.request_review_changes(
                 "claim-useful-memory-requires-lifecycle",
+                reviewer="test-agent",
+                basis="Active knowledge must not depend on a disputed claim.",
                 changes_requested="Revise this claim before reuse.",
                 slug="claim-propagates-review-changes",
             )
@@ -395,8 +645,20 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertEqual(len(workbench["changes_requested"]), 1)
             self.assertIsNone(workbench["changes_requested"][0]["review"])
             self.assertEqual(workbench["changes_requested_history"], [])
+            self.assertEqual(
+                workbench["lifecycle_safety"]["excluded_from_active_context"],
+                True,
+            )
 
-    def test_review_handlers_treat_impossible_metadata_dates_as_unscheduled(self) -> None:
+            source_workbench = handlers.show_review("source-noesis-readme")
+            self.assertTrue(source_workbench["ok"], source_workbench)
+            impacted_context_ids = {
+                context["noesis_id"]
+                for context in source_workbench["impact"]["dependent_contexts"]
+            }
+            self.assertIn("context-first-cli-mcp-workflow", impacted_context_ids)
+
+    def test_lint_rejects_impossible_metadata_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             shutil.copytree(EXAMPLE_VAULT, vault_path)
@@ -411,25 +673,11 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             handlers = NoesisMcpHandlers(vault_path)
 
             lint = handlers.lint_vault()
-            self.assertTrue(lint["ok"], lint)
-
-            queue = handlers.get_review_queue()
-            self.assertTrue(queue["ok"], queue)
+            self.assertFalse(lint["ok"], lint)
             self.assertIn(
-                "stale-custom-plugin-first",
-                [note["noesis_id"] for note in queue["notes"]],
+                "next_review must be a parseable YYYY-MM-DD date or unknown",
+                lint["issues"][0]["message"],
             )
-
-            summary = handlers.get_review_summary(due_on="2026-06-13")
-            self.assertTrue(summary["ok"], summary)
-            self.assertNotIn(
-                "stale-custom-plugin-first",
-                [note["noesis_id"] for note in summary["due_notes"]],
-            )
-
-            workbench = handlers.show_review("stale-custom-plugin-first", due_on="2026-06-13")
-            self.assertTrue(workbench["ok"], workbench)
-            self.assertEqual(workbench["review_due"], False)
 
     def test_review_handlers_normalize_metadata_datetimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -475,6 +723,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             first = handlers.renew_review(
                 "context-first-cli-mcp-workflow",
                 next_review="2026-07-01",
+                reviewer="test-agent",
+                basis="The first scheduled review confirms current context.",
                 title="ZZZ Older Renewal",
                 slug="older-renewal",
             )
@@ -482,6 +732,8 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             second = handlers.renew_review(
                 "context-first-cli-mcp-workflow",
                 next_review="2026-08-01",
+                reviewer="test-agent",
+                basis="The second scheduled review confirms current context.",
                 title="AAA Newer Renewal",
                 slug="newer-renewal",
             )
@@ -509,10 +761,18 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             shutil.copytree(EXAMPLE_VAULT, vault_path)
             handlers = NoesisMcpHandlers(vault_path)
 
-            linked = handlers.renew_review("context-first-cli-mcp-workflow", next_review="2026-07-01")
+            linked = handlers.renew_review(
+                "context-first-cli-mcp-workflow",
+                next_review="2026-07-01",
+                reviewer="test-agent",
+                basis="The linked scheduled review confirms current context.",
+            )
             self.assertTrue(linked["ok"], linked)
+            target = Vault.load(vault_path).find_note("context-first-cli-mcp-workflow")
+            self.assertIsNotNone(target)
+            assert target is not None
             (vault_path / "review" / "review-imported-later-audit.md").write_text(
-                """---
+                f"""---
 title: Imported Later Audit
 noesis_id: review-imported-later-audit
 type: review
@@ -526,6 +786,8 @@ reviewer: imported
 reviewed_at: 2026-08-01
 reviewed_notes:
   - "[[context-first-cli-mcp-workflow]]"
+reviewed_content_hashes:
+  - context-first-cli-mcp-workflow={reviewed_note_content_hash(target)}
 decision: renewed
 next_review: 2026-09-01
 tags:
@@ -559,6 +821,10 @@ None.
                 encoding="utf-8",
             )
 
+            target_metadata = dict(target.metadata)
+            target_metadata["next_review"] = "2026-09-01"
+            write_note(target.path, target_metadata, target.body)
+
             self.assertEqual(Vault.load(vault_path).validate(), [])
             workbench = handlers.show_review("context-first-cli-mcp-workflow")
             self.assertTrue(workbench["ok"], workbench)
@@ -566,6 +832,7 @@ None.
                 workbench["review_schedule"]["latest_audit"]["noesis_id"],
                 "review-imported-later-audit",
             )
+            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-09-01")
             self.assertEqual(
                 [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
                 [
@@ -574,8 +841,58 @@ None.
                 ],
             )
 
+    def test_review_workbench_rejects_incomplete_changes_requested_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            metadata = dict(audit.metadata)
+            metadata["title"] = "Draft Changes Requested Audit"
+            metadata["noesis_id"] = "review-draft-changes-requested"
+            metadata["status"] = "draft"
+            metadata["review_state"] = "in-review"
+            metadata["decision"] = "changes-requested"
+            metadata["created"] = "2026-08-01"
+            metadata["updated"] = "2026-08-01"
+            metadata["reviewed_at"] = "2026-08-01"
+            body = audit.body.replace(
+                "## Changes Requested\n\nNone.",
+                "## Changes Requested\n\nRevise the evidence.",
+            )
+            write_note(vault_path / "review" / "review-draft-changes-requested.md", metadata, body)
+
+            workbench = NoesisMcpHandlers(vault_path).show_review("evidence-memory-lifecycle")
+            self.assertFalse(workbench["ok"], workbench)
+            self.assertEqual(workbench["error"], "vault validation failed")
+            self.assertIn(
+                "review decision audit must have complete status and a mature review_state",
+                [issue["message"] for issue in workbench["issues"]],
+            )
+
+    def test_review_presenter_parses_audit_headings_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            audit = Vault.load(vault_path).find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(audit)
+            assert audit is not None
+            body = audit.body.replace("## Basis", "## basis").replace(
+                "## Changes Requested",
+                "## CHANGES REQUESTED",
+            )
+            write_note(audit.path, audit.metadata, body)
+
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+            workbench = NoesisMcpHandlers(vault_path).show_review("evidence-memory-lifecycle")
+            self.assertTrue(workbench["ok"], workbench)
+            audit_record = workbench["audit_records"][-1]
+            self.assertIn("The claim and synthesis", audit_record["basis"])
+            self.assertEqual(audit_record["changes_requested"], "None for the prototype.")
+
     def test_invalid_vault_errors_are_structured(self) -> None:
-        handlers = NoesisMcpHandlers()
+        handlers = NoesisMcpHandlers(allowed_roots=[Path("/tmp")])
 
         result = handlers.get_review_queue("/tmp/noesis-missing-vault")
 
@@ -587,14 +904,143 @@ None.
         self.assertEqual(result["contract"]["supported"], False)
         self.assertIn("vault path does not exist", result["issues"][0]["message"])
 
+        search = handlers.search_notes(vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(search["ok"])
+        self.assertEqual(search["error"], "vault validation failed")
+        self.assertEqual(search["issue_count"], 16)
+
+        fetched = handlers.get_note("anything", vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(fetched["ok"])
+        self.assertEqual(fetched["error"], "vault validation failed")
+        self.assertEqual(fetched["issue_count"], 16)
+
+        summary = handlers.vault_summary(vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["error"], "vault validation failed")
+        self.assertEqual(summary["issue_count"], 16)
+
+        review = handlers.show_review("anything", vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(review["ok"])
+        self.assertEqual(review["error"], "vault validation failed")
+        self.assertEqual(review["issue_count"], 16)
+
+        lineage = handlers.trace_lineage("anything", vault_path="/tmp/noesis-missing-vault")
+        self.assertFalse(lineage["ok"])
+        self.assertEqual(lineage["error"], "vault validation failed")
+        self.assertEqual(lineage["issue_count"], 16)
+
+    def test_directly_staled_knowledge_reports_lifecycle_safety(self) -> None:
+        path = Path("knowledge/reviewed-knowledge-stale.md")
+        note = Note(
+            path=path,
+            rel_path=path,
+            metadata={
+                "noesis_id": "reviewed-knowledge-stale",
+                "title": "Stale Knowledge",
+                "type": "reviewed-knowledge",
+                "status": "stale",
+            },
+            body="Stale content.",
+        )
+
+        safety = review_lifecycle_safety(note)
+
+        self.assertEqual(safety["stale_or_superseded_memory"], True)
+        self.assertEqual(safety["renewal_preserves_lifecycle"], True)
+
+    def test_review_presenter_ignores_non_covering_target_side_audit_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            target_id = "claim-useful-memory-requires-lifecycle"
+            unrelated_id = "review-unrelated-changes-requested"
+            source = Vault.load(vault_path).find_note("source-agent-memory-session")
+            self.assertIsNotNone(source)
+            assert source is not None
+            write_note(
+                vault_path / "review" / f"{unrelated_id}.md",
+                {
+                    "title": "Unrelated Changes Requested",
+                    "noesis_id": unrelated_id,
+                    "type": "review",
+                    "lifecycle_stage": "review",
+                    "status": "complete",
+                    "review_state": "approved",
+                    "confidence": "medium",
+                    "created": "2026-07-17",
+                    "updated": "2026-07-17",
+                    "reviewer": "test-human",
+                    "reviewed_at": "2026-07-17",
+                    "reviewed_notes": ["[[source-agent-memory-session]]"],
+                    "reviewed_content_hashes": [
+                        f"source-agent-memory-session={reviewed_note_content_hash(source)}"
+                    ],
+                    "decision": "changes-requested",
+                    "tags": ["noesis", "review"],
+                    "aliases": [],
+                },
+                """# Unrelated Changes Requested
+
+## Decision
+
+changes-requested
+
+## Basis
+
+The unrelated source needs revision.
+
+## Changes Requested
+
+Revise the unrelated source.
+""",
+            )
+            target = Vault.load(vault_path).find_note(target_id)
+            self.assertIsNotNone(target)
+            assert target is not None
+            target_metadata = dict(target.metadata)
+            target_metadata["reviewed_by"] = [
+                *target_metadata["reviewed_by"],
+                f"[[{unrelated_id}]]",
+            ]
+            write_note(target.path, target_metadata, target.body)
+            self.assertEqual(Vault.load(vault_path).validate(), [])
+
+            workbench = NoesisMcpHandlers(vault_path).show_review(target_id)
+            self.assertTrue(workbench["ok"], workbench)
+            self.assertNotIn(
+                unrelated_id,
+                [audit["noesis_id"] for audit in workbench["audit_records"]],
+            )
+            self.assertEqual(workbench["changes_requested"], [])
+
     def test_import_source_bundle_handler_creates_evidence_and_preserves_valid_vault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
+            bundle_path = Path(tmp) / "allowed-bundle"
+            outside_manifest = Path(tmp) / "outside.yaml"
             init_vault(vault_path)
-            handlers = NoesisMcpHandlers(vault_path)
+            shutil.copytree(CODEX_SESSION_BUNDLE, bundle_path)
+            outside_manifest.write_text(
+                (bundle_path / "noesis-bundle.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            restricted_handlers = NoesisMcpHandlers(vault_path)
+            with self.assertRaisesRegex(ValueError, "bundle path is outside configured MCP roots"):
+                restricted_handlers.import_source_bundle(str(bundle_path))
+
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[bundle_path])
+            for escaped_manifest in (str(outside_manifest), "../outside.yaml"):
+                with self.subTest(manifest=escaped_manifest), self.assertRaisesRegex(
+                    ValueError,
+                    "bundle manifest is outside configured MCP roots",
+                ):
+                    handlers.import_source_bundle(
+                        str(bundle_path),
+                        manifest=escaped_manifest,
+                    )
 
             imported = handlers.import_source_bundle(
-                str(CODEX_SESSION_BUNDLE),
+                str(bundle_path),
                 create_evidence=True,
             )
 
@@ -637,7 +1083,7 @@ None.
                 "# Memory Source\n\nUseful memory needs source-backed review before reuse.\n",
                 encoding="utf-8",
             )
-            handlers = NoesisMcpHandlers(vault_path)
+            handlers = NoesisMcpHandlers(vault_path, allowed_roots=[tmp_path])
 
             source = handlers.ingest_source(str(raw_source), "Memory Source", slug="memory-source")
             self.assertTrue(source["ok"], source)
@@ -700,6 +1146,21 @@ None.
                 next_review="2026-08-06",
             )
             self.assertTrue(knowledge["ok"], knowledge)
+            pending_knowledge = Vault.load(vault_path).find_note(
+                "reviewed-knowledge-review-before-reuse"
+            )
+            self.assertIsNotNone(pending_knowledge)
+            assert pending_knowledge is not None
+            self.assertEqual(pending_knowledge.status, "needs-review")
+            self.assertEqual(pending_knowledge.review_state, "ready-for-review")
+
+            knowledge_review = handlers.approve_review(
+                "reviewed-knowledge-review-before-reuse",
+                reviewer="test-human",
+                basis="The custom promoted knowledge accurately states the approved synthesis.",
+                slug="knowledge-review-before-reuse",
+            )
+            self.assertTrue(knowledge_review["ok"], knowledge_review)
 
             context = handlers.write_context(
                 purpose="prepare a future agent",

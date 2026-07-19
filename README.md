@@ -157,7 +157,7 @@ The initial aim is to turn the Noesis vision into a working local-first memory s
 
 Implementation details will evolve as the project takes shape.
 
-### Current Prototype
+### Current Implementation
 
 The first local-first Obsidian interface design is documented in
 [`docs/architecture/noesis-local-first-obsidian-interface.md`](./docs/architecture/noesis-local-first-obsidian-interface.md).
@@ -167,7 +167,7 @@ The plugin and adapter decision is captured in
 
 A small example vault lives in [`examples/noesis-vault`](./examples/noesis-vault)
 and demonstrates the complete Noesis lifecycle from source to operational
-context. Initialized V1 vaults also include `noesis.vault.yaml`, a small
+context. Initialized V2 vaults also include `noesis.vault.yaml`, a small
 root-level compatibility artifact that records the vault contract version
 without requiring every note to carry version metadata.
 
@@ -185,25 +185,27 @@ and run `noesis ...` or `noesis-mcp ...` from that environment.
 PYTHONPATH=src python -m noesis vault doctor examples/noesis-vault
 PYTHONPATH=src python -m noesis vault validate examples/noesis-vault
 PYTHONPATH=src python -m noesis vault init /tmp/noesis-vault
+PYTHONPATH=src python -m noesis vault migrate /path/to/v1-vault --dry-run
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --file /path/to/source.md --title "Source Title"
 PYTHONPATH=src python -m noesis ingest source --vault examples/noesis-vault --directory /path/to/sources --recursive --evidence-drafts
 PYTHONPATH=src python -m noesis ingest bundle --vault examples/noesis-vault /path/to/source-bundle --evidence-drafts
 PYTHONPATH=src python -m noesis extract evidence --vault examples/noesis-vault --source source-id --title "Evidence Title"
 PYTHONPATH=src python -m noesis propose claim --vault examples/noesis-vault --evidence evidence-id --title "Claim Title"
-PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer"
+PYTHONPATH=src python -m noesis review approve claim-id --vault examples/noesis-vault --reviewer "Reviewer" --basis "Sources and evidence support this claim."
 PYTHONPATH=src python -m noesis synthesize --vault examples/noesis-vault --claim claim-id --title "Synthesis Title"
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review queue --vault examples/noesis-vault --review-state ready-for-review --due --due-on 2026-06-13
 PYTHONPATH=src python -m noesis review summary --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis review show claim-id --vault examples/noesis-vault
-PYTHONPATH=src python -m noesis review approve synthesis-id --vault examples/noesis-vault --reviewer "Reviewer"
+PYTHONPATH=src python -m noesis review approve synthesis-id --vault examples/noesis-vault --reviewer "Reviewer" --basis "The synthesis preserves the reviewed claim boundaries."
 PYTHONPATH=src python -m noesis knowledge promote --vault examples/noesis-vault --synthesis synthesis-id --title "Reviewed Knowledge Title"
 PYTHONPATH=src python -m noesis memory stale reviewed-knowledge-id --vault examples/noesis-vault --reason "Superseded by newer evidence"
 PYTHONPATH=src python -m noesis trace reviewed-knowledge-noesis-lifecycle --vault examples/noesis-vault
 PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --purpose "prepare the next agent"
-PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare the next agent"
+PYTHONPATH=src python -m noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --purpose "prepare the next agent" --as-of 2026-07-12 --freshness-policy strict
 PYTHONPATH=src python -m noesis context explain --vault examples/noesis-vault --scope agent-memory
 PYTHONPATH=src python -m noesis context write --vault examples/noesis-vault --purpose "prepare the next agent"
+PYTHONPATH=src python -m noesis search "source backed lifecycle" --vault examples/noesis-vault --type reviewed-knowledge --json
 ```
 
 Supported commands:
@@ -211,8 +213,10 @@ Supported commands:
 | Command | Purpose |
 | --- | --- |
 | `noesis vault doctor <path>` | Report contract compatibility, validation completeness, and CLI/MCP readiness. |
-| `noesis vault validate <path>` | Validate required frontmatter, lifecycle stage/status values, wikilinks, Base YAML, Canvas JSON, and active-context exclusions. |
-| `noesis vault init <path>` | Create the V1 contract metadata file, folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
+| `noesis vault validate <path>` | Validate the V2 contract, strict lineage invariants, raw-source hashes and sizes, review identity/basis, dates, wikilinks, Base YAML, Canvas JSON, and context exclusions. |
+| `noesis vault init <path>` | Create the V2 contract metadata file, folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
+| `noesis vault migrate <path>` | Preview or migrate a V1 vault to V2 with an adjacent backup and post-write validation. |
+| `noesis search <query> --vault <path>` | Rank note summaries with deterministic field-aware lexical retrieval and lifecycle filters; use note retrieval or trace for full detail. |
 | `noesis ingest source --vault <path> --file <path> --title <title>` | Copy immutable raw material into `raw/`, add source provenance and a SHA-256 content hash, skip already-captured content unless `--allow-duplicates` is set, and create a linked source note in `sources/`. |
 | `noesis ingest source --vault <path> --directory <path> --recursive --evidence-drafts` | Import local source files in deterministic path order, report created/skipped summaries, and optionally create one reviewable evidence draft for each new source. |
 | `noesis ingest bundle --vault <path> <bundle-path> --evidence-drafts` | Import a local manifest-driven artifact bundle in deterministic artifact-path order, preserve raw artifacts, record bundle provenance, skip duplicate content, and optionally create reviewable evidence drafts. |
@@ -222,13 +226,13 @@ Supported commands:
 | `noesis review queue --vault <path>` | List notes whose `review_state` still needs attention, with optional `--review-state`, `--type`, `--stage`, `--due`, and `--due-on` filters. |
 | `noesis review summary --vault <path>` | Summarize review-state counts, pending items, due reviews, and upcoming `next_review` dates. |
 | `noesis review show <note-id> --vault <path>` | Inspect one note's current state, support links, audit records, requested changes, dependent reviewed knowledge/context impact, and lineage. |
-| `noesis review approve <note-id> --vault <path>` | Write an audit review note and mark the reviewed note approved. |
-| `noesis review request-changes <note-id> --vault <path>` | Write an audit review note and keep the reviewed note in the review queue. |
+| `noesis review approve <note-id> --vault <path>` | Require an identified reviewer and explicit basis, write an audit review note, and mark the reviewed note approved. |
+| `noesis review request-changes <note-id> --vault <path>` | Require reviewer, basis, and requested changes; write an audit note and keep the reviewed note in the queue. |
 | `noesis knowledge promote --vault <path> --synthesis <synthesis-id>` | Promote an approved synthesis with a review audit into active reviewed knowledge. |
 | `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded, create a stale-memory trace note, and update affected context exclusions. |
 | `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
-| `noesis context build --vault <path>` | Build a focused operational context package from current reviewed knowledge only, excluding stale, superseded, and archived memory. Supports `--scope`, `--purpose`, `--profile agent-handoff`, `--limit`, `--max-chars`, and `--json` for agent-sized packages. |
-| `noesis context explain --vault <path>` | Explain which current reviewed knowledge was included, scoped out, or budgeted out, and list stale/superseded/archive notes as background provenance only. |
+| `noesis context build --vault <path>` | Build focused context from current reviewed knowledge, always excluding expired memory and optionally excluding review-due memory with `--freshness-policy strict`. Records `as_of`, input hashes, relevance, and exact selected-content budgets. |
+| `noesis context explain --vault <path>` | Explain relevance, freshness, scope, budget, and lifecycle inclusion/exclusion decisions. |
 | `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge, using the same scope and budget controls as `context build`. |
 
 The vault files are the source of truth. The CLI, MCP server, and repo-local
@@ -242,7 +246,7 @@ The supported local install smoke path is:
 
 ```bash
 python -m venv /tmp/noesis-smoke
-/tmp/noesis-smoke/bin/python -m pip install -e .
+/tmp/noesis-smoke/bin/python -m pip install -e ".[mcp]"
 /tmp/noesis-smoke/bin/noesis vault doctor examples/noesis-vault --json
 /tmp/noesis-smoke/bin/noesis vault validate examples/noesis-vault
 /tmp/noesis-smoke/bin/noesis-mcp --help
@@ -287,6 +291,21 @@ ends at `context/operational-context-agent-memory-dogfood.md`. It also keeps
 `stale/stale-agent-memory-global-summary.md` traceable but excluded from active
 context.
 
+Checked-in quality gates make that dogfood falsifiable rather than anecdotal:
+
+```bash
+python scripts/run_retrieval_eval.py
+python scripts/run_dogfood_eval.py
+bash scripts/check.sh
+```
+
+The retrieval corpus currently gates MRR and recall. The continuation benchmark
+gates intended top-context selection, zero forbidden active-memory leakage,
+complete lineage/input-hash provenance, and at least 80% compression versus the
+example vault's note bodies. The coding, research, project-continuation, study,
+review, and handoff profiles are described in
+[`docs/domain-profiles.md`](./docs/domain-profiles.md).
+
 ### MCP MVP
 
 The MCP server is an implemented adapter layer over the same vault contract. It
@@ -306,15 +325,17 @@ noesis-mcp examples/noesis-vault
 ```
 
 The server defaults to `examples/noesis-vault` when no vault path is provided.
-Tools also accept an optional `vault_path` argument so one server can operate
-on another compatible vault when an MCP client passes the path explicitly.
+Tools accept an optional `vault_path` argument only within roots configured for
+that server. By default, the positional vault is the only allowed root; repeat
+`--allow-root <path>` to authorize additional roots deliberately. Note DTOs use
+vault-relative paths and redact host-local provenance paths.
 
 Read tools:
 
 | Tool | Purpose |
 | --- | --- |
 | `noesis_lint_vault` | Validate folder structure, flat YAML frontmatter, lifecycle values, wikilinks, Bases, Canvases, and context exclusions. |
-| `noesis_search_notes` | Search notes by text with optional `type`, lifecycle, status, review state, and limit filters. |
+| `noesis_search_notes` | Return ranked note summaries using field-aware lexical relevance, all/any term matching, and optional lifecycle filters. |
 | `noesis_get_note` | Return one parsed note by `noesis_id`, filename stem, path, alias, or wikilink target. |
 | `noesis_get_review_queue` | Return notes whose `review_state` still needs attention. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, and stale-memory lineage. |
@@ -343,7 +364,7 @@ Resources:
 | `noesis://note/{note}` | Parsed note from the default vault. |
 
 Write safety is intentionally narrow. MCP write tools call the same lifecycle
-functions in `src/noesis/vault.py` as the CLI, validate the vault before writes
+functions in the shared lifecycle library as the CLI, validate the vault before writes
 where the underlying workflow requires it, roll back failed note writes, and
 return structured objects such as `{ "ok": false, "error": "...", "issues": [...] }`
 instead of scraping CLI text.

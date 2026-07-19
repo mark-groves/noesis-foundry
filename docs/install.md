@@ -17,6 +17,7 @@ From the repository root:
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
+python -m pip install -e ".[mcp]"
 noesis vault doctor examples/noesis-vault --json
 noesis vault validate examples/noesis-vault
 noesis context build --vault examples/noesis-vault --scope agent-memory --limit 1 --json
@@ -82,8 +83,11 @@ If no path is provided, `noesis-mcp` defaults to `examples/noesis-vault`
 relative to the process working directory. Desktop MCP clients often launch
 servers from another directory, so use absolute vault paths in client configs.
 
-Tools also accept a `vault_path` argument. That lets one server operate on
-another compatible vault when the client supplies a path explicitly.
+Tools also accept a `vault_path` argument, but only below configured roots. The
+positional vault is the sole allowed root by default. Use repeatable
+`--allow-root /explicit/path` flags when a single server genuinely needs more
+than one vault boundary. Symlinks are resolved before this check, note paths are
+returned relative to the vault, and host-local provenance paths are redacted.
 
 For an agent smoke path, validate the vault with the CLI first, then have the
 MCP client call `noesis_lint_vault`, `noesis_build_context` with the task
@@ -109,8 +113,8 @@ paths:
 }
 ```
 
-Use the console script from the virtual environment where `pip install -e .`
-was run. If the client supports environment variables, keep them minimal; the
+Use the console script from the virtual environment where
+`pip install -e ".[mcp]"` was run. If the client supports environment variables, keep them minimal; the
 installed package path should come from the console script, not from
 `PYTHONPATH`.
 
@@ -162,3 +166,19 @@ Direct Markdown/YAML edits are fallback adapter behavior only. When a skill has
 to fall back, it should copy local templates where possible, preserve raw
 sources, keep YAML flat, maintain wikilinks, and run `noesis vault validate`
 before reporting completion.
+
+## Development Gates
+
+Install development and MCP extras, then run the same checks used by CI:
+
+```bash
+python -m pip install -e ".[mcp,dev]"
+bash scripts/check.sh
+python -m build
+```
+
+The check script runs static analysis, the unit/integration suite, the ranked
+retrieval corpus, the context-dogfood outcome benchmark, V2 example-vault
+validation, and whitespace checks. Context-sensitive automation should pass an
+explicit `--as-of YYYY-MM-DD`; use `--freshness-policy strict` when review-due
+knowledge must not guide the task.

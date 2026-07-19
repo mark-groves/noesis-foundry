@@ -14,6 +14,9 @@ original_url: local
 author: noesis-foundry
 source_date: 2026-05-29
 captured: 2026-05-29
+content_hash: sha256:44eb737aa6e69341a4af1e1e470fa6affb59fef9ae097f76bf889556bd3b981b
+content_hash_algorithm: sha256
+source_size_bytes: 670
 tags:
   - noesis
   - source
@@ -47,4 +50,3 @@ It frames useful memory as a lifecycle rather than accumulation.
 
 - Which lifecycle transitions should be automated first by the CLI?
 - Which review decisions require explicit human approval?
-

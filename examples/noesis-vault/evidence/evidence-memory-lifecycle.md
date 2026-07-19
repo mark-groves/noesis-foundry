@@ -3,13 +3,15 @@ title: Memory Requires Lifecycle
 noesis_id: evidence-memory-lifecycle
 type: evidence
 lifecycle_stage: evidence
-status: extracted
-review_state: none
+status: reviewed
+review_state: approved
 confidence: high
 created: 2026-05-29
 updated: 2026-05-29
 sources:
   - "[[source-noesis-readme]]"
+reviewed_by:
+  - "[[review-local-first-lifecycle]]"
 tags:
   - noesis
   - evidence
@@ -40,4 +42,3 @@ note bucket.
 ## Candidate Claims
 
 - [[claim-useful-memory-requires-lifecycle]]
-

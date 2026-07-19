@@ -83,6 +83,7 @@ class DistributionDocsTests(unittest.TestCase):
 
         required_snippets = [
             'python" -m pip install -e "$ROOT"',
+            'python" -m pip install -e "${ROOT}[mcp]"',
             'rm -rf "$SMOKE_VAULT"',
             'cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"',
             "unset PYTHONPATH",
@@ -107,6 +108,14 @@ class DistributionDocsTests(unittest.TestCase):
 
         self.assertNotIn('noesis-mcp" --help', script)
         self.assertNotIn("import selectors", script)
+        self.assertLess(
+            script.index('python" -m pip install -e "$ROOT"'),
+            script.index('noesis" vault doctor'),
+        )
+        self.assertLess(
+            script.index('noesis" review show'),
+            script.index('python" -m pip install -e "${ROOT}[mcp]"'),
+        )
 
 
 if __name__ == "__main__":

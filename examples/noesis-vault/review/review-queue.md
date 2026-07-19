@@ -1,14 +1,13 @@
 ---
 title: Review Queue
 noesis_id: review-queue
-type: review
+type: dashboard
 lifecycle_stage: review
 status: active
 review_state: none
 confidence: unknown
 created: 2026-05-29
 updated: 2026-06-18
-reviewer: unassigned
 next_review: 2026-06-05
 tags:
   - noesis

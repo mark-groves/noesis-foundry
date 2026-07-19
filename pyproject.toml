@@ -1,13 +1,16 @@
 [project]
 name = "noesis-foundry"
-version = "0.1.0"
+dynamic = ["version"]
 description = "File-backed Noesis CLI for Obsidian-compatible vaults."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=1.27,<2",
   "PyYAML>=6.0",
 ]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.27,<2"]
+dev = ["build>=1.2", "ruff>=0.12"]
 
 [project.scripts]
 noesis = "noesis.cli:main"
@@ -19,3 +22,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "noesis.version.__version__"}
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120

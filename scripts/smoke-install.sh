@@ -43,6 +43,12 @@ cp -R "$EXAMPLE_VAULT" "$SMOKE_VAULT"
   "$VENV/bin/noesis" review show claim-agent-memory-dogfood \
     --vault "$SMOKE_VAULT" \
     --json > "$SMOKE_DIR/review-show.json"
+)
+
+"$VENV/bin/python" -m pip install -e "${ROOT}[mcp]"
+
+(
+  unset PYTHONPATH
   NOESIS_MCP_BIN="$VENV/bin/noesis-mcp" \
     NOESIS_MCP_VAULT="$SMOKE_VAULT" \
     NOESIS_MCP_OUTPUT="$SMOKE_DIR/mcp-stdio.json" \
