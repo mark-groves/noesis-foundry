@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -757,6 +758,9 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             target = Vault.load(vault_path).find_note("context-first-cli-mcp-workflow")
             self.assertIsNotNone(target)
             assert target is not None
+            # renew_review stamps reviewed_at with today, so this audit must be later than that.
+            imported_on = (date.today() + timedelta(days=1)).isoformat()
+            later_review = (date.today() + timedelta(days=40)).isoformat()
             (vault_path / "review" / "review-imported-later-audit.md").write_text(
                 f"""---
 title: Imported Later Audit
@@ -766,16 +770,16 @@ lifecycle_stage: review
 status: complete
 review_state: approved
 confidence: medium
-created: 2026-08-01
-updated: 2026-08-01
+created: {imported_on}
+updated: {imported_on}
 reviewer: imported
-reviewed_at: 2026-08-01
+reviewed_at: {imported_on}
 reviewed_notes:
   - "[[context-first-cli-mcp-workflow]]"
 reviewed_content_hashes:
   - context-first-cli-mcp-workflow={reviewed_note_content_hash(target)}
 decision: renewed
-next_review: 2026-09-01
+next_review: {later_review}
 tags:
   - noesis
   - review
@@ -802,13 +806,13 @@ None.
 
 ## Next Review
 
-2026-09-01
+{later_review}
 """,
                 encoding="utf-8",
             )
 
             target_metadata = dict(target.metadata)
-            target_metadata["next_review"] = "2026-09-01"
+            target_metadata["next_review"] = later_review
             write_note(target.path, target_metadata, target.body)
 
             self.assertEqual(Vault.load(vault_path).validate(), [])
@@ -818,7 +822,7 @@ None.
                 workbench["review_schedule"]["latest_audit"]["noesis_id"],
                 "review-imported-later-audit",
             )
-            self.assertEqual(workbench["review_schedule"]["next_review"], "2026-09-01")
+            self.assertEqual(workbench["review_schedule"]["next_review"], later_review)
             self.assertEqual(
                 [audit["noesis_id"] for audit in workbench["audit_records"][-2:]],
                 [
