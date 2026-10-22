@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import errno
-from functools import wraps
 import os
-from pathlib import Path
 import tempfile
 import threading
-from typing import Any, Iterator
-
+from collections.abc import Iterator
+from contextlib import contextmanager
+from functools import wraps
+from pathlib import Path
+from typing import Any
 
 _LOCK_STATE = threading.local()
 _PROCESS_LOCKS: dict[Path, threading.RLock] = {}

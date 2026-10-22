@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 import yaml
 
 from noesis.evaluation import evaluate_retrieval
 from noesis.retrieval import rank_notes
 from noesis.vault import Note, Vault
-
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
@@ -72,6 +71,24 @@ class RetrievalTests(unittest.TestCase):
             "retrieval query 1 filters contain unsupported keys: review_stte",
         ):
             evaluate_retrieval(Vault.load(EXAMPLE_VAULT), specification)
+
+    def test_retrieval_evaluation_rejects_wrong_types(self) -> None:
+        vault = Vault.load(EXAMPLE_VAULT)
+        with self.assertRaisesRegex(TypeError, "retrieval query 1 must be a mapping"):
+            evaluate_retrieval(vault, {"queries": ["lifecycle"]})
+        with self.assertRaisesRegex(TypeError, "retrieval query 1 filters must be a mapping"):
+            evaluate_retrieval(
+                vault,
+                {
+                    "queries": [
+                        {
+                            "query": "lifecycle",
+                            "relevant": ["reviewed-knowledge-noesis-lifecycle"],
+                            "filters": ["review_state"],
+                        }
+                    ]
+                },
+            )
 
     def test_checked_in_retrieval_corpus_meets_quality_gate(self) -> None:
         specification = yaml.safe_load((ROOT / "evals" / "retrieval-v1.yaml").read_text(encoding="utf-8"))

@@ -7,7 +7,6 @@ from typing import Any
 from .retrieval import rank_notes
 from .vault import Vault, compose_context
 
-
 RETRIEVAL_FILTER_KEYS = {"type", "lifecycle_stage", "status", "review_state"}
 
 
@@ -21,7 +20,7 @@ def evaluate_retrieval(vault: Vault, specification: dict[str, Any]) -> dict[str,
     recall_total = 0.0
     for index, item in enumerate(queries, start=1):
         if not isinstance(item, dict):
-            raise ValueError(f"retrieval query {index} must be a mapping")
+            raise TypeError(f"retrieval query {index} must be a mapping")
         query = required_text(item, "query", index)
         relevant = item.get("relevant")
         if not isinstance(relevant, list) or not relevant or any(not str(value).strip() for value in relevant):
@@ -29,13 +28,10 @@ def evaluate_retrieval(vault: Vault, specification: dict[str, Any]) -> dict[str,
         relevant_ids = {str(value) for value in relevant}
         filters = item.get("filters") or {}
         if not isinstance(filters, dict):
-            raise ValueError(f"retrieval query {index} filters must be a mapping")
+            raise TypeError(f"retrieval query {index} filters must be a mapping")
         unknown_filters = sorted(set(filters) - RETRIEVAL_FILTER_KEYS)
         if unknown_filters:
-            raise ValueError(
-                f"retrieval query {index} filters contain unsupported keys: "
-                + ", ".join(unknown_filters)
-            )
+            raise ValueError(f"retrieval query {index} filters contain unsupported keys: " + ", ".join(unknown_filters))
         candidates = [note for note in vault.notes if note_matches_filters(note, filters)]
         hits = rank_notes(candidates, query)
         ranked_ids = [hit.note.noesis_id for hit in hits]
@@ -98,7 +94,7 @@ def evaluate_context_dogfood(vault: Vault, specification: dict[str, Any]) -> dic
     results: list[dict[str, Any]] = []
     for index, item in enumerate(scenarios, start=1):
         if not isinstance(item, dict):
-            raise ValueError(f"context scenario {index} must be a mapping")
+            raise TypeError(f"context scenario {index} must be a mapping")
         scope = required_text(item, "scope", index)
         expected_top = required_text(item, "expected_top", index)
         as_of = str(item.get("as_of") or "").strip()
@@ -106,7 +102,7 @@ def evaluate_context_dogfood(vault: Vault, specification: dict[str, Any]) -> dic
             raise ValueError(f"context scenario {index} requires non-empty as_of")
         forbidden_values = item.get("forbidden_active", [])
         if not isinstance(forbidden_values, list):
-            raise ValueError(f"context scenario {index} forbidden_active must be a list")
+            raise TypeError(f"context scenario {index} forbidden_active must be a list")
         forbidden = {str(value) for value in forbidden_values}
         package = compose_context(
             vault,
@@ -124,7 +120,10 @@ def evaluate_context_dogfood(vault: Vault, specification: dict[str, Any]) -> dic
         provenance_complete = (
             len(package.input_hashes) == len(package.included)
             and len(package.lineage_summaries) == len(package.included)
-            and all(summary.sources and summary.evidence and summary.claims and summary.syntheses and summary.reviews for summary in package.lineage_summaries)
+            and all(
+                summary.sources and summary.evidence and summary.claims and summary.syntheses and summary.reviews
+                for summary in package.lineage_summaries
+            )
         )
         context_chars = len(package.content)
         compression_ratio = 1.0 - (context_chars / baseline_chars) if baseline_chars else 0.0

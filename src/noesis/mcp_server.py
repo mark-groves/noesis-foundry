@@ -5,7 +5,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .retrieval import rank_notes, tokenize
 from .presentation import (
     issue_to_dict,
     json_safe,
@@ -16,18 +15,18 @@ from .presentation import (
     review_summary_to_dict,
     review_workbench_to_dict,
 )
-
+from .retrieval import rank_notes, tokenize
 from .vault import (
-    ContextLineageSummary,
-    ContextPackage,
-    ContextSelection,
-    CreatedNote,
     LIFECYCLE_STAGES,
-    Note,
     REVIEW_STATES,
     SOURCE_BUNDLE_SCHEMA_KIND,
     STATUSES,
     TYPES,
+    ContextLineageSummary,
+    ContextPackage,
+    ContextSelection,
+    CreatedNote,
+    Note,
     Vault,
     approve_review,
     compose_context,
@@ -39,12 +38,11 @@ from .vault import (
     promote_synthesis,
     propose_claim,
     renew_review,
-    resolve_bundle_manifest,
     request_review_changes,
+    resolve_bundle_manifest,
     synthesize_claims,
     write_context_note,
 )
-
 
 JsonObject = dict[str, Any]
 
@@ -58,9 +56,7 @@ class NoesisMcpHandlers:
     ) -> None:
         self.default_vault = Path(default_vault).expanduser().resolve() if default_vault else None
         configured_roots = (
-            tuple(Path(root).expanduser().resolve() for root in allowed_roots)
-            if allowed_roots is not None
-            else ()
+            tuple(Path(root).expanduser().resolve() for root in allowed_roots) if allowed_roots is not None else ()
         )
         roots = ((self.default_vault,) if self.default_vault is not None else ()) + configured_roots
         self.allowed_roots = tuple(dict.fromkeys(roots))
@@ -266,7 +262,7 @@ class NoesisMcpHandlers:
                 as_of=as_of,
                 freshness_policy=freshness_policy,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc), "vault_path": str(vault.root)}
         return {
             "ok": True,
@@ -342,7 +338,7 @@ class NoesisMcpHandlers:
                 create_evidence=create_evidence,
                 allow_duplicates=allow_duplicates,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc), "vault_path": str(vault_root)}
         return source_bundle_import_to_dict(imported, vault_root)
 
@@ -587,8 +583,7 @@ def create_server(
         from mcp.server.fastmcp import FastMCP
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "The Noesis MCP server requires the optional 'mcp' package. "
-            "Install with: pip install 'noesis-foundry[mcp]'"
+            "The Noesis MCP server requires the optional 'mcp' package. Install with: pip install 'noesis-foundry[mcp]'"
         ) from exc
 
     handlers = NoesisMcpHandlers(default_vault, allowed_roots=allowed_roots)
@@ -733,7 +728,9 @@ def create_server(
         slug: str | None = None,
     ) -> JsonObject:
         """Create a reviewable evidence draft linked to a source note."""
-        return handlers.create_evidence_draft(source=source, vault_path=vault_path, title=title, evidence=evidence, slug=slug)
+        return handlers.create_evidence_draft(
+            source=source, vault_path=vault_path, title=title, evidence=evidence, slug=slug
+        )
 
     @server.tool()
     def noesis_create_claim_draft(
@@ -744,7 +741,9 @@ def create_server(
         slug: str | None = None,
     ) -> JsonObject:
         """Create a review-ready claim draft grounded in evidence notes."""
-        return handlers.create_claim_draft(evidence=evidence, vault_path=vault_path, title=title, claim=claim, slug=slug)
+        return handlers.create_claim_draft(
+            evidence=evidence, vault_path=vault_path, title=title, claim=claim, slug=slug
+        )
 
     @server.tool()
     def noesis_create_synthesis_draft(
@@ -755,7 +754,9 @@ def create_server(
         slug: str | None = None,
     ) -> JsonObject:
         """Create a review-ready synthesis draft grounded in claim lineage."""
-        return handlers.create_synthesis_draft(claim=claim, vault_path=vault_path, title=title, synthesis=synthesis, slug=slug)
+        return handlers.create_synthesis_draft(
+            claim=claim, vault_path=vault_path, title=title, synthesis=synthesis, slug=slug
+        )
 
     @server.tool()
     def noesis_approve_review(
@@ -957,9 +958,7 @@ def context_selection_payload(selection: ContextSelection, vault_root: Path) -> 
             "review_due_on": selection.review_due_on,
             "valid_until": selection.valid_until,
             "lifecycle_exclusion_kind": (
-                context_lifecycle_exclusion_kind(selection.note)
-                if selection.status == "lifecycle_excluded"
-                else None
+                context_lifecycle_exclusion_kind(selection.note) if selection.status == "lifecycle_excluded" else None
             ),
         }
     )
@@ -1001,9 +1000,7 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
             redact_vault_path(command, vault_root) for command in package.handoff.validation_commands
         ],
         "next_steps": list(package.handoff.next_steps),
-        "active_reviewed_knowledge": [
-            note_summary(selection.note, vault_root) for selection in package.included
-        ],
+        "active_reviewed_knowledge": [note_summary(selection.note, vault_root) for selection in package.included],
         "scoped_out_reviewed_knowledge": [
             context_selection_payload(selection, vault_root) for selection in package.scoped_out
         ],
@@ -1025,10 +1022,7 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> JsonOb
         "lineage_summaries": context_lineage_summary_payloads(package, vault_root),
         "lifecycle_exclusions": {
             "summary": lifecycle_exclusion_summary(package.lifecycle_excluded),
-            "notes": [
-                context_selection_payload(selection, vault_root)
-                for selection in package.lifecycle_excluded
-            ],
+            "notes": [context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded],
         },
     }
 

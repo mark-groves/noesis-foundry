@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import threading
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from noesis.storage import atomic_write_text, vault_lock
 from noesis.vault import Vault, init_vault
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,9 +53,8 @@ class StorageTests(unittest.TestCase):
                 positions.append(os.lseek(file_descriptor, 0, os.SEEK_CUR))
 
             msvcrt.locking = record_lock_position
-            with patch.dict(sys.modules, {"fcntl": None, "msvcrt": msvcrt}):
-                with vault_lock(vault_path):
-                    pass
+            with patch.dict(sys.modules, {"fcntl": None, "msvcrt": msvcrt}), vault_lock(vault_path):
+                pass
 
             self.assertEqual(positions, [0, 0])
 
@@ -64,16 +62,14 @@ class StorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             missing = root / "missing-vault"
-            with self.assertRaisesRegex(ValueError, "vault path is not a directory"):
-                with vault_lock(missing):
-                    pass
+            with self.assertRaisesRegex(ValueError, "vault path is not a directory"), vault_lock(missing):
+                pass
             self.assertFalse(missing.exists())
 
             invalid_file = root / "not-a-vault"
             invalid_file.write_text("not a directory\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "vault path is not a directory"):
-                with vault_lock(invalid_file):
-                    pass
+            with self.assertRaisesRegex(ValueError, "vault path is not a directory"), vault_lock(invalid_file):
+                pass
 
     def test_vault_lock_serializes_threads_in_the_same_process(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

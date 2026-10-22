@@ -415,7 +415,7 @@ views:
                         "y": 500,
                         "width": 320,
                         "height": 160,
-                    }
+                    },
                 ],
                 "edges": [
                     {

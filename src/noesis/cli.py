@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
-
-from .retrieval import rank_notes, tokenize
 
 from .presentation import (
     issue_to_dict,
@@ -17,17 +15,18 @@ from .presentation import (
     review_summary_to_dict,
     review_workbench_to_dict,
 )
+from .retrieval import rank_notes, tokenize
 from .vault import (
     CONTEXT_PROFILE_NAMES,
-    ContextPackage,
-    ContextLineageSummary,
-    ContextSelection,
     FRESHNESS_POLICIES,
     LIFECYCLE_STAGES,
     REVIEW_STATES,
     SOURCE_BUNDLE_SCHEMA_KIND,
     STATUSES,
     TYPES,
+    ContextLineageSummary,
+    ContextPackage,
+    ContextSelection,
     Vault,
     approve_review,
     atomic_write_text,
@@ -100,7 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--author", default="unknown")
     source.add_argument("--source-date", default="unknown")
     source.add_argument("--allow-duplicates", action="store_true")
-    source.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
+    source.add_argument(
+        "--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source"
+    )
     source.add_argument("--json", action="store_true", help="Write structured JSON")
     source.set_defaults(func=cmd_ingest_source)
 
@@ -113,7 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Manifest filename when path is a directory",
     )
     bundle.add_argument("--allow-duplicates", action="store_true")
-    bundle.add_argument("--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source")
+    bundle.add_argument(
+        "--evidence-drafts", action="store_true", help="Create one reviewable evidence draft per new source"
+    )
     bundle.add_argument("--json", action="store_true", help="Write structured JSON")
     bundle.set_defaults(func=cmd_ingest_bundle)
 
@@ -251,7 +254,9 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--purpose", default=None)
     build.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     build.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
-    build.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    build.add_argument(
+        "--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters"
+    )
     build.add_argument("--as-of", default=None, help="Evaluate freshness on this YYYY-MM-DD date")
     build.add_argument("--freshness-policy", choices=sorted(FRESHNESS_POLICIES), default="balanced")
     build.add_argument("--output", type=Path, default=None)
@@ -264,7 +269,9 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument("--purpose", default=None)
     explain.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     explain.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
-    explain.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    explain.add_argument(
+        "--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters"
+    )
     explain.add_argument("--as-of", default=None, help="Evaluate freshness on this YYYY-MM-DD date")
     explain.add_argument("--freshness-policy", choices=sorted(FRESHNESS_POLICIES), default="balanced")
     explain.add_argument("--json", action="store_true", help="Write structured JSON")
@@ -276,7 +283,9 @@ def build_parser() -> argparse.ArgumentParser:
     write.add_argument("--purpose", default=None)
     write.add_argument("--profile", choices=sorted(CONTEXT_PROFILE_NAMES), default=None)
     write.add_argument("--limit", type=int, default=None, help="Maximum reviewed knowledge notes to include")
-    write.add_argument("--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters")
+    write.add_argument(
+        "--max-chars", type=int, default=None, help="Approximate maximum reviewed knowledge body characters"
+    )
     write.add_argument("--as-of", default=None, help="Evaluate freshness on this YYYY-MM-DD date")
     write.add_argument("--freshness-policy", choices=sorted(FRESHNESS_POLICIES), default="balanced")
     write.add_argument("--title", default=None)
@@ -454,7 +463,7 @@ def cmd_ingest_bundle(args: argparse.Namespace) -> int:
             create_evidence=args.evidence_drafts,
             allow_duplicates=args.allow_duplicates,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
 
@@ -588,10 +597,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         )
         return 0
     for payload in payloads:
-        print(
-            f"{payload['relevance_score']:.6f}\t{payload['noesis_id']}\t"
-            f"{payload['type']}\t{payload['title']}"
-        )
+        print(f"{payload['relevance_score']:.6f}\t{payload['noesis_id']}\t{payload['type']}\t{payload['title']}")
     return 0
 
 
@@ -770,29 +776,11 @@ def cmd_review_summary(args: argparse.Namespace) -> int:
     if summary["requested_changes_notes"]:
         print("requested changes:")
         for note in summary["requested_changes_notes"]:
-            print(
-                "\t".join(
-                    [
-                        note.noesis_id,
-                        note.rel_path.as_posix(),
-                        note.status,
-                        note.title,
-                    ]
-                )
-            )
+            print(f"{note.noesis_id}\t{note.rel_path.as_posix()}\t{note.status}\t{note.title}")
     if summary["audit_gap_notes"]:
         print("audit gaps:")
         for note in summary["audit_gap_notes"]:
-            print(
-                "\t".join(
-                    [
-                        note.noesis_id,
-                        note.rel_path.as_posix(),
-                        note.review_state,
-                        note.title,
-                    ]
-                )
-            )
+            print(f"{note.noesis_id}\t{note.rel_path.as_posix()}\t{note.review_state}\t{note.title}")
     if summary["next_review_notes"]:
         print("next review:")
         for note in summary["next_review_notes"]:
@@ -1023,16 +1011,8 @@ def cmd_trace(args: argparse.Namespace) -> int:
         return 1
     for note in notes:
         print(
-            "\t".join(
-                [
-                    note.lifecycle_stage,
-                    note.noesis_id,
-                    note.rel_path.as_posix(),
-                    note.status,
-                    note.review_state,
-                    note.title,
-                ]
-            )
+            f"{note.lifecycle_stage}\t{note.noesis_id}\t{note.rel_path.as_posix()}\t"
+            f"{note.status}\t{note.review_state}\t{note.title}"
         )
     return 0
 
@@ -1233,9 +1213,7 @@ def context_selection_payload(selection: ContextSelection, vault_root: Path) -> 
             "review_due_on": selection.review_due_on,
             "valid_until": selection.valid_until,
             "lifecycle_exclusion_kind": (
-                context_lifecycle_exclusion_kind(selection.note)
-                if selection.status == "lifecycle_excluded"
-                else None
+                context_lifecycle_exclusion_kind(selection.note) if selection.status == "lifecycle_excluded" else None
             ),
         }
     )
@@ -1275,9 +1253,7 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> dict[s
         "assumptions": list(package.handoff.assumptions),
         "validation_commands": list(package.handoff.validation_commands),
         "next_steps": list(package.handoff.next_steps),
-        "active_reviewed_knowledge": [
-            note_summary(selection.note, vault_root) for selection in package.included
-        ],
+        "active_reviewed_knowledge": [note_summary(selection.note, vault_root) for selection in package.included],
         "scoped_out_reviewed_knowledge": [
             context_selection_payload(selection, vault_root) for selection in package.scoped_out
         ],
@@ -1299,10 +1275,7 @@ def context_handoff_payload(package: ContextPackage, vault_root: Path) -> dict[s
         "lineage_summaries": context_lineage_summary_payloads(package, vault_root),
         "lifecycle_exclusions": {
             "summary": lifecycle_exclusion_summary(package.lifecycle_excluded),
-            "notes": [
-                context_selection_payload(selection, vault_root)
-                for selection in package.lifecycle_excluded
-            ],
+            "notes": [context_selection_payload(selection, vault_root) for selection in package.lifecycle_excluded],
         },
     }
 

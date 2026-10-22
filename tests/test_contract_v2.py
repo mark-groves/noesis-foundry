@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from datetime import date, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 import noesis.context as context_module
 import noesis.vault as vault_module
-
 from noesis.vault import (
     Vault,
     compose_context,
@@ -18,14 +18,13 @@ from noesis.vault import (
     migrate_vault,
     promote_synthesis,
     remove_relationship_link,
-    reviewed_note_content_hash,
     renew_review,
+    reviewed_note_content_hash,
     wikilink,
     write_context_note,
     write_note,
     write_review_decision,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
@@ -90,9 +89,7 @@ class ContractV2Tests(unittest.TestCase):
             assert source is not None
             self.assertEqual(vault.validate(), [])
             metadata = dict(source.metadata)
-            metadata["raw_path"] = str(
-                (source.path.parent / str(source.metadata["raw_path"])).resolve()
-            )
+            metadata["raw_path"] = str((source.path.parent / str(source.metadata["raw_path"])).resolve())
             write_note(source.path, metadata, source.body)
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
@@ -160,11 +157,7 @@ class ContractV2Tests(unittest.TestCase):
                     for note in vault.current_reviewed_knowledge()
                     if wikilink(note.noesis_id) in context.metadata["reviewed_knowledge"]
                 }
-                extra = next(
-                    note
-                    for note in vault.current_reviewed_knowledge()
-                    if note.noesis_id not in included_ids
-                )
+                extra = next(note for note in vault.current_reviewed_knowledge() if note.noesis_id not in included_ids)
                 metadata = dict(context.metadata)
                 metadata["reviewed_knowledge"] = [
                     *metadata["reviewed_knowledge"],
@@ -178,7 +171,10 @@ class ContractV2Tests(unittest.TestCase):
 
                 messages = [issue.message for issue in Vault.load(vault_path).validate()]
                 self.assertTrue(
-                    any(message.startswith("reviewed_knowledge must match stored context selection") for message in messages),
+                    any(
+                        message.startswith("reviewed_knowledge must match stored context selection")
+                        for message in messages
+                    ),
                     messages,
                 )
 
@@ -201,7 +197,9 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertTrue(
-                any(message.startswith("reviewed_knowledge must match stored context selection") for message in messages),
+                any(
+                    message.startswith("reviewed_knowledge must match stored context selection") for message in messages
+                ),
                 messages,
             )
 
@@ -224,7 +222,9 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertTrue(
-                any(message.startswith("reviewed_knowledge must match stored context selection") for message in messages),
+                any(
+                    message.startswith("reviewed_knowledge must match stored context selection") for message in messages
+                ),
                 messages,
             )
 
@@ -347,8 +347,7 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
-                "reviewed_knowledge and freshness_excluded must not overlap: "
-                "reviewed-knowledge-agent-memory-dogfood",
+                "reviewed_knowledge and freshness_excluded must not overlap: reviewed-knowledge-agent-memory-dogfood",
                 messages,
             )
 
@@ -390,7 +389,10 @@ class ContractV2Tests(unittest.TestCase):
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertTrue(
-                any(message.startswith("freshness_excluded must match stored freshness selection") for message in messages),
+                any(
+                    message.startswith("freshness_excluded must match stored freshness selection")
+                    for message in messages
+                ),
                 (omitted, messages),
             )
 
@@ -468,9 +470,7 @@ class ContractV2Tests(unittest.TestCase):
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertTrue(
                 any(
-                    message.startswith(
-                        "excluded_memory must match the complete lifecycle exclusion set"
-                    )
+                    message.startswith("excluded_memory must match the complete lifecycle exclusion set")
                     for message in messages
                 ),
                 messages,
@@ -733,9 +733,7 @@ class ContractV2Tests(unittest.TestCase):
             )
             audit_metadata = dict(audit.metadata)
             audit_metadata["reviewed_notes"] = [
-                link
-                for link in audit_metadata["reviewed_notes"]
-                if link != wikilink(synthesis.noesis_id)
+                link for link in audit_metadata["reviewed_notes"] if link != wikilink(synthesis.noesis_id)
             ]
             write_note(audit.path, audit_metadata, audit.body)
             synthesis_metadata = dict(synthesis.metadata)
@@ -1058,8 +1056,7 @@ Not scheduled.
                 any(
                     issue.path == knowledge.path
                     and issue.message
-                    == "active reviewed knowledge depends on non-current source "
-                    "'source-agent-memory-session'"
+                    == "active reviewed knowledge depends on non-current source 'source-agent-memory-session'"
                     for issue in issues
                 ),
                 [issue.message for issue in issues],
@@ -1082,9 +1079,7 @@ Not scheduled.
             write_note(evidence.path, evidence_metadata, evidence.body)
             audit_metadata = dict(audit.metadata)
             audit_metadata["reviewed_notes"] = [
-                link
-                for link in audit_metadata["reviewed_notes"]
-                if evidence.noesis_id not in str(link)
+                link for link in audit_metadata["reviewed_notes"] if evidence.noesis_id not in str(link)
             ]
             write_note(audit.path, audit_metadata, audit.body)
 
@@ -1093,8 +1088,7 @@ Not scheduled.
                 any(
                     issue.path == knowledge.path
                     and issue.message
-                    == "active reviewed knowledge depends on unaudited evidence "
-                    "'evidence-memory-lifecycle'"
+                    == "active reviewed knowledge depends on unaudited evidence 'evidence-memory-lifecycle'"
                     for issue in issues
                 ),
                 [issue.message for issue in issues],
@@ -1123,18 +1117,14 @@ Not scheduled.
 
             (vault_path / ".noesis.lock").unlink(missing_ok=True)
             before_preview = {
-                path.relative_to(vault_path): path.read_bytes()
-                for path in vault_path.rglob("*")
-                if path.is_file()
+                path.relative_to(vault_path): path.read_bytes() for path in vault_path.rglob("*") if path.is_file()
             }
             preview = migrate_vault(vault_path, dry_run=True)
             self.assertTrue(preview.dry_run)
             self.assertGreater(len(preview.changed_paths), 1)
             self.assertIn('contract_version: "1"', contract_path.read_text(encoding="utf-8"))
             after_preview = {
-                path.relative_to(vault_path): path.read_bytes()
-                for path in vault_path.rglob("*")
-                if path.is_file()
+                path.relative_to(vault_path): path.read_bytes() for path in vault_path.rglob("*") if path.is_file()
             }
             self.assertEqual(after_preview, before_preview)
 
@@ -1457,10 +1447,7 @@ Not scheduled.
             target = vault.find_note("reviewed-knowledge-agent-memory-dogfood")
             self.assertIsNotNone(target)
             assert target is not None
-            dependent_context_ids = {
-                note.noesis_id
-                for note in vault.dependent_contexts_for(target)
-            }
+            dependent_context_ids = {note.noesis_id for note in vault.dependent_contexts_for(target)}
             self.assertIn(created.note_id, dependent_context_ids)
 
             renew_review(
@@ -1721,9 +1708,7 @@ Not scheduled.
             blocked_context = Vault.load(vault_path).find_note(created.note_id)
             self.assertIsNotNone(blocked_context)
             assert blocked_context is not None
-            blocked_section = blocked_context.body.split("## Lifecycle Exclusions", 1)[1].split(
-                "\n## ", 1
-            )[0]
+            blocked_section = blocked_context.body.split("## Lifecycle Exclusions", 1)[1].split("\n## ", 1)[0]
             self.assertIn(target_id, blocked_section)
 
             write_review_decision(
@@ -1738,9 +1723,7 @@ Not scheduled.
             approved_context = approved_vault.find_note(created.note_id)
             self.assertIsNotNone(approved_context)
             assert approved_context is not None
-            approved_section = approved_context.body.split("## Lifecycle Exclusions", 1)[1].split(
-                "\n## ", 1
-            )[0]
+            approved_section = approved_context.body.split("## Lifecycle Exclusions", 1)[1].split("\n## ", 1)[0]
             self.assertNotIn(target_id, approved_section)
             self.assertIn(wikilink(target_id), approved_context.metadata["reviewed_knowledge"])
             self.assertEqual(approved_vault.validate(), [])
@@ -1760,9 +1743,7 @@ Not scheduled.
             self.assertIsNotNone(before)
             assert before is not None
             before_count = next(
-                line
-                for line in before.body.splitlines()
-                if line.startswith("- Excluded by scope or budget:")
+                line for line in before.body.splitlines() if line.startswith("- Excluded by scope or budget:")
             )
             self.assertNotEqual(before_count, "- Excluded by scope or budget: 0")
 
@@ -1780,9 +1761,7 @@ Not scheduled.
             self.assertIsNotNone(rewritten)
             assert rewritten is not None
             after_count = next(
-                line
-                for line in rewritten.body.splitlines()
-                if line.startswith("- Excluded by scope or budget:")
+                line for line in rewritten.body.splitlines() if line.startswith("- Excluded by scope or budget:")
             )
             self.assertEqual(after_count, before_count)
             self.assertIn("(scoped_out,", rewritten.body)
@@ -1976,8 +1955,7 @@ Not scheduled.
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
-                "review audit content hash must match reviewed note "
-                "'synthesis-local-first-lifecycle-interface'",
+                "review audit content hash must match reviewed note 'synthesis-local-first-lifecycle-interface'",
                 messages,
             )
 
@@ -2008,9 +1986,11 @@ Not scheduled.
                 (first.path, first.metadata, f"{first.body}\nChanged first.\n"),
                 (second.path, second.metadata, f"{second.body}\nChanged second.\n"),
             ]
-            with patch("noesis.vault.write_note", side_effect=fail_second_write):
-                with self.assertRaisesRegex(OSError, "simulated write failure"):
-                    vault_module.write_notes_and_validate(vault_path, writes)
+            with (
+                patch("noesis.vault.write_note", side_effect=fail_second_write),
+                self.assertRaisesRegex(OSError, "simulated write failure"),
+            ):
+                vault_module.write_notes_and_validate(vault_path, writes)
 
             for path, text in original_text.items():
                 self.assertEqual(path.read_text(encoding="utf-8"), text)
@@ -2018,10 +1998,7 @@ Not scheduled.
     def test_removing_relationship_link_preserves_annotations(self) -> None:
         vault = Vault.load(EXAMPLE_VAULT)
         metadata = {
-            "claims": [
-                "[[claim-useful-memory-requires-lifecycle]] then "
-                "[[claim-agent-memory-dogfood]] # selected"
-            ]
+            "claims": [("[[claim-useful-memory-requires-lifecycle]] then [[claim-agent-memory-dogfood]] # selected")]
         }
 
         remove_relationship_link(
@@ -2032,3 +2009,61 @@ Not scheduled.
         )
 
         self.assertEqual(metadata["claims"], ["then [[claim-agent-memory-dogfood]] # selected"])
+
+    def test_wrong_python_types_raise_type_error(self) -> None:
+        self.assertEqual(context_module.context_as_of_date(date(2026, 6, 13)), date(2026, 6, 13))
+        with self.assertRaisesRegex(TypeError, "as_of must be YYYY-MM-DD"):
+            context_module.context_as_of_date(datetime(2026, 6, 13, 0, 0))
+        with self.assertRaisesRegex(TypeError, "as_of must be YYYY-MM-DD"):
+            context_module.context_as_of_date(13)
+        with self.assertRaisesRegex(ValueError, "as_of must be YYYY-MM-DD"):
+            context_module.context_as_of_date("not-a-date")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "noesis-bundle.yaml"
+            manifest_path.write_text("- not-a-mapping\n", encoding="utf-8")
+            with self.assertRaisesRegex(TypeError, "source bundle manifest must be a YAML mapping"):
+                vault_module.read_source_bundle_manifest(manifest_path)
+            manifest_path.write_text("title:\n  nested: true\nartifacts: []\n", encoding="utf-8")
+            with self.assertRaisesRegex(TypeError, "bundle manifest field 'title' must be a scalar value"):
+                vault_module.read_source_bundle_manifest(manifest_path)
+
+        with self.assertRaisesRegex(TypeError, "bundle artifact #1 must be a path string or mapping"):
+            vault_module.normalize_bundle_artifact(1, 1)
+        with self.assertRaisesRegex(TypeError, "bundle manifest field 'title' must be a scalar value"):
+            vault_module.manifest_text({"title": {"nested": True}}, "title")
+        with self.assertRaisesRegex(TypeError, "source metadata field 'author' must be flat, not a mapping"):
+            vault_module.validate_flat_source_metadata({"author": {"name": "Ada"}})
+        with self.assertRaisesRegex(ValueError, "source metadata field 'tags' must be flat, not nested"):
+            vault_module.validate_flat_source_metadata({"tags": [{"name": "Ada"}]})
+
+    def test_validation_reports_wrong_typed_context_as_of(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            context_path = vault_path / "context" / "operational-context-agent-memory-dogfood.md"
+            context_path.write_text(
+                context_path.read_text(encoding="utf-8").replace("as_of: 2026-06-13", "as_of:\n  - bad", 1),
+                encoding="utf-8",
+            )
+            issues = [issue.message for issue in Vault.load(vault_path).validate()]
+
+        self.assertIn("as_of must be YYYY-MM-DD", issues)
+
+    def test_migration_repairs_datetime_as_of(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = self.copy_example(Path(tmp))
+            self.downgrade_contract_to_v1(vault_path)
+            context_path = vault_path / "context" / "operational-context-agent-memory-dogfood.md"
+            context_path.write_text(
+                context_path.read_text(encoding="utf-8").replace("as_of: 2026-06-13", "as_of: 2026-06-13T00:00:00", 1),
+                encoding="utf-8",
+            )
+
+            migrate_vault(vault_path, backup=False)
+
+            migrated = Vault.load(vault_path).find_note("context-agent-memory-dogfood")
+            self.assertIsNotNone(migrated)
+            assert migrated is not None
+            as_of = migrated.metadata["as_of"]
+            rendered = as_of.isoformat() if isinstance(as_of, date) else str(as_of)
+            self.assertEqual(rendered, "2026-06-13")

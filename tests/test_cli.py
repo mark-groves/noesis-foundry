@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import yaml
 
 import noesis.vault as vault_module
 from noesis.vault import Vault, reviewed_note_content_hash, write_note
-
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
@@ -414,7 +413,9 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(show_payload["review_due"], False)
             self.assertEqual(show_payload["review_schedule"]["next_review"], "2026-07-05")
             self.assertEqual(show_payload["review_schedule"]["latest_audit"]["decision"], "renewed")
-            self.assertEqual(show_payload["audit_records"][-1]["noesis_id"], "review-stale-custom-plugin-still-superseded")
+            self.assertEqual(
+                show_payload["audit_records"][-1]["noesis_id"], "review-stale-custom-plugin-still-superseded"
+            )
             self.assertIn(
                 "context-first-cli-mcp-workflow",
                 [note["noesis_id"] for note in show_payload["impact"]["dependent_contexts"]],
@@ -494,9 +495,7 @@ class NoesisCliTests(unittest.TestCase):
             vault_path = Path(tmp) / "vault"
             init = run_noesis("vault", "init", str(vault_path))
             self.assertEqual(init.returncode, 0, init.stderr)
-            initialized_base = yaml.safe_load(
-                (vault_path / "_bases" / "review-queue.base").read_text(encoding="utf-8")
-            )
+            initialized_base = yaml.safe_load((vault_path / "_bases" / "review-queue.base").read_text(encoding="utf-8"))
             initialized_open_queue = next(
                 view for view in initialized_base["views"] if view["name"] == "Open review queue"
             )
@@ -702,9 +701,9 @@ class NoesisCliTests(unittest.TestCase):
         self.assertNotIn("Agents can safely copy global summary snippets", context.stdout)
         self.assertNotIn("stale-agent-memory-global-summary", context.stdout)
 
-        context_note = (
-            EXAMPLE_VAULT / "context" / "operational-context-agent-memory-dogfood.md"
-        ).read_text(encoding="utf-8")
+        context_note = (EXAMPLE_VAULT / "context" / "operational-context-agent-memory-dogfood.md").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("[[reviewed-knowledge-agent-memory-dogfood]]", context_note)
         self.assertIn("[[stale-agent-memory-global-summary]]", context_note)
 
@@ -781,7 +780,9 @@ class NoesisCliTests(unittest.TestCase):
         self.assertIn("Use source-backed project-memory chains", context.stdout)
         self.assertIn("Captured session bundles are valuable source material", context.stdout)
         self.assertIn("Unreviewed evidence drafts", context.stdout)
-        self.assertNotIn("Every imported bundle artifact should be promoted directly into active context", context.stdout)
+        self.assertNotIn(
+            "Every imported bundle artifact should be promoted directly into active context", context.stdout
+        )
         self.assertNotIn("stale-project-memory-corpus-bulk-import-active-context", context.stdout)
         self.assertNotIn("UNREVIEWED_BUNDLE_SHORTCUT_ACTIVE_CONTEXT", context.stdout)
         self.assertNotIn("evidence-project-memory-corpus-unreviewed-import-draft", context.stdout)
@@ -1114,7 +1115,9 @@ class NoesisCliTests(unittest.TestCase):
             self.assertEqual(payload["created_count"], 2)
             self.assertEqual(payload["skipped_count"], 1)
             results = payload["results"]
-            self.assertEqual([result["source_file"] for result in results], [str(alpha), str(beta), str(beta_duplicate)])
+            self.assertEqual(
+                [result["source_file"] for result in results], [str(alpha), str(beta), str(beta_duplicate)]
+            )
             self.assertEqual(results[0]["note_id"], "source-alpha-note")
             self.assertEqual(results[1]["note_id"], "source-beta-note")
             self.assertEqual(results[2]["status"], "skipped")
@@ -1378,6 +1381,23 @@ artifacts:
 
             validate = run_noesis("vault", "validate", str(vault_path))
             self.assertEqual(validate.returncode, 0, validate.stderr)
+
+    def test_bundle_ingest_rejects_non_mapping_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault_path = tmp_path / "vault"
+            bundle_path = tmp_path / "bundle"
+            bundle_path.mkdir()
+            (bundle_path / "noesis-bundle.yaml").write_text("- not-a-mapping\n", encoding="utf-8")
+
+            init = run_noesis("vault", "init", str(vault_path))
+            self.assertEqual(init.returncode, 0, init.stderr)
+
+            ingest = run_noesis("ingest", "bundle", "--vault", str(vault_path), str(bundle_path))
+
+            self.assertNotEqual(ingest.returncode, 0)
+            self.assertIn("ERROR source bundle manifest must be a YAML mapping", ingest.stderr)
+            self.assertNotIn("Traceback", ingest.stderr)
 
     def test_trace_json_reports_lineage_and_missing_note_errors(self) -> None:
         result = run_noesis(
@@ -1766,10 +1786,7 @@ sources:
         )
         self.assertIn(
             "reviewed-knowledge-agent-memory-dogfood",
-            [
-                note["noesis_id"]
-                for note in generic_payload["handoff"]["scoped_out_reviewed_knowledge"]
-            ],
+            [note["noesis_id"] for note in generic_payload["handoff"]["scoped_out_reviewed_knowledge"]],
         )
         self.assertEqual(generic_payload["handoff"]["budgeted_out_reviewed_knowledge"], [])
         self.assertTrue(
@@ -1796,9 +1813,7 @@ sources:
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = parse_json_stdout(result)
         included_ids = [note["noesis_id"] for note in payload["handoff"]["active_reviewed_knowledge"]]
-        lifecycle_ids = [
-            note["noesis_id"] for note in payload["handoff"]["lifecycle_exclusions"]["notes"]
-        ]
+        lifecycle_ids = [note["noesis_id"] for note in payload["handoff"]["lifecycle_exclusions"]["notes"]]
         validation_commands = payload["handoff"]["validation_commands"]
 
         self.assertEqual(payload["profile"], "codex-handoff")
@@ -1823,9 +1838,7 @@ sources:
         )
         self.assertTrue(
             any(
-                command.startswith(
-                    "PYTHONPATH=src python -m noesis context explain --vault "
-                )
+                command.startswith("PYTHONPATH=src python -m noesis context explain --vault ")
                 for command in validation_commands
             ),
             validation_commands,
@@ -1835,10 +1848,7 @@ sources:
             validation_commands,
         )
         self.assertTrue(
-            all(
-                "--purpose 'orchestrate next Noesis phases'" in command
-                for command in validation_commands[2:4]
-            ),
+            all("--purpose 'orchestrate next Noesis phases'" in command for command in validation_commands[2:4]),
             validation_commands,
         )
         self.assertEqual(
@@ -1928,9 +1938,7 @@ sources:
         payload = parse_json_stdout(result)
         included_ids = [note["noesis_id"] for note in payload["selection"]["included"]]
         scoped_out_ids = [note["noesis_id"] for note in payload["selection"]["excluded"]]
-        lifecycle_excluded_ids = [
-            note["noesis_id"] for note in payload["selection"]["lifecycle_excluded"]
-        ]
+        lifecycle_excluded_ids = [note["noesis_id"] for note in payload["selection"]["lifecycle_excluded"]]
         self.assertEqual(included_ids, ["reviewed-knowledge-agent-memory-dogfood"])
         self.assertIn("reviewed-knowledge-noesis-lifecycle", scoped_out_ids)
         self.assertIn("reviewed-knowledge-noesis-roadmap-phase-orchestration", scoped_out_ids)
@@ -1987,9 +1995,7 @@ This archived note is provenance, not active guidance.
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = parse_json_stdout(result)
             lifecycle_excluded = payload["selection"]["lifecycle_excluded"]
-            archived = [
-                note for note in lifecycle_excluded if note["noesis_id"] == "archived-context-note"
-            ]
+            archived = [note for note in lifecycle_excluded if note["noesis_id"] == "archived-context-note"]
             self.assertEqual(len(archived), 1)
             self.assertEqual(archived[0]["selection_status"], "lifecycle_excluded")
             self.assertIn("archived-history has status 'archived'", archived[0]["selection_reason"])
@@ -2089,9 +2095,9 @@ This archived note is provenance, not active guidance.
             self.assertIn("No current reviewed knowledge found.", context.stdout)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
 
-            knowledge_note = (
-                vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md"
-            ).read_text(encoding="utf-8")
+            knowledge_note = (vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("status: needs-review", knowledge_note)
             self.assertIn("review_state: changes-requested", knowledge_note)
 
@@ -2106,9 +2112,9 @@ This archived note is provenance, not active guidance.
             self.assertIn("recommended_action: resolve-requested-changes", show.stdout)
             self.assertIn("propagated-change-request", show.stdout)
 
-            context_note = (
-                vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
-            ).read_text(encoding="utf-8")
+            context_note = (vault_path / "context" / "operational-context-first-cli-mcp-workflow.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("reviewed_knowledge: []", context_note)
             self.assertIn("[[claim-useful-memory-requires-lifecycle]]", context_note)
             self.assertIn("[[reviewed-knowledge-noesis-lifecycle]]", context_note)
@@ -2603,13 +2609,13 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("No current reviewed knowledge found.", context.stdout)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
 
-            context_note = (
-                vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
-            ).read_text(encoding="utf-8")
+            context_note = (vault_path / "context" / "operational-context-first-cli-mcp-workflow.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("excluded_memory:", context_note)
             self.assertIn("[[stale-custom-plugin-first]]", context_note)
-            self.assertIn('[[reviewed-knowledge-noesis-lifecycle]]', context_note)
-            self.assertIn('[[stale-noesis-lifecycle-old]]', context_note)
+            self.assertIn("[[reviewed-knowledge-noesis-lifecycle]]", context_note)
+            self.assertIn("[[stale-noesis-lifecycle-old]]", context_note)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context_note)
 
     def test_mark_support_only_source_stale_excludes_dependent_knowledge(self) -> None:
@@ -2703,14 +2709,14 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("No current reviewed knowledge found.", context.stdout)
             self.assertNotIn("Noesis should represent memory as a lifecycle", context.stdout)
 
-            knowledge_note = (
-                vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md"
-            ).read_text(encoding="utf-8")
+            knowledge_note = (vault_path / "knowledge" / "reviewed-knowledge-noesis-lifecycle.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("status: stale", knowledge_note)
 
-            context_note = (
-                vault_path / "context" / "operational-context-first-cli-mcp-workflow.md"
-            ).read_text(encoding="utf-8")
+            context_note = (vault_path / "context" / "operational-context-first-cli-mcp-workflow.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("reviewed_knowledge: []", context_note)
             self.assertIn("syntheses: []", context_note)
             self.assertIn("[[synthesis-local-first-lifecycle-interface]]", context_note)
@@ -2781,7 +2787,9 @@ This approved-looking synthesis has no source, evidence, or claim lineage.
             self.assertIn("- reviewed-knowledge-agent-memory-dogfood (freshness_excluded", context_note)
             self.assertIn("- reviewed-knowledge-noesis-lifecycle (freshness_excluded", context_note)
             self.assertIn("- reviewed-knowledge-noesis-roadmap-phase-orchestration (freshness_excluded", context_note)
-            self.assertIn("- synthesis-project-memory-corpus-continuation (lifecycle_excluded, kind=stale", context_note)
+            self.assertIn(
+                "- synthesis-project-memory-corpus-continuation (lifecycle_excluded, kind=stale", context_note
+            )
             self.assertIn(
                 "- reviewed-knowledge-project-memory-corpus-continuation (lifecycle_excluded, kind=stale",
                 context_note,

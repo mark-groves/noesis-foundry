@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
 import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 from noesis.mcp_server import NoesisMcpHandlers, create_server
@@ -19,14 +20,13 @@ from noesis.vault import (
     write_note,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
 CODEX_SESSION_BUNDLE = ROOT / "tests" / "fixtures" / "codex-session-bundle"
 
 
 class RecordingFastMCP:
-    instances: list["RecordingFastMCP"] = []
+    instances: ClassVar[list[RecordingFastMCP]] = []
 
     def __init__(self, name: str, **kwargs: object) -> None:
         self.name = name
@@ -38,7 +38,7 @@ class RecordingFastMCP:
 
     def tool(self) -> object:
         def register(function: object) -> object:
-            self.tools[getattr(function, "__name__")] = function
+            self.tools[function.__name__] = function
             return function
 
         return register
@@ -106,10 +106,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                     )
                     self.assertIn("'<vault>'", handoff["content"])
                     self.assertTrue(
-                        all(
-                            "'<vault>'" in command
-                            for command in handoff["handoff"]["validation_commands"][1:4]
-                        )
+                        all("'<vault>'" in command for command in handoff["handoff"]["validation_commands"][1:4])
                     )
 
     def test_mcp_allowed_roots_extend_the_default_vault(self) -> None:
@@ -325,10 +322,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         self.assertIn("scoped_out_reviewed_knowledge", handoff_context["handoff"])
         self.assertIn(
             "reviewed-knowledge-agent-memory-dogfood",
-            [
-                note["noesis_id"]
-                for note in handoff_context["handoff"]["scoped_out_reviewed_knowledge"]
-            ],
+            [note["noesis_id"] for note in handoff_context["handoff"]["scoped_out_reviewed_knowledge"]],
         )
 
         self.assertEqual(handoff_context["handoff"]["budgeted_out_reviewed_knowledge"], [])
@@ -354,10 +348,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
         )
         self.assertIn(
             "stale-noesis-roadmap-plugin-first",
-            [
-                note["noesis_id"]
-                for note in codex_handoff_context["handoff"]["lifecycle_exclusions"]["notes"]
-            ],
+            [note["noesis_id"] for note in codex_handoff_context["handoff"]["lifecycle_exclusions"]["notes"]],
         )
         self.assertNotIn(
             "The next Noesis roadmap phase should prioritize a custom Obsidian plugin",
@@ -382,9 +373,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             self.assertIsNotNone(source)
             assert source is not None
             metadata = dict(source.metadata)
-            metadata["raw_path"] = str(
-                (source.path.parent / str(source.metadata["raw_path"])).resolve()
-            )
+            metadata["raw_path"] = str((source.path.parent / str(source.metadata["raw_path"])).resolve())
             write_note(source.path, metadata, source.body)
 
             blocked = handlers.get_note(source_id)
@@ -502,9 +491,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             queue = handlers.get_review_queue(review_state="approved")
             self.assertTrue(queue["ok"], queue)
             claim = next(
-                note
-                for note in queue["notes"]
-                if note["noesis_id"] == "claim-useful-memory-requires-lifecycle"
+                note for note in queue["notes"] if note["noesis_id"] == "claim-useful-memory-requires-lifecycle"
             )
             self.assertEqual(claim["requested_changes"]["open"], False)
             self.assertEqual(claim["requested_changes"]["count"], 0)
@@ -653,8 +640,7 @@ class NoesisMcpHandlerTests(unittest.TestCase):
             source_workbench = handlers.show_review("source-noesis-readme")
             self.assertTrue(source_workbench["ok"], source_workbench)
             impacted_context_ids = {
-                context["noesis_id"]
-                for context in source_workbench["impact"]["dependent_contexts"]
+                context["noesis_id"] for context in source_workbench["impact"]["dependent_contexts"]
             }
             self.assertIn("context-first-cli-mcp-workflow", impacted_context_ids)
 
@@ -972,9 +958,7 @@ None.
                     "reviewer": "test-human",
                     "reviewed_at": "2026-07-17",
                     "reviewed_notes": ["[[source-agent-memory-session]]"],
-                    "reviewed_content_hashes": [
-                        f"source-agent-memory-session={reviewed_note_content_hash(source)}"
-                    ],
+                    "reviewed_content_hashes": [f"source-agent-memory-session={reviewed_note_content_hash(source)}"],
                     "decision": "changes-requested",
                     "tags": ["noesis", "review"],
                     "aliases": [],
@@ -1030,9 +1014,12 @@ Revise the unrelated source.
 
             handlers = NoesisMcpHandlers(vault_path, allowed_roots=[bundle_path])
             for escaped_manifest in (str(outside_manifest), "../outside.yaml"):
-                with self.subTest(manifest=escaped_manifest), self.assertRaisesRegex(
-                    ValueError,
-                    "bundle manifest is outside configured MCP roots",
+                with (
+                    self.subTest(manifest=escaped_manifest),
+                    self.assertRaisesRegex(
+                        ValueError,
+                        "bundle manifest is outside configured MCP roots",
+                    ),
                 ):
                     handlers.import_source_bundle(
                         str(bundle_path),
@@ -1146,9 +1133,7 @@ Revise the unrelated source.
                 next_review="2026-08-06",
             )
             self.assertTrue(knowledge["ok"], knowledge)
-            pending_knowledge = Vault.load(vault_path).find_note(
-                "reviewed-knowledge-review-before-reuse"
-            )
+            pending_knowledge = Vault.load(vault_path).find_note("reviewed-knowledge-review-before-reuse")
             self.assertIsNotNone(pending_knowledge)
             assert pending_knowledge is not None
             self.assertEqual(pending_knowledge.status, "needs-review")
