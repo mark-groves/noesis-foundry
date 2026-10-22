@@ -570,7 +570,7 @@ class Vault:
         for note in self.notes:
             if note.type != "review":
                 continue
-            if review_audit_covers_target_or_lineage(self, note, target):
+            if relationship_contains(self, note.metadata, "reviewed_notes", target.noesis_id):
                 audits.append(note)
         relationship_order = self.review_audit_relationship_order(target)
         return sorted(
@@ -714,6 +714,7 @@ class Vault:
                 and note.review_state in {"reviewed", "approved"}
                 and note.status in CURRENT_KNOWLEDGE_STATUSES
                 and not is_excluded(note)
+                and direct_content_bound_review_audits(self, note)
             ),
             key=lambda note: note.title.lower(),
         )
@@ -1080,7 +1081,6 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
 
 def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
-    auditable_lineage = {note.noesis_id: note}
     lineage_sources = {
         source.noesis_id: source for source in relationship_notes(vault, note, "sources", expected_type="source")
     }
@@ -1095,7 +1095,6 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
         for support in relationship_notes(vault, note, key, expected_type=expected_type)
     ]
     for support in review_support_lineage(vault, direct_supports):
-        auditable_lineage[support.noesis_id] = support
         for source in relationship_notes(vault, support, "sources", expected_type="source"):
             lineage_sources[source.noesis_id] = source
         if support.status != "reviewed" or support.review_state not in MATURE_REVIEW_STATES or is_excluded(support):
@@ -1122,12 +1121,12 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
                 )
             )
 
-    approved_audits = approved_lineage_review_audits_for(vault, note, auditable_lineage.values())
-    if not approved_audits:
+    if not direct_content_bound_review_audits(vault, note):
         issues.append(
             Issue(
                 note.path,
-                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                "active reviewed knowledge requires a direct approved or renewed review audit "
+                "whose reviewed_content_hashes include its current body hash",
             )
         )
     return issues
@@ -1148,31 +1147,6 @@ def review_support_lineage(vault: Vault, initial: Iterable[Note]) -> list[Note]:
         for key, expected_type in relationships:
             queue.extend(relationship_notes(vault, support, key, expected_type=expected_type))
     return sorted(found.values(), key=lambda item: item.rel_path.as_posix())
-
-
-def review_audit_covers_target_or_lineage(vault: Vault, audit: Note, target: Note) -> bool:
-    if relationship_contains(vault, audit.metadata, "reviewed_notes", target.noesis_id):
-        return True
-    if target.type != "reviewed-knowledge" or not relationship_contains(
-        vault,
-        target.metadata,
-        "reviewed_by",
-        audit.noesis_id,
-    ):
-        return False
-    direct_supports = [
-        support
-        for key, expected_type in (
-            ("evidence", "evidence"),
-            ("claims", "claim"),
-            ("syntheses", "synthesis"),
-        )
-        for support in relationship_notes(vault, target, key, expected_type=expected_type)
-    ]
-    return any(
-        relationship_contains(vault, audit.metadata, "reviewed_notes", support.noesis_id)
-        for support in review_support_lineage(vault, direct_supports)
-    )
 
 
 def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
@@ -1707,7 +1681,6 @@ def _migrate_vault_locked(
             if is_excluded(source):
                 raise ValueError(f"cannot migrate active knowledge with excluded source: {source.noesis_id}")
 
-        auditable_lineage = {knowledge.noesis_id: knowledge}
         direct_supports: list[Note] = []
         for key, expected_type in (("evidence", "evidence"), ("claims", "claim"), ("syntheses", "synthesis")):
             supports = relationship_notes(vault, knowledge, key, expected_type=expected_type)
@@ -1727,40 +1700,12 @@ def _migrate_vault_locked(
                     raise ValueError(
                         f"cannot migrate active knowledge with excluded support source: {source.noesis_id}"
                     )
-            auditable_lineage[support.noesis_id] = support
 
-        approved_audits = approved_lineage_review_audits_for(
-            vault,
-            knowledge,
-            auditable_lineage.values(),
-        )
-        if not approved_audits:
-            approved_audits = [
-                audit
-                for audit in relationship_notes(
-                    vault,
-                    knowledge,
-                    "reviewed_by",
-                    expected_type="review",
-                )
-                if is_completed_review_audit(audit)
-                and str(audit.metadata.get("decision", "")) in {"approved", "renewed"}
-                and review_audit_date_postdates_note(audit, knowledge)
-                and any(
-                    relationship_contains(
-                        vault,
-                        audit.metadata,
-                        "reviewed_notes",
-                        lineage_note.noesis_id,
-                    )
-                    and review_audit_content_hash_matches(audit, lineage_note)
-                    for lineage_note in auditable_lineage.values()
-                    if lineage_note.noesis_id != knowledge.noesis_id
-                )
-            ]
+        approved_audits = direct_content_bound_review_audits(vault, knowledge)
         if not approved_audits:
             raise ValueError(
-                "cannot migrate active knowledge without an approved audit covering it or its declared lineage: "
+                "cannot migrate active knowledge without a direct approved or renewed review audit "
+                "whose reviewed_content_hashes include its current body hash: "
                 f"{knowledge.noesis_id}"
             )
         audit = approved_audits[-1]
@@ -1776,6 +1721,10 @@ def _migrate_vault_locked(
             prefix = f"{support.noesis_id}="
             reviewed_content_hashes = [value for value in reviewed_content_hashes if not value.startswith(prefix)]
             reviewed_content_hashes.append(f"{prefix}{reviewed_note_content_hash(support)}")
+        knowledge_prefix = f"{knowledge.noesis_id}="
+        reviewed_content_hashes = [value for value in reviewed_content_hashes if not value.startswith(knowledge_prefix)]
+        reviewed_content_hashes.append(f"{knowledge_prefix}{reviewed_note_content_hash(knowledge)}")
+        add_relationship_link(audit_metadata, "reviewed_notes", wikilink(knowledge.noesis_id))
         audit_metadata["reviewed_content_hashes"] = reviewed_content_hashes
         note_updates[audit.path] = (audit_metadata, audit.body)
 
@@ -2975,6 +2924,16 @@ def write_review_decision(
     return CreatedNote(note_id=note_id, path=note_path)
 
 
+def synthesis_promotion_reviewer(vault: Vault, synthesis_note: Note) -> str:
+    audits = approved_review_audits_for(vault, synthesis_note)
+    if not audits:
+        raise ValueError("synthesis must have a content-bound approved review audit before promotion")
+    reviewer = audits[-1].metadata.get("reviewer")
+    if not isinstance(reviewer, str) or is_blank(reviewer) or reviewer.strip().casefold() in {"unknown", "unassigned"}:
+        raise ValueError("synthesis review audit must identify a reviewer before promotion")
+    return reviewer.strip()
+
+
 @vault_write_operation
 def promote_synthesis(
     vault_path: Path | str,
@@ -3043,6 +3002,15 @@ def promote_synthesis(
     note_id = unique_noesis_id(root, f"reviewed-knowledge-{note_slug}")
     note_path = unique_note_path(root / "knowledge", f"{note_id}.md")
     custom_knowledge = knowledge is not None
+    reviewed_by = list(review_links)
+    promotion_review_id: str | None = None
+    promotion_review_path: Path | None = None
+    promotion_reviewer: str | None = None
+    if not custom_knowledge:
+        promotion_reviewer = synthesis_promotion_reviewer(vault, synthesis_note)
+        promotion_review_id = unique_noesis_id(root, f"review-{note_slug}-knowledge")
+        promotion_review_path = unique_note_path(root / "review", f"{promotion_review_id}.md")
+        reviewed_by.append(wikilink(promotion_review_id))
     metadata: dict[str, Any] = {
         "title": note_title,
         "noesis_id": note_id,
@@ -3057,7 +3025,7 @@ def promote_synthesis(
         "evidence": evidence_links,
         "claims": claim_links,
         "syntheses": [wikilink(synthesis_note.noesis_id)],
-        "reviewed_by": review_links,
+        "reviewed_by": reviewed_by,
         "tags": ["noesis", "knowledge"],
         "aliases": [],
     }
@@ -3071,16 +3039,17 @@ def promote_synthesis(
         if custom_knowledge
         else markdown_body_section(synthesis_note.body, "Synthesis") or synthesis_note.body.strip()
     )
-    trust_text = (
-        "Pending a direct review of this custom promoted text."
-        if custom_knowledge
-        else f"Derived from approved synthesis {wikilink(synthesis_note.noesis_id)}."
-    )
-    usage_text = (
-        "Do not use this custom knowledge in operational context until it is approved."
-        if custom_knowledge
-        else "Use this only while it remains current reviewed knowledge."
-    )
+    if custom_knowledge:
+        trust_text = "Pending a direct review of this custom promoted text."
+        usage_text = "Do not use this custom knowledge in operational context until it is approved."
+    else:
+        if promotion_review_id is None:
+            raise ValueError("promoted knowledge requires a direct review audit")
+        trust_text = (
+            f"Derived from approved synthesis {wikilink(synthesis_note.noesis_id)} "
+            f"and bound by direct review {wikilink(promotion_review_id)}."
+        )
+        usage_text = "Use this only while it remains current reviewed knowledge."
     body = f"""# {note_title}
 
 ## Current Knowledge
@@ -3101,7 +3070,57 @@ def promote_synthesis(
 
 Recheck this note when its source, evidence, claims, or synthesis are superseded.
 """
-    writes = [(note_path, metadata, body)]
+    writes: list[tuple[Path, dict[str, Any], str]] = [(note_path, metadata, body)]
+    if not custom_knowledge:
+        if promotion_review_path is None or promotion_review_id is None or promotion_reviewer is None:
+            raise ValueError("promoted knowledge requires a direct review audit")
+        review_body = f"""# Review - {note_title}
+
+## Decision
+
+approved
+
+## Reviewed Note
+
+- {wikilink(note_id)}
+
+## Basis
+
+Promoted from approved synthesis {wikilink(synthesis_note.noesis_id)}. This audit binds the reviewed-knowledge body.
+
+## Changes Requested
+
+None.
+
+## Next Review
+
+{next_review or "Not scheduled."}
+"""
+        writes.append(
+            (
+                promotion_review_path,
+                {
+                    "title": f"Review - {note_title}",
+                    "noesis_id": promotion_review_id,
+                    "type": "review",
+                    "lifecycle_stage": "review",
+                    "status": "complete",
+                    "review_state": "approved",
+                    "confidence": "medium",
+                    "created": reviewed_at,
+                    "updated": reviewed_at,
+                    "reviewer": promotion_reviewer,
+                    "reviewed_at": reviewed_at,
+                    "reviewed_notes": [wikilink(note_id)],
+                    "reviewed_content_hashes": [f"{note_id}={reviewed_body_content_hash(body)}"],
+                    "decision": "approved",
+                    "tags": ["noesis", "review"],
+                    "aliases": [],
+                    **({"next_review": next_review} if next_review else {}),
+                },
+                review_body,
+            )
+        )
     append_updated_reviewed_knowledge_contexts(
         vault,
         reviewed_at,
@@ -3824,43 +3843,21 @@ def approved_review_audits_for(vault: Vault, target: Note) -> list[Note]:
     return [latest] if review_audit_postdates_note(latest, target) else []
 
 
-def approved_lineage_review_audits_for(
-    vault: Vault,
-    knowledge: Note,
-    lineage: Iterable[Note],
-) -> list[Note]:
-    lineage_by_id = {note.noesis_id: note for note in lineage}
-    created = parse_review_date(knowledge.metadata.get("created"))
-    updated = parse_review_date(knowledge.metadata.get("updated"))
-    knowledge_was_edited = created is None or updated is None or updated > created
-    direct_audits = completed_review_audits_covering(vault, knowledge)
-    if direct_audits:
-        latest = direct_audits[-1]
-        if str(latest.metadata.get("decision", "")) not in {"approved", "renewed"}:
-            return []
-        return [latest] if review_audit_postdates_note(latest, knowledge) else []
+def direct_content_bound_review_audits(vault: Vault, knowledge: Note) -> list[Note]:
+    """Return the latest direct audit that approves or renews this knowledge body.
 
-    linked_audit_ids = {
-        audit.noesis_id for audit in relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
-    }
-    approved: list[Note] = []
-    for target in lineage_by_id.values():
-        if target.noesis_id == knowledge.noesis_id:
-            continue
-        completed = completed_review_audits_covering(vault, target)
-        if not completed:
-            return []
-        latest = completed[-1]
-        if latest.noesis_id not in linked_audit_ids:
-            return []
-        if str(latest.metadata.get("decision", "")) not in {"approved", "renewed"}:
-            return []
-        if not review_audit_postdates_note(latest, target):
-            return []
-        if knowledge_was_edited and not review_audit_postdates_note(latest, knowledge):
-            return []
-        approved.append(latest)
-    return list({audit.noesis_id: audit for audit in approved}.values())
+    Audits of evidence, claim, or synthesis notes do not qualify. Equal created
+    and updated dates do not excuse a missing or stale body hash.
+    """
+    direct_audits = completed_review_audits_covering(vault, knowledge)
+    if not direct_audits:
+        return []
+    latest = direct_audits[-1]
+    if str(latest.metadata.get("decision", "")) not in {"approved", "renewed"}:
+        return []
+    if not review_audit_postdates_note(latest, knowledge):
+        return []
+    return [latest]
 
 
 def review_audit_postdates_note(audit: Note, target: Note) -> bool:

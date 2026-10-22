@@ -3152,7 +3152,7 @@ claims:
 syntheses:
   - "[[synthesis-local-first-lifecycle-interface]]"
 reviewed_by:
-  - "[[review-local-first-lifecycle]]"
+  - "[[review-other-topic-knowledge]]"
 tags:
   - other-topic
 aliases: []
@@ -3165,6 +3165,51 @@ aliases: []
 This note covers a separate topic for an unrelated handoff.
 """,
                 encoding="utf-8",
+            )
+            loaded = Vault.load(vault_path)
+            other_note = loaded.find_note("reviewed-knowledge-other-topic")
+            self.assertIsNotNone(other_note)
+            assert other_note is not None
+            write_note(
+                vault_path / "review" / "review-other-topic-knowledge.md",
+                {
+                    "title": "Review - Separate Topic",
+                    "noesis_id": "review-other-topic-knowledge",
+                    "type": "review",
+                    "lifecycle_stage": "review",
+                    "status": "complete",
+                    "review_state": "approved",
+                    "confidence": "high",
+                    "created": "2026-05-29",
+                    "updated": "2026-05-29",
+                    "reviewer": "test-human",
+                    "reviewed_at": "2026-05-29",
+                    "reviewed_notes": ["[[reviewed-knowledge-other-topic]]"],
+                    "reviewed_content_hashes": [
+                        f"reviewed-knowledge-other-topic={reviewed_note_content_hash(other_note)}"
+                    ],
+                    "decision": "approved",
+                    "tags": ["review"],
+                    "aliases": [],
+                },
+                """# Review - Separate Topic
+
+## Decision
+
+approved
+
+## Reviewed Note
+
+- [[reviewed-knowledge-other-topic]]
+
+## Basis
+
+The separate-topic knowledge body was reviewed directly.
+
+## Changes Requested
+
+None.
+""",
             )
             refresh_context_snapshots(vault_path, updated_at="2026-05-29")
 

@@ -14,10 +14,12 @@ reviewed_notes:
   - "[[evidence-memory-lifecycle]]"
   - "[[claim-useful-memory-requires-lifecycle]]"
   - "[[synthesis-local-first-lifecycle-interface]]"
+  - "[[reviewed-knowledge-noesis-lifecycle]]"
 reviewed_content_hashes:
   - evidence-memory-lifecycle=sha256:24a001c35d48c9c1f4a1dad91fbbc218975931cdadefc3d8ac8361165ba5f3d1
   - claim-useful-memory-requires-lifecycle=sha256:5b8817c63db5177023e305540d1138f7160e95ee9e0cc82bc2acfc5dab9bc1cf
   - synthesis-local-first-lifecycle-interface=sha256:256d7363c30e518875a7a90999b12a4450d8f6ec72fc4b8be2d899976ee09843
+  - reviewed-knowledge-noesis-lifecycle=sha256:7b20d1ebcab404ce0a8914ef55880262c5464cbae01c4bfed0e356e0f2ea998f
 decision: approved
 next_review: 2026-06-29
 tags:
@@ -37,7 +39,8 @@ Approved for the first prototype.
 
 The claim and synthesis are directly supported by [[source-noesis-readme]] and
 [[evidence-memory-lifecycle]]. The proposed interface keeps durable memory in
-files and uses Obsidian only as the human-facing workbench.
+files and uses Obsidian only as the human-facing workbench. This audit also
+binds the body of [[reviewed-knowledge-noesis-lifecycle]].
 
 ## Changes Requested
 

@@ -521,7 +521,7 @@ class ContractV2Tests(unittest.TestCase):
                 messages,
             )
             self.assertIn(
-                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                "active reviewed knowledge requires a direct approved or renewed review audit whose reviewed_content_hashes include its current body hash",
                 messages,
             )
 
@@ -690,23 +690,39 @@ class ContractV2Tests(unittest.TestCase):
                 messages,
             )
 
-    def test_validator_requires_review_audit_to_cover_knowledge_lineage(self) -> None:
+    def test_validator_rejects_lineage_audit_without_knowledge_body_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
-            knowledge = Vault.load(vault_path).find_note("reviewed-knowledge-noesis-lifecycle")
+            vault = Vault.load(vault_path)
+            knowledge = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            audit = vault.find_note("review-local-first-lifecycle")
             self.assertIsNotNone(knowledge)
-            assert knowledge is not None
+            self.assertIsNotNone(audit)
+            assert knowledge is not None and audit is not None
+            audit_metadata = dict(audit.metadata)
+            audit_metadata["reviewed_notes"] = [
+                link
+                for link in audit_metadata["reviewed_notes"]
+                if "reviewed-knowledge-noesis-lifecycle" not in str(link)
+            ]
+            audit_metadata["reviewed_content_hashes"] = [
+                value
+                for value in audit_metadata["reviewed_content_hashes"]
+                if not str(value).startswith("reviewed-knowledge-noesis-lifecycle=")
+            ]
+            write_note(audit.path, audit_metadata, audit.body)
             metadata = dict(knowledge.metadata)
             metadata["reviewed_by"] = ["[[review-agent-memory-dogfood]]"]
+            self.assertEqual(metadata["created"], metadata["updated"])
             write_note(knowledge.path, metadata, knowledge.body)
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
-                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                "active reviewed knowledge requires a direct approved or renewed review audit whose reviewed_content_hashes include its current body hash",
                 messages,
             )
 
-    def test_validator_requires_every_lineage_support_audit_to_be_linked(self) -> None:
+    def test_direct_knowledge_audit_survives_split_support_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
             vault = Vault.load(vault_path)
@@ -740,17 +756,13 @@ class ContractV2Tests(unittest.TestCase):
             synthesis_metadata["reviewed_by"] = [wikilink(split_audit_id)]
             write_note(synthesis.path, synthesis_metadata, synthesis.body)
 
-            messages = [issue.message for issue in Vault.load(vault_path).validate()]
-            self.assertIn(
-                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
-                messages,
-            )
+            self.assertEqual(Vault.load(vault_path).validate(), [])
 
     def test_validator_rejects_approval_audits_older_than_reviewed_edits(self) -> None:
         cases = (
             (
                 "reviewed-knowledge-noesis-lifecycle",
-                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                "active reviewed knowledge requires a direct approved or renewed review audit whose reviewed_content_hashes include its current body hash",
             ),
             (
                 "evidence-memory-lifecycle",
@@ -812,7 +824,7 @@ Revise the operational guidance before reuse.
 
             messages = [issue.message for issue in Vault.load(vault_path).validate()]
             self.assertIn(
-                "active reviewed knowledge requires an approved review audit covering it or its declared lineage",
+                "active reviewed knowledge requires a direct approved or renewed review audit whose reviewed_content_hashes include its current body hash",
                 messages,
             )
 
@@ -1306,16 +1318,31 @@ Not scheduled.
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = self.copy_example(Path(tmp))
             self.downgrade_contract_to_v1(vault_path)
-            knowledge = Vault.load(vault_path).find_note("reviewed-knowledge-noesis-lifecycle")
+            vault = Vault.load(vault_path)
+            knowledge = vault.find_note("reviewed-knowledge-noesis-lifecycle")
+            audit = vault.find_note("review-local-first-lifecycle")
             self.assertIsNotNone(knowledge)
-            assert knowledge is not None
+            self.assertIsNotNone(audit)
+            assert knowledge is not None and audit is not None
+            audit_metadata = dict(audit.metadata)
+            audit_metadata["reviewed_notes"] = [
+                link
+                for link in audit_metadata["reviewed_notes"]
+                if "reviewed-knowledge-noesis-lifecycle" not in str(link)
+            ]
+            audit_metadata["reviewed_content_hashes"] = [
+                value
+                for value in audit_metadata["reviewed_content_hashes"]
+                if not str(value).startswith("reviewed-knowledge-noesis-lifecycle=")
+            ]
+            write_note(audit.path, audit_metadata, audit.body)
             metadata = dict(knowledge.metadata)
             metadata["reviewed_by"] = ["[[review-agent-memory-dogfood]]"]
             write_note(knowledge.path, metadata, knowledge.body)
 
             with self.assertRaisesRegex(
                 ValueError,
-                "cannot migrate active knowledge without an approved audit covering it or its declared lineage: "
+                "cannot migrate active knowledge without a direct approved or renewed review audit whose reviewed_content_hashes include its current body hash: "
                 "reviewed-knowledge-noesis-lifecycle",
             ):
                 migrate_vault(vault_path, dry_run=True)
@@ -1865,6 +1892,22 @@ Not scheduled.
                 duplicate_metadata,
                 original.body,
             )
+            bound = Vault.load(vault_path)
+            duplicate = bound.find_note(duplicate_id)
+            review = bound.find_note("review-local-first-lifecycle")
+            self.assertIsNotNone(duplicate)
+            self.assertIsNotNone(review)
+            assert duplicate is not None and review is not None
+            review_metadata = dict(review.metadata)
+            review_metadata["reviewed_notes"] = [
+                *list(review.metadata["reviewed_notes"]),
+                wikilink(duplicate_id),
+            ]
+            review_metadata["reviewed_content_hashes"] = [
+                *list(review.metadata["reviewed_content_hashes"]),
+                f"{duplicate_id}={reviewed_note_content_hash(duplicate)}",
+            ]
+            write_note(review.path, review_metadata, review.body)
             refreshed_vault = Vault.load(vault_path)
             context_writes = []
             vault_module.append_updated_reviewed_knowledge_contexts(
