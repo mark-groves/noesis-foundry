@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
 
@@ -56,13 +55,11 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("From a source checkout without installation", readme)
         self.assertIn("PYTHONPATH=src python -m noesis", readme)
 
-    @staticmethod
-    def _read_skill(path: Path) -> tuple[dict[str, object], str]:
+    def _read_skill(self, path: Path) -> tuple[dict[str, object], str]:
         content = path.read_text(encoding="utf-8")
         match = re.match(r"^---\n(.*?)\n---\n(.*)$", content, re.DOTALL)
         if match is None:
             raise AssertionError(f"{path} does not start with YAML frontmatter")
         frontmatter = yaml.safe_load(match.group(1))
-        if not isinstance(frontmatter, dict):
-            raise AssertionError(f"{path} frontmatter is not a mapping")
+        self.assertIsInstance(frontmatter, dict, f"{path} frontmatter is not a mapping")
         return frontmatter, match.group(2)

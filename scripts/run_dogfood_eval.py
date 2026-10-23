@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from noesis.evaluation import evaluate_context_dogfood  # noqa: E402
-from noesis.vault import Vault  # noqa: E402
+from noesis.evaluation import evaluate_context_dogfood
+from noesis.vault import Vault
 
 
 def main() -> int:
@@ -30,7 +29,11 @@ def main() -> int:
     if issues:
         print(
             json.dumps(
-                {"ok": False, "error": "vault validation failed", "issues": [issue.format(vault.root) for issue in issues]},
+                {
+                    "ok": False,
+                    "error": "vault validation failed",
+                    "issues": [issue.format(vault.root) for issue in issues],
+                },
                 indent=2,
                 sort_keys=True,
             )

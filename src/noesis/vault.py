@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date, datetime
 import hashlib
 import json
-from pathlib import Path
 import re
 import shutil
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
 
 import yaml
 
-from .version import __version__
 from .storage import atomic_write_text, vault_lock, vault_write_operation
-
+from .version import __version__
 
 FOLDERS = [
     "raw",
@@ -436,7 +436,7 @@ class Vault:
     by_link: dict[str, Path] = field(default_factory=dict)
 
     @classmethod
-    def load(cls, root: Path | str) -> "Vault":
+    def load(cls, root: Path | str) -> Vault:
         root_path = Path(root).expanduser().resolve()
         vault = cls(root=root_path)
         if not root_path.exists():
@@ -531,13 +531,9 @@ class Vault:
         for note in reviewable_notes:
             review_counts[note.review_state] = review_counts.get(note.review_state, 0) + 1
         scheduled_candidates = [
-            note
-            for note in reviewable_notes
-            if note.type != "review" and note.review_state != "none"
+            note for note in reviewable_notes if note.type != "review" and note.review_state != "none"
         ]
-        due_notes = sort_review_notes(
-            [note for note in scheduled_candidates if note_review_due(note, due_on=due_on)]
-        )
+        due_notes = sort_review_notes([note for note in scheduled_candidates if note_review_due(note, due_on=due_on)])
         scheduled_notes = sort_review_notes(
             [note for note in scheduled_candidates if parse_review_date(note.metadata.get("next_review")) is not None]
         )
@@ -553,11 +549,7 @@ class Vault:
             [note for note in reviewable_notes if note.review_state == "changes-requested"]
         )
         audit_gap_notes = sort_review_notes(
-            [
-                note
-                for note in reviewable_notes
-                if review_requires_audit(note) and not self.review_audits_for(note)
-            ]
+            [note for note in reviewable_notes if review_requires_audit(note) and not self.review_audits_for(note)]
         )
         return {
             "review_state_counts": dict(sorted(review_counts.items())),
@@ -734,9 +726,7 @@ def is_template(rel_path: Path) -> bool:
 def is_noesis_note(rel_path: Path) -> bool:
     if not rel_path.parts:
         return False
-    if rel_path.parts[0] in NOTE_FOLDERS:
-        return True
-    return False
+    return rel_path.parts[0] in NOTE_FOLDERS
 
 
 def read_note(root: Path, path: Path) -> Note | Issue:
@@ -766,9 +756,7 @@ def read_note(root: Path, path: Path) -> Note | Issue:
 
 def validate_folders(root: Path) -> list[Issue]:
     return [
-        Issue(root / folder, "required vault folder is missing")
-        for folder in FOLDERS
-        if not (root / folder).is_dir()
+        Issue(root / folder, "required vault folder is missing") for folder in FOLDERS if not (root / folder).is_dir()
     ]
 
 
@@ -825,8 +813,8 @@ def validate_contract_metadata(path: Path, value: Any) -> list[Issue]:
     metadata = value
 
     issues: list[Issue] = []
-    for key, value in metadata.items():
-        if isinstance(value, dict):
+    for key, item in metadata.items():
+        if isinstance(item, dict):
             issues.append(Issue(path, f"Noesis contract property {key!r} must be flat, not a mapping"))
 
     missing = sorted(CONTRACT_REQUIRED_PROPERTIES - metadata.keys())
@@ -936,9 +924,7 @@ def validate_notes(vault: Vault) -> list[Issue]:
                     issues.append(Issue(note.path, "valid_until must be a parseable YYYY-MM-DD date"))
             elif date_key == "next_review":
                 if not is_review_schedule(metadata[date_key]):
-                    issues.append(
-                        Issue(note.path, "next_review must be a parseable YYYY-MM-DD date or unknown")
-                    )
+                    issues.append(Issue(note.path, "next_review must be a parseable YYYY-MM-DD date or unknown"))
             elif not is_date_like(metadata[date_key]):
                 issues.append(Issue(note.path, f"{date_key} must be a date or date-like string"))
 
@@ -1081,18 +1067,13 @@ def validate_note_contract(vault: Vault, note: Note) -> list[Issue]:
                     issues.append(
                         Issue(
                             note.path,
-                            "latest renewed review audit next_review must match reviewed note "
-                            f"{target.noesis_id!r}",
+                            f"latest renewed review audit next_review must match reviewed note {target.noesis_id!r}",
                         )
                     )
         if decision == "changes-requested" and not markdown_body_section(note.body, "Changes Requested"):
             issues.append(Issue(note.path, "changes-requested review audit requires requested-change details"))
 
-    if (
-        note.type == "reviewed-knowledge"
-        and note.status in CURRENT_KNOWLEDGE_STATUSES
-        and not is_excluded(note)
-    ):
+    if note.type == "reviewed-knowledge" and note.status in CURRENT_KNOWLEDGE_STATUSES and not is_excluded(note):
         issues.extend(validate_mature_knowledge_lineage(vault, note))
     return issues
 
@@ -1101,8 +1082,7 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
     issues: list[Issue] = []
     auditable_lineage = {note.noesis_id: note}
     lineage_sources = {
-        source.noesis_id: source
-        for source in relationship_notes(vault, note, "sources", expected_type="source")
+        source.noesis_id: source for source in relationship_notes(vault, note, "sources", expected_type="source")
     }
 
     direct_supports = [
@@ -1118,11 +1098,7 @@ def validate_mature_knowledge_lineage(vault: Vault, note: Note) -> list[Issue]:
         auditable_lineage[support.noesis_id] = support
         for source in relationship_notes(vault, support, "sources", expected_type="source"):
             lineage_sources[source.noesis_id] = source
-        if (
-            support.status != "reviewed"
-            or support.review_state not in MATURE_REVIEW_STATES
-            or is_excluded(support)
-        ):
+        if support.status != "reviewed" or support.review_state not in MATURE_REVIEW_STATES or is_excluded(support):
             issues.append(
                 Issue(
                     note.path,
@@ -1226,7 +1202,9 @@ def validate_source_integrity(vault: Vault, note: Note) -> list[Issue]:
     else:
         actual_hash = file_content_hash(candidate)
         if actual_hash != expected_hash:
-            issues.append(Issue(note.path, f"raw source content hash mismatch: expected {expected_hash}, found {actual_hash}"))
+            issues.append(
+                Issue(note.path, f"raw source content hash mismatch: expected {expected_hash}, found {actual_hash}")
+            )
     if note.metadata.get("content_hash_algorithm") != "sha256":
         issues.append(Issue(note.path, "source content_hash_algorithm must be 'sha256'"))
     expected_size = note.metadata.get("source_size_bytes")
@@ -1254,12 +1232,12 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
         selection_contract_valid = False
         try:
             as_of = context_as_of_date(note.metadata.get("created"))
-        except ValueError:
+        except (TypeError, ValueError):
             as_of = date.today()
     else:
         try:
             as_of = context_as_of_date(as_of_value)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             issues.append(Issue(note.path, str(exc)))
             selection_contract_valid = False
             as_of = date.today()
@@ -1290,15 +1268,11 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
 
     stored_scope_value = note.metadata.get("scope")
     stored_scope = (
-        stored_scope_value
-        if isinstance(stored_scope_value, str) and not is_blank(stored_scope_value)
-        else None
+        stored_scope_value if isinstance(stored_scope_value, str) and not is_blank(stored_scope_value) else None
     )
     stored_purpose_value = note.metadata.get("purpose")
     stored_purpose = (
-        stored_purpose_value
-        if isinstance(stored_purpose_value, str) and not is_blank(stored_purpose_value)
-        else None
+        stored_purpose_value if isinstance(stored_purpose_value, str) and not is_blank(stored_purpose_value) else None
     )
 
     stored_budgets: dict[str, int | None] = {}
@@ -1321,9 +1295,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             for item in input_hashes:
                 match = re.fullmatch(r"([^=]+)=sha256:([0-9a-f]{64})", str(item))
                 if match is None:
-                    issues.append(
-                        Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings")
-                    )
+                    issues.append(Issue(note.path, "input_hashes must be a list of noesis_id=sha256:<digest> strings"))
                     continue
                 parsed_input_hashes.append((match.group(1), f"sha256:{match.group(2)}"))
             parsed_input_hash_ids = [note_id for note_id, _ in parsed_input_hashes]
@@ -1347,9 +1319,13 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             if target.type != "reviewed-knowledge" or target.review_state not in {"reviewed", "approved"}:
                 issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not reviewed knowledge"))
             elif target.status not in CURRENT_KNOWLEDGE_STATUSES:
-                issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is not current reviewed knowledge"))
+                issues.append(
+                    Issue(note.path, f"reviewed_knowledge reference {ref!r} is not current reviewed knowledge")
+                )
             elif is_excluded(target):
-                issues.append(Issue(note.path, f"reviewed_knowledge reference {ref!r} is stale, superseded, or archived"))
+                issues.append(
+                    Issue(note.path, f"reviewed_knowledge reference {ref!r} is stale, superseded, or archived")
+                )
             else:
                 freshness_state, _, _ = note_freshness(target, as_of=as_of)
                 if not context_freshness_eligible(freshness_state, policy=freshness_policy):
@@ -1379,14 +1355,12 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             issues.append(
                 Issue(
                     note.path,
-                    f"reviewed_knowledge must match stored context selection "
-                    f"(expected: {expected}; found: {found})",
+                    f"reviewed_knowledge must match stored context selection (expected: {expected}; found: {found})",
                 )
             )
 
     freshness_excluded_ids = {
-        target.noesis_id
-        for target in context_linked_notes(vault, note.metadata, "freshness_excluded")
+        target.noesis_id for target in context_linked_notes(vault, note.metadata, "freshness_excluded")
     }
     if selection_contract_valid:
         expected_freshness_excluded_ids = {
@@ -1400,8 +1374,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
             issues.append(
                 Issue(
                     note.path,
-                    f"freshness_excluded must match stored freshness selection "
-                    f"(expected: {expected}; found: {found})",
+                    f"freshness_excluded must match stored freshness selection (expected: {expected}; found: {found})",
                 )
             )
     for target in context_linked_notes(vault, note.metadata, "freshness_excluded"):
@@ -1491,13 +1464,8 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                 )
             )
 
-    excluded_memory_ids = {
-        target.noesis_id
-        for target in context_linked_notes(vault, note.metadata, "excluded_memory")
-    }
-    expected_excluded_memory_ids = {
-        candidate.noesis_id for candidate in context_excluded_notes(vault)
-    }
+    excluded_memory_ids = {target.noesis_id for target in context_linked_notes(vault, note.metadata, "excluded_memory")}
+    expected_excluded_memory_ids = {candidate.noesis_id for candidate in context_excluded_notes(vault)}
     if excluded_memory_ids != expected_excluded_memory_ids:
         expected = ", ".join(sorted(expected_excluded_memory_ids)) or "none"
         found = ", ".join(sorted(excluded_memory_ids)) or "none"
@@ -1518,8 +1486,7 @@ def validate_context_exclusions(vault: Vault, note: Note) -> list[Issue]:
                 issues.append(
                     Issue(
                         note.path,
-                        f"excluded_memory reference {ref!r} is not stale, superseded, archived, "
-                        "or changes-requested",
+                        f"excluded_memory reference {ref!r} is not stale, superseded, archived, or changes-requested",
                     )
                 )
 
@@ -1534,7 +1501,9 @@ def validate_wikilinks(vault: Vault) -> list[Issue]:
                 issues.append(Issue(note.path, f"unresolved wikilink [[{target}]]"))
         for key, target in sorted(iter_metadata_relationship_targets(note.metadata)):
             if vault.find_note(target) is None:
-                issues.append(Issue(note.path, f"{key} relationship wikilink [[{target}]] does not resolve to a Noesis note"))
+                issues.append(
+                    Issue(note.path, f"{key} relationship wikilink [[{target}]] does not resolve to a Noesis note")
+                )
     return issues
 
 
@@ -1651,10 +1620,10 @@ def _migrate_vault_locked(
                 if is_blank(metadata.get("as_of")):
                     raise ValueError("missing as_of")
                 context_as_of_date(metadata.get("as_of"))
-            except ValueError:
+            except (TypeError, ValueError):
                 try:
                     migrated_as_of = context_as_of_date(metadata.get("created"))
-                except ValueError:
+                except (TypeError, ValueError):
                     migrated_as_of = date.today()
                 metadata["as_of"] = migrated_as_of.isoformat()
             metadata.setdefault("freshness_policy", "balanced")
@@ -1666,9 +1635,7 @@ def _migrate_vault_locked(
             )
             available_knowledge = vault.current_reviewed_knowledge()
             context_as_of = context_as_of_date(metadata["as_of"])
-            freshness_policy = resolve_freshness_policy(
-                str(metadata.get("freshness_policy", "balanced"))
-            )
+            freshness_policy = resolve_freshness_policy(str(metadata.get("freshness_policy", "balanced")))
             context_inputs = context_selected_knowledge(
                 available_knowledge,
                 scope=context_scope(projected_context),
@@ -1686,15 +1653,10 @@ def _migrate_vault_locked(
                     policy=freshness_policy,
                 )
             ]
-            metadata["reviewed_knowledge"] = [
-                wikilink(context_input.noesis_id) for context_input in context_inputs
-            ]
-            metadata["freshness_excluded"] = [
-                wikilink(candidate.noesis_id) for candidate in freshness_excluded
-            ]
+            metadata["reviewed_knowledge"] = [wikilink(context_input.noesis_id) for context_input in context_inputs]
+            metadata["freshness_excluded"] = [wikilink(candidate.noesis_id) for candidate in freshness_excluded]
             metadata["input_hashes"] = [
-                f"{context_input.noesis_id}={file_content_hash(context_input.path)}"
-                for context_input in context_inputs
+                f"{context_input.noesis_id}={file_content_hash(context_input.path)}" for context_input in context_inputs
             ]
             metadata["syntheses"] = sorted(
                 collect_relationship_links(
@@ -1705,9 +1667,7 @@ def _migrate_vault_locked(
                 )
             )
             lifecycle_excluded = context_excluded_notes(vault)
-            metadata["excluded_memory"] = [
-                wikilink(candidate.noesis_id) for candidate in lifecycle_excluded
-            ]
+            metadata["excluded_memory"] = [wikilink(candidate.noesis_id) for candidate in lifecycle_excluded]
             body = build_context_body(
                 vault,
                 context_inputs,
@@ -1745,9 +1705,7 @@ def _migrate_vault_locked(
             raise ValueError(f"cannot migrate active knowledge without sources: {knowledge.noesis_id}")
         for source in sources:
             if is_excluded(source):
-                raise ValueError(
-                    f"cannot migrate active knowledge with excluded source: {source.noesis_id}"
-                )
+                raise ValueError(f"cannot migrate active knowledge with excluded source: {source.noesis_id}")
 
         auditable_lineage = {knowledge.noesis_id: knowledge}
         direct_supports: list[Note] = []
@@ -1759,11 +1717,7 @@ def _migrate_vault_locked(
 
         supports = review_support_lineage(vault, direct_supports)
         for support in supports:
-            if (
-                is_excluded(support)
-                or support.status != "reviewed"
-                or support.review_state not in MATURE_REVIEW_STATES
-            ):
+            if is_excluded(support) or support.status != "reviewed" or support.review_state not in MATURE_REVIEW_STATES:
                 raise ValueError(
                     f"cannot migrate active knowledge with excluded, blocked, or unreviewed {support.type}: "
                     f"{support.noesis_id}"
@@ -1771,8 +1725,7 @@ def _migrate_vault_locked(
             for source in relationship_notes(vault, support, "sources", expected_type="source"):
                 if is_excluded(source):
                     raise ValueError(
-                        "cannot migrate active knowledge with excluded support source: "
-                        f"{source.noesis_id}"
+                        f"cannot migrate active knowledge with excluded support source: {source.noesis_id}"
                     )
             auditable_lineage[support.noesis_id] = support
 
@@ -1813,9 +1766,7 @@ def _migrate_vault_locked(
         audit = approved_audits[-1]
         audit_metadata = dict(note_updates.get(audit.path, (audit.metadata, audit.body))[0])
         reviewed_content_hashes = [
-            value
-            for value in as_list(audit_metadata.get("reviewed_content_hashes"))
-            if isinstance(value, str)
+            value for value in as_list(audit_metadata.get("reviewed_content_hashes")) if isinstance(value, str)
         ]
         for support in supports:
             support_metadata = dict(note_updates.get(support.path, (support.metadata, support.body))[0])
@@ -1823,9 +1774,7 @@ def _migrate_vault_locked(
             note_updates[support.path] = (support_metadata, support.body)
             add_relationship_link(audit_metadata, "reviewed_notes", wikilink(support.noesis_id))
             prefix = f"{support.noesis_id}="
-            reviewed_content_hashes = [
-                value for value in reviewed_content_hashes if not value.startswith(prefix)
-            ]
+            reviewed_content_hashes = [value for value in reviewed_content_hashes if not value.startswith(prefix)]
             reviewed_content_hashes.append(f"{prefix}{reviewed_note_content_hash(support)}")
         audit_metadata["reviewed_content_hashes"] = reviewed_content_hashes
         note_updates[audit.path] = (audit_metadata, audit.body)
@@ -1901,9 +1850,7 @@ def project_vault_notes(
         projected.register_note_aliases(projected_note)
         if projected_note.noesis_id:
             if projected_note.noesis_id in projected.by_id:
-                projected.issues.append(
-                    Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}")
-                )
+                projected.issues.append(Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}"))
             projected.by_id[projected_note.noesis_id] = projected_note
             projected.by_link[projected_note.noesis_id] = projected_note.path
     existing_paths = {note.path for note in vault.notes}
@@ -1920,9 +1867,7 @@ def project_vault_notes(
         projected.register_note_aliases(projected_note)
         if projected_note.noesis_id:
             if projected_note.noesis_id in projected.by_id:
-                projected.issues.append(
-                    Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}")
-                )
+                projected.issues.append(Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}"))
             projected.by_id[projected_note.noesis_id] = projected_note
             projected.by_link[projected_note.noesis_id] = projected_note.path
     return projected
@@ -1953,12 +1898,8 @@ def rebuild_context_snapshot(
     pending_notes: list[Note],
 ) -> tuple[dict[str, Any], str]:
     context_metadata = dict(context_note.metadata)
-    context_as_of = context_as_of_date(
-        context_metadata.get("as_of", context_metadata.get("created"))
-    )
-    freshness_policy = resolve_freshness_policy(
-        str(context_metadata.get("freshness_policy", "balanced"))
-    )
+    context_as_of = context_as_of_date(context_metadata.get("as_of", context_metadata.get("created")))
+    freshness_policy = resolve_freshness_policy(str(context_metadata.get("freshness_policy", "balanced")))
     available = projected_vault.current_reviewed_knowledge()
     knowledge = context_selected_knowledge(
         available,
@@ -1979,13 +1920,10 @@ def rebuild_context_snapshot(
     ]
     lifecycle_excluded = context_excluded_notes(projected_vault)
     excluded_links = [wikilink(note.noesis_id) for note in lifecycle_excluded]
-    pending_hashes = {
-        note.path: note_content_hash(note.metadata, note.body) for note in pending_notes
-    }
+    pending_hashes = {note.path: note_content_hash(note.metadata, note.body) for note in pending_notes}
     context_metadata["reviewed_knowledge"] = [wikilink(note.noesis_id) for note in knowledge]
     context_metadata["input_hashes"] = [
-        f"{note.noesis_id}="
-        f"{pending_hashes[note.path] if note.path in pending_hashes else file_content_hash(note.path)}"
+        f"{note.noesis_id}={pending_hashes[note.path] if note.path in pending_hashes else file_content_hash(note.path)}"
         for note in knowledge
     ]
     context_metadata["syntheses"] = sorted(
@@ -1997,9 +1935,7 @@ def rebuild_context_snapshot(
         )
     )
     context_metadata["excluded_memory"] = excluded_links
-    context_metadata["freshness_excluded"] = [
-        wikilink(note.noesis_id) for note in freshness_excluded
-    ]
+    context_metadata["freshness_excluded"] = [wikilink(note.noesis_id) for note in freshness_excluded]
     context_metadata["updated"] = updated_at
     context_body = build_context_body(
         projected_vault,
@@ -2207,8 +2143,7 @@ def import_source_bundle(
         if item_id in seen_item_ids:
             previous_artifact = seen_item_ids[item_id]
             raise ValueError(
-                "bundle manifest item id "
-                f"{item_id!r} is used by both {previous_artifact} and {artifact_rel}"
+                f"bundle manifest item id {item_id!r} is used by both {previous_artifact} and {artifact_rel}"
             )
         seen_item_ids[item_id] = artifact_rel
 
@@ -2477,14 +2412,14 @@ def read_source_bundle_manifest(manifest_path: Path) -> dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ValueError(f"invalid source bundle manifest YAML: {exc}") from exc
     if not isinstance(manifest, dict):
-        raise ValueError("source bundle manifest must be a YAML mapping")
+        raise TypeError("source bundle manifest must be a YAML mapping")
     for key, value in manifest.items():
         if key not in SOURCE_BUNDLE_TOP_LEVEL_FIELDS:
             raise ValueError(f"bundle manifest field {key!r} is not part of source bundle schema v1")
         if key == "artifacts":
             continue
         if isinstance(value, (dict, list)):
-            raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
+            raise TypeError(f"bundle manifest field {key!r} must be a scalar value")
     return manifest
 
 
@@ -2492,8 +2427,7 @@ def source_bundle_schema_version(manifest: dict[str, Any]) -> str:
     schema_version = manifest_text(manifest, "schema_version", default=SOURCE_BUNDLE_SCHEMA_VERSION)
     if schema_version != SOURCE_BUNDLE_SCHEMA_VERSION:
         raise ValueError(
-            "unsupported source bundle schema_version "
-            f"{schema_version!r}; expected {SOURCE_BUNDLE_SCHEMA_VERSION!r}"
+            f"unsupported source bundle schema_version {schema_version!r}; expected {SOURCE_BUNDLE_SCHEMA_VERSION!r}"
         )
     return schema_version
 
@@ -2502,14 +2436,12 @@ def normalize_bundle_artifact(entry: Any, manifest_index: int) -> dict[str, Any]
     if isinstance(entry, str):
         return {"path": entry}
     if not isinstance(entry, dict):
-        raise ValueError(f"bundle artifact #{manifest_index} must be a path string or mapping")
+        raise TypeError(f"bundle artifact #{manifest_index} must be a path string or mapping")
     for key, value in entry.items():
         if key not in SOURCE_BUNDLE_ARTIFACT_FIELDS:
-            raise ValueError(
-                f"bundle artifact #{manifest_index} field {key!r} is not part of source bundle schema v1"
-            )
+            raise ValueError(f"bundle artifact #{manifest_index} field {key!r} is not part of source bundle schema v1")
         if isinstance(value, (dict, list)):
-            raise ValueError(f"bundle artifact #{manifest_index} field {key!r} must be a scalar value")
+            raise TypeError(f"bundle artifact #{manifest_index} field {key!r} must be a scalar value")
     for key in SOURCE_BUNDLE_REQUIRED_ARTIFACT_FIELDS:
         manifest_text(entry, key)
     return entry
@@ -2535,7 +2467,7 @@ def manifest_text(data: dict[str, Any], key: str, *, default: Any = None) -> str
     if value is None or is_blank(value):
         raise ValueError(f"bundle manifest field {key!r} must not be blank")
     if isinstance(value, (dict, list)):
-        raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
+        raise TypeError(f"bundle manifest field {key!r} must be a scalar value")
     return str(value)
 
 
@@ -2546,7 +2478,7 @@ def manifest_optional_text(data: dict[str, Any], key: str) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, (dict, list)):
-        raise ValueError(f"bundle manifest field {key!r} must be a scalar value")
+        raise TypeError(f"bundle manifest field {key!r} must be a scalar value")
     return str(value)
 
 
@@ -2554,7 +2486,7 @@ def validate_flat_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     cleaned: dict[str, Any] = {}
     for key, value in metadata.items():
         if isinstance(value, dict):
-            raise ValueError(f"source metadata field {key!r} must be flat, not a mapping")
+            raise TypeError(f"source metadata field {key!r} must be flat, not a mapping")
         if isinstance(value, list) and any(isinstance(item, dict) for item in value):
             raise ValueError(f"source metadata field {key!r} must be flat, not nested")
         cleaned[str(key)] = value.isoformat() if isinstance(value, date) else value
@@ -2600,7 +2532,9 @@ def extract_evidence(
         "tags": ["noesis", "evidence"],
         "aliases": [],
     }
-    evidence_text = evidence or "Review this draft against the source and replace this placeholder with atomic evidence."
+    evidence_text = (
+        evidence or "Review this draft against the source and replace this placeholder with atomic evidence."
+    )
     body = f"""# {note_title}
 
 ## Evidence
@@ -2869,9 +2803,7 @@ def renew_review(
         "reviewer": reviewer,
         "reviewed_at": renewed_at,
         "reviewed_notes": [target_link],
-        "reviewed_content_hashes": [
-            f"{target.noesis_id}={reviewed_note_content_hash(target)}"
-        ],
+        "reviewed_content_hashes": [f"{target.noesis_id}={reviewed_note_content_hash(target)}"],
         "decision": "renewed",
         "next_review": scheduled_for,
         "tags": ["noesis", "review"],
@@ -2977,9 +2909,7 @@ def write_review_decision(
         "reviewer": reviewer,
         "reviewed_at": reviewed_at,
         "reviewed_notes": [target_link],
-        "reviewed_content_hashes": [
-            f"{target.noesis_id}={reviewed_note_content_hash(target)}"
-        ],
+        "reviewed_content_hashes": [f"{target.noesis_id}={reviewed_note_content_hash(target)}"],
         "decision": decision,
         "tags": ["noesis", "review"],
         "aliases": [],
@@ -3341,9 +3271,7 @@ def write_context_note(
     note_path = unique_note_path(root / "context", f"{note_id}.md")
     reviewed_knowledge_links = [wikilink(note.noesis_id) for note in knowledge]
     synthesis_links = sorted(collect_relationship_links(vault, knowledge, "syntheses", expected_type="synthesis"))
-    excluded_links = sorted(
-        wikilink(note.noesis_id) for note in vault.notes if is_context_excluded(note)
-    )
+    excluded_links = sorted(wikilink(note.noesis_id) for note in vault.notes if is_context_excluded(note))
     freshness_excluded_links = [wikilink(selection.note.noesis_id) for selection in package.freshness_excluded]
     metadata: dict[str, Any] = {
         "title": note_title,
@@ -3420,7 +3348,6 @@ def template_files(today: str) -> dict[Path, str]:
     from .scaffold import template_files as implementation
 
     return implementation(today)
-
 
 
 def build_context(
@@ -3588,7 +3515,6 @@ def render_context(
     )
 
 
-
 def build_context_body(
     vault: Vault,
     knowledge: list[Note],
@@ -3735,11 +3661,7 @@ def context_knowledge_after_exclusions(
     context_note: Note,
     excluded_ids: set[str],
 ) -> list[Note]:
-    candidates = [
-        note
-        for note in vault.current_reviewed_knowledge()
-        if note.noesis_id not in excluded_ids
-    ]
+    candidates = [note for note in vault.current_reviewed_knowledge() if note.noesis_id not in excluded_ids]
     return context_selected_knowledge(
         candidates,
         scope=context_scope(context_note),
@@ -3876,11 +3798,7 @@ def context_excluded_notes(vault: Vault) -> list[Note]:
 
 
 def has_completed_review_state(note: Note) -> bool:
-    return (
-        note.type == "review"
-        and note.status == "complete"
-        and note.review_state in MATURE_REVIEW_STATES
-    )
+    return note.type == "review" and note.status == "complete" and note.review_state in MATURE_REVIEW_STATES
 
 
 def is_completed_review_audit(note: Note) -> bool:
@@ -3923,8 +3841,7 @@ def approved_lineage_review_audits_for(
         return [latest] if review_audit_postdates_note(latest, knowledge) else []
 
     linked_audit_ids = {
-        audit.noesis_id
-        for audit in relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
+        audit.noesis_id for audit in relationship_notes(vault, knowledge, "reviewed_by", expected_type="review")
     }
     approved: list[Note] = []
     for target in lineage_by_id.values():
@@ -4084,8 +4001,7 @@ def write_note_and_validate(
 
 def write_notes_and_validate(root: Path, writes: list[tuple[Path, dict[str, Any], str]]) -> None:
     original_text: dict[Path, str | None] = {
-        path: path.read_text(encoding="utf-8") if path.exists() else None
-        for path, _, _ in writes
+        path: path.read_text(encoding="utf-8") if path.exists() else None for path, _, _ in writes
     }
     try:
         for path, metadata, body in writes:

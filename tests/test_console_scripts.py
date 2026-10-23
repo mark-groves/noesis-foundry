@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from importlib import import_module
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tomllib
 import unittest
-
+from contextlib import redirect_stderr, redirect_stdout
+from importlib import import_module
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
@@ -20,7 +19,9 @@ class ConsoleScriptSmokeTests(unittest.TestCase):
     def test_core_cli_does_not_require_mcp_dependency(self) -> None:
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertFalse(any(dependency.startswith("mcp") for dependency in pyproject["project"]["dependencies"]))
-        self.assertTrue(any(dependency.startswith("mcp") for dependency in pyproject["project"]["optional-dependencies"]["mcp"]))
+        self.assertTrue(
+            any(dependency.startswith("mcp") for dependency in pyproject["project"]["optional-dependencies"]["mcp"])
+        )
         runtime_smoke = f"""
 import importlib.abc
 import sys

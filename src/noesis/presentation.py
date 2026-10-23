@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
-import re
 from typing import Any
 
 from .vault import (
@@ -18,7 +18,6 @@ from .vault import (
     review_cutoff_date,
     review_requires_audit,
 )
-
 
 JsonObject = dict[str, Any]
 
@@ -56,9 +55,7 @@ def review_note_summary(note: Note, vault: Vault, *, due_on: str | None = None) 
         "count": len(audits),
         "requires_audit": review_requires_audit(note),
         "has_audit": bool(completed_audits),
-        "latest_decision": (
-            json_safe(completed_audits[-1].metadata.get("decision")) if completed_audits else None
-        ),
+        "latest_decision": (json_safe(completed_audits[-1].metadata.get("decision")) if completed_audits else None),
     }
     data["requested_changes"] = {
         "open": bool(open_changes),
@@ -107,9 +104,7 @@ def review_summary_to_dict(vault: Vault, summary: dict[str, Any], *, due_on: str
             review_note_summary(note, vault, due_on=due_on) for note in summary["requested_changes_notes"]
         ],
         "audit_gap_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["audit_gap_notes"]],
-        "next_review_notes": [
-            review_note_summary(note, vault, due_on=due_on) for note in summary["next_review_notes"]
-        ],
+        "next_review_notes": [review_note_summary(note, vault, due_on=due_on) for note in summary["next_review_notes"]],
     }
 
 
@@ -160,8 +155,7 @@ def review_workbench_to_dict(
         "audit_status": audit_status,
         "audit_records": [review_audit_to_dict(audit, vault.root) for audit in audits],
         "support": {
-            key: [note_summary(support_note, vault.root) for support_note in notes]
-            for key, notes in support.items()
+            key: [note_summary(support_note, vault.root) for support_note in notes] for key, notes in support.items()
         },
         "changes_requested": open_changes,
         "changes_requested_history": history,

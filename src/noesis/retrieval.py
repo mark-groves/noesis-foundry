@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import re
-from typing import Any, Iterable, Sequence
-
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:['-][a-z0-9]+)?")
 
@@ -45,10 +45,7 @@ def rank_notes(notes: Sequence[Any], query: str | None) -> list[RetrievalHit]:
         return [RetrievalHit(note, 0.0, ()) for note in sorted(notes, key=note_sort_key)]
 
     documents = [note_weighted_terms(note) for note in notes]
-    document_frequency = {
-        term: sum(1 for document in documents if term in document)
-        for term in query_terms
-    }
+    document_frequency = {term: sum(1 for document in documents if term in document) for term in query_terms}
     document_count = max(len(notes), 1)
     hits: list[RetrievalHit] = []
     for note, weighted_terms in zip(notes, documents, strict=True):

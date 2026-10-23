@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 import yaml
 
 from noesis.evaluation import evaluate_context_dogfood
 from noesis.vault import Vault
-
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_VAULT = ROOT / "examples" / "noesis-vault"
@@ -27,15 +26,19 @@ class DogfoodEvaluationTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(
-            ValueError,
+            TypeError,
             "context scenario 1 forbidden_active must be a list",
         ):
             evaluate_context_dogfood(Vault.load(EXAMPLE_VAULT), specification)
 
+    def test_context_scenario_must_be_a_mapping(self) -> None:
+        specification = {"scenarios": ["agent-memory"]}
+
+        with self.assertRaisesRegex(TypeError, "context scenario 1 must be a mapping"):
+            evaluate_context_dogfood(Vault.load(EXAMPLE_VAULT), specification)
+
     def test_checked_in_context_scenarios_meet_outcome_gate(self) -> None:
-        specification = yaml.safe_load(
-            (ROOT / "evals" / "context-dogfood-v1.yaml").read_text(encoding="utf-8")
-        )
+        specification = yaml.safe_load((ROOT / "evals" / "context-dogfood-v1.yaml").read_text(encoding="utf-8"))
         metrics = evaluate_context_dogfood(Vault.load(EXAMPLE_VAULT), specification)
         self.assertEqual(metrics["scenario_pass_rate"], 1.0)
         self.assertEqual(metrics["forbidden_active_leak_count"], 0)

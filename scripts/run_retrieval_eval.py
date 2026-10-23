@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from noesis.evaluation import evaluate_retrieval  # noqa: E402
-from noesis.vault import Vault  # noqa: E402
+from noesis.evaluation import evaluate_retrieval
+from noesis.vault import Vault
 
 
 def main() -> int:
@@ -38,10 +37,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 1
     metrics = evaluate_retrieval(vault, specification)
-    passed = (
-        metrics["mean_reciprocal_rank"] >= args.min_mrr
-        and metrics["mean_recall"] >= args.min_recall
-    )
+    passed = metrics["mean_reciprocal_rank"] >= args.min_mrr and metrics["mean_recall"] >= args.min_recall
     print(
         json.dumps(
             {

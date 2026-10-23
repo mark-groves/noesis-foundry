@@ -285,11 +285,7 @@ def render_context_snapshot(
         max_chars=effective_max_chars,
     )
     retained_ids = {note.noesis_id for note in knowledge}
-    included = [
-        selection
-        for selection in recomputed_included
-        if selection.note.noesis_id in retained_ids
-    ]
+    included = [selection for selection in recomputed_included if selection.note.noesis_id in retained_ids]
     selection_excluded = sorted(
         scoped_out + budgeted_out,
         key=lambda selection: (selection.status, selection.note.title.lower()),
@@ -338,8 +334,7 @@ def render_context_snapshot(
     )
     note_overrides = {note.noesis_id: note for note in pending_notes or []}
     lineage_summaries = [
-        context_lineage_summary(vault, selection.note, note_overrides=note_overrides)
-        for selection in included
+        context_lineage_summary(vault, selection.note, note_overrides=note_overrides) for selection in included
     ]
     handoff = context_handoff_guidance(
         vault_path=vault.root,
@@ -422,11 +417,11 @@ def context_as_of_date(value: str | date | None) -> date:
     if value is None:
         return date.today()
     if isinstance(value, datetime):
-        raise ValueError("as_of must be YYYY-MM-DD")
+        raise TypeError("as_of must be YYYY-MM-DD")
     if isinstance(value, date):
         return value
     if not isinstance(value, str):
-        raise ValueError("as_of must be YYYY-MM-DD")
+        raise TypeError("as_of must be YYYY-MM-DD")
     try:
         return date.fromisoformat(value.strip())
     except ValueError as exc:
@@ -458,9 +453,7 @@ def note_freshness(note: Note, *, as_of: date) -> tuple[str, date | None, date |
 def context_freshness_eligible(state: str, *, policy: str) -> bool:
     if state == "expired":
         return False
-    if policy == "strict" and state == "review-due":
-        return False
-    return True
+    return not (policy == "strict" and state == "review-due")
 
 
 def apply_context_freshness(
@@ -678,11 +671,7 @@ def context_profile_reason_suffix(
 
 
 def explain_lifecycle_exclusions(vault: Vault) -> list[ContextSelection]:
-    selections = [
-        lifecycle_exclusion_selection(note)
-        for note in vault.notes
-        if is_context_excluded(note)
-    ]
+    selections = [lifecycle_exclusion_selection(note) for note in vault.notes if is_context_excluded(note)]
     return sorted(selections, key=lambda selection: selection.note.title.lower())
 
 
@@ -841,8 +830,7 @@ def context_handoff_guidance(
     ]
     if scope:
         assumptions.append(
-            f"The requested scope is {scope!r}; "
-            "scoped-out reviewed notes need a separate handoff if they matter."
+            f"The requested scope is {scope!r}; scoped-out reviewed notes need a separate handoff if they matter."
         )
     if any(selection.status in {"scoped_out", "budgeted_out"} for selection in excluded):
         assumptions.append(
@@ -850,9 +838,7 @@ def context_handoff_guidance(
             "inspect selection provenance before widening work."
         )
     if lifecycle_excluded:
-        assumptions.append(
-            "Lifecycle-excluded memory remains traceable for audit but is excluded from active context."
-        )
+        assumptions.append("Lifecycle-excluded memory remains traceable for audit but is excluded from active context.")
     if any(selection.freshness_state == "review-due" for selection in included):
         assumptions.append(
             "Review-due knowledge is included with an explicit warning under the balanced freshness policy."
@@ -1118,7 +1104,9 @@ def render_context(
 
     if total_candidates is not None or excluded:
         lines.extend(["## Selection Summary", ""])
-        lines.append(f"- Current reviewed knowledge available: {total_candidates if total_candidates is not None else len(knowledge)}")
+        lines.append(
+            f"- Current reviewed knowledge available: {total_candidates if total_candidates is not None else len(knowledge)}"
+        )
         lines.append(f"- Included in active context: {len(knowledge)}")
         if excluded:
             lines.append(f"- Excluded by scope or budget: {len(excluded)}")
