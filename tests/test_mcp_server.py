@@ -5,7 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -153,6 +153,29 @@ class NoesisMcpHandlerTests(unittest.TestCase):
                     self.assertTrue(workbench["ok"], workbench)
                     self.assertNotIn(str(vault_path.resolve()), workbench["note"]["body"])
                     self.assertIn("<vault>", workbench["note"]["body"])
+
+    def test_write_context_rejects_wrong_type_as_of(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = Path(tmp) / "vault"
+            shutil.copytree(EXAMPLE_VAULT, vault_path)
+            handlers = NoesisMcpHandlers(vault_path)
+            before = {path.relative_to(vault_path).as_posix() for path in vault_path.rglob("*.md")}
+            for as_of in (datetime(2026, 6, 13), 20260613):
+                with self.subTest(as_of=type(as_of).__name__):
+                    written = handlers.write_context(as_of=as_of)
+                    self.assertEqual(
+                        written,
+                        {
+                            "ok": False,
+                            "error": "as_of must be YYYY-MM-DD",
+                            "vault_path": str(vault_path.resolve()),
+                        },
+                    )
+                    built = handlers.build_context(as_of=as_of)
+                    self.assertEqual(built["ok"], False)
+                    self.assertEqual(built["error"], "as_of must be YYYY-MM-DD")
+            after = {path.relative_to(vault_path).as_posix() for path in vault_path.rglob("*.md")}
+            self.assertEqual(before, after)
 
     def test_create_server_registers_expected_mcp_surface(self) -> None:
         # FastMCP does not expose a stable public introspection API across all

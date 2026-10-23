@@ -6,11 +6,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
+from io import StringIO
 from pathlib import Path
 
 import yaml
 
 import noesis.vault as vault_module
+from noesis.cli import cmd_context_build, cmd_context_explain, cmd_context_write
 from noesis.vault import Vault, reviewed_note_content_hash, write_note
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1664,6 +1669,42 @@ sources:
             self.assertIn("reviewed_knowledge:", context_note)
             self.assertIn("[[reviewed-knowledge-review-before-reuse]]", context_note)
             self.assertIn("Noesis operational context should use reviewed memory", context_note)
+
+    def test_context_commands_reject_wrong_type_as_of(self) -> None:
+        args = Namespace(
+            vault=EXAMPLE_VAULT,
+            scope=None,
+            purpose=None,
+            limit=None,
+            max_chars=None,
+            profile=None,
+            as_of=datetime(2026, 6, 13),
+            freshness_policy="balanced",
+            output=None,
+            json=False,
+            title=None,
+            slug=None,
+            next_review=None,
+        )
+        for command in (cmd_context_build, cmd_context_explain, cmd_context_write):
+            with self.subTest(command=command.__name__):
+                stderr = StringIO()
+                with redirect_stderr(stderr):
+                    code = command(args)
+                self.assertEqual(code, 1)
+                self.assertEqual(stderr.getvalue(), "ERROR as_of must be YYYY-MM-DD\n")
+
+        args.json = True
+        for command in (cmd_context_build, cmd_context_explain):
+            with self.subTest(command=f"{command.__name__}-json"):
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = command(args)
+                self.assertEqual(code, 1)
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(payload["ok"], False)
+                self.assertEqual(payload["error"], "as_of must be YYYY-MM-DD")
+                self.assertEqual(payload["vault_path"], str(EXAMPLE_VAULT.resolve()))
 
     def test_context_build_json_returns_context_payload(self) -> None:
         result = run_noesis(

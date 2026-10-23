@@ -1035,7 +1035,7 @@ def cmd_context_build(args: argparse.Namespace) -> int:
                 as_of=args.as_of,
                 freshness_policy=args.freshness_policy,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
             return 1
         content = package.content
@@ -1085,7 +1085,7 @@ def cmd_context_build(args: argparse.Namespace) -> int:
             as_of=args.as_of,
             freshness_policy=args.freshness_policy,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
     if args.output:
@@ -1114,7 +1114,7 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
                 as_of=args.as_of,
                 freshness_policy=args.freshness_policy,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             write_json({"ok": False, "error": str(exc), "vault_path": str(vault.root)})
             return 1
         write_json(
@@ -1156,7 +1156,7 @@ def cmd_context_explain(args: argparse.Namespace) -> int:
             as_of=args.as_of,
             freshness_policy=args.freshness_policy,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
     print(render_context_explanation(package, vault.root), end="")
@@ -1178,7 +1178,7 @@ def cmd_context_write(args: argparse.Namespace) -> int:
             slug=args.slug,
             next_review=args.next_review,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
     print(f"created {created.note_id}\t{created.path}")

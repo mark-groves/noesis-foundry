@@ -569,7 +569,7 @@ class NoesisMcpHandlers:
         vault_root = Path(args[0]).expanduser().resolve() if args else None
         try:
             created: CreatedNote = writer(*args, **kwargs)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc), "vault_path": str(vault_root) if vault_root else None}
         return {"ok": True, "vault_path": str(vault_root), "created": created_note_to_dict(created, vault_root)}
 
