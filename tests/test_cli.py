@@ -3062,7 +3062,7 @@ This legacy evidence note does not link to a source.
         ):
             self.assertIn(expected, result.stdout)
 
-    def test_trace_prefers_note_stems_over_non_note_file_collisions(self) -> None:
+    def test_trace_resolves_noesis_id_not_filename_stem(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = Path(tmp) / "vault"
             shutil.copytree(EXAMPLE_VAULT, vault_path)
@@ -3077,10 +3077,13 @@ This legacy evidence note does not link to a source.
             )
             (vault_path / "raw" / "foo.md").write_text("raw collision\n", encoding="utf-8")
 
-            result = run_noesis("trace", "foo", "--vault", str(vault_path))
+            result = run_noesis("trace", "claim-foo", "--vault", str(vault_path))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("claim-foo", result.stdout)
             self.assertIn("claims/foo.md", result.stdout)
+            stem = run_noesis("trace", "foo", "--vault", str(vault_path))
+            self.assertNotEqual(stem.returncode, 0, stem.stdout)
+            self.assertNotIn("claim-foo", stem.stdout)
 
     def test_trace_and_validation_resolve_frontmatter_alias_links(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3106,10 +3109,13 @@ This legacy evidence note does not link to a source.
             vault = Vault.load(vault_path)
             self.assertEqual(vault.validate(), [])
 
-            result = run_noesis("trace", "README source", "--vault", str(vault_path))
+            result = run_noesis("trace", "source-noesis-readme", "--vault", str(vault_path))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("source-noesis-readme", result.stdout)
             self.assertIn("claim-useful-memory-requires-lifecycle", result.stdout)
+            alias_trace = run_noesis("trace", "README source", "--vault", str(vault_path))
+            self.assertNotEqual(alias_trace.returncode, 0, alias_trace.stdout)
+            self.assertNotIn("source-noesis-readme", alias_trace.stdout)
 
     def test_context_build_uses_reviewed_knowledge_and_excludes_stale(self) -> None:
         result = run_noesis(
