@@ -464,13 +464,7 @@ class Vault:
             if isinstance(note, Issue):
                 vault.issues.append(note)
                 continue
-            vault.notes.append(note)
-            vault.register_note_aliases(note)
-            if note.noesis_id:
-                if note.noesis_id in vault.by_id:
-                    vault.issues.append(Issue(path, f"duplicate noesis_id {note.noesis_id!r}"))
-                vault.by_id[note.noesis_id] = note
-                vault.by_link[note.noesis_id] = path
+            vault.index_note(note)
 
         return vault
 
@@ -640,33 +634,63 @@ class Vault:
             key=lambda note: note.rel_path.as_posix(),
         )
 
+    def index_note(self, note: Note) -> None:
+        self.notes.append(note)
+        note_key = canonical_lookup_key(note.noesis_id)
+        if note_key:
+            current = self.by_id.get(note_key)
+            if current is not None and current.path != note.path:
+                self.issues.append(Issue(note.path, f"duplicate noesis_id {note.noesis_id!r}"))
+            elif current is None:
+                self.by_id[note_key] = note
+        self.register_note_aliases(note)
+
+    def find_note_by_id(self, ref: str) -> Note | None:
+        key = canonical_lookup_key(ref)
+        if not key:
+            return None
+        return self.by_id.get(key)
+
     def find_note(self, ref: str) -> Note | None:
-        key = normalize_wikilink_target(ref)
-        note = self.by_note_link.get(key) or self.by_id.get(key)
-        if note is not None:
-            return note
+        exact = self.find_note_by_id(ref)
+        if exact is not None:
+            return exact
+        key = canonical_lookup_key(ref)
+        if not key:
+            return None
+        linked = self.by_note_link.get(key)
+        if linked is not None:
+            return linked
         path = self.by_link.get(key)
-        if path:
-            return next((note for note in self.notes if note.path == path), None)
+        if path is not None:
+            return next((item for item in self.notes if item.path == path), None)
         return None
 
     def register_note_aliases(self, note: Note) -> None:
-        rel = note.rel_path
-        aliases = [
-            note.path.name,
-            note.path.stem,
-            rel.as_posix(),
-            rel.with_suffix("").as_posix(),
-            note.noesis_id,
-        ]
-        aliases.extend(str(alias) for alias in as_list(note.metadata.get("aliases")))
-        for alias in aliases:
-            if alias:
-                self.by_note_link[alias] = note
-                self.by_link[alias] = note.path
+        own_id = canonical_lookup_key(note.noesis_id)
+        if own_id and self.by_id.get(own_id) is note:
+            self.claim_lookup_key(note, own_id, structural=True)
+        for key in structural_lookup_keys(note):
+            if key != own_id:
+                self.claim_lookup_key(note, key, structural=True)
+        for key in metadata_alias_keys(note):
+            if key != own_id:
+                self.claim_lookup_key(note, key, structural=False)
+
+    def claim_lookup_key(self, note: Note, key: str, *, structural: bool) -> None:
+        id_owner = self.by_id.get(key)
+        if id_owner is not None and id_owner.path != note.path:
+            return
+        current = self.by_note_link.get(key)
+        if current is not None and current.path != note.path:
+            current_is_structural = key in structural_lookup_keys(current)
+            if id_owner is not note and (not structural or current_is_structural):
+                return
+        self.by_note_link[key] = note
+        self.by_link[key] = note.path
 
     def lineage(self, ref: str) -> list[Note]:
-        start = self.find_note(ref)
+        start = self.find_note_by_id(ref)
         if start is None:
             return []
 
@@ -699,8 +723,15 @@ class Vault:
             "stale": 7,
             "archive": 8,
         }
+
+        def selected(note: Note) -> bool:
+            if note.noesis_id not in seen:
+                return False
+            owner = self.by_id.get(canonical_lookup_key(note.noesis_id))
+            return owner is None or owner is note
+
         return sorted(
-            (note for note in self.notes if note.noesis_id in seen),
+            (note for note in self.notes if selected(note)),
             key=lambda note: (stage_order.get(note.lifecycle_stage, 99), note.rel_path.as_posix()),
         )
 
@@ -887,8 +918,70 @@ def parse_version_tuple(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
-def validate_notes(vault: Vault) -> list[Issue]:
+def canonical_lookup_key(value: str) -> str:
+    return normalize_wikilink_target(value)
+
+
+def dedupe_lookup_keys(raw_keys: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    keys: list[str] = []
+    for raw in raw_keys:
+        key = canonical_lookup_key(str(raw))
+        if key and key not in keys:
+            keys.append(key)
+    return tuple(keys)
+
+
+def structural_lookup_keys(note: Note) -> tuple[str, ...]:
+    rel = note.rel_path
+    return dedupe_lookup_keys(
+        (
+            note.path.name,
+            note.path.stem,
+            rel.as_posix(),
+            rel.with_suffix("").as_posix(),
+        )
+    )
+
+
+def metadata_alias_keys(note: Note) -> tuple[str, ...]:
+    return dedupe_lookup_keys(tuple(str(alias) for alias in as_list(note.metadata.get("aliases"))))
+
+
+def note_alias_keys(note: Note) -> tuple[str, ...]:
+    return dedupe_lookup_keys((*structural_lookup_keys(note), *metadata_alias_keys(note)))
+
+
+def validate_lookup_keys(vault: Vault) -> list[Issue]:
     issues: list[Issue] = []
+    owner_by_key: dict[str, Note] = {}
+    id_owner: dict[str, Note] = {}
+    for note in vault.notes:
+        key = canonical_lookup_key(note.noesis_id)
+        if key and key not in id_owner:
+            id_owner[key] = note
+    for note in vault.notes:
+        own_id = canonical_lookup_key(note.noesis_id)
+        for key in note_alias_keys(note):
+            if key == own_id:
+                continue
+            other = id_owner.get(key)
+            if other is not None and other.path != note.path:
+                issues.append(Issue(note.path, f"lookup key {key!r} matches noesis_id {other.noesis_id!r}"))
+            previous = owner_by_key.get(key)
+            if previous is None:
+                owner_by_key[key] = note
+            elif previous.path != note.path:
+                issues.append(
+                    Issue(
+                        note.path,
+                        f"duplicate lookup key {key!r} also registered by {previous.rel_path.as_posix()}",
+                    )
+                )
+    return issues
+
+
+def validate_notes(vault: Vault) -> list[Issue]:
+    issues: list[Issue] = validate_lookup_keys(vault)
     for note in vault.notes:
         metadata = note.metadata
         missing = sorted(REQUIRED_PROPERTIES - metadata.keys())
@@ -1795,13 +1888,7 @@ def project_vault_notes(
             metadata=metadata,
             body=body,
         )
-        projected.notes.append(projected_note)
-        projected.register_note_aliases(projected_note)
-        if projected_note.noesis_id:
-            if projected_note.noesis_id in projected.by_id:
-                projected.issues.append(Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}"))
-            projected.by_id[projected_note.noesis_id] = projected_note
-            projected.by_link[projected_note.noesis_id] = projected_note.path
+        projected.index_note(projected_note)
     existing_paths = {note.path for note in vault.notes}
     for path, (metadata, body) in note_updates.items():
         if path in existing_paths:
@@ -1812,13 +1899,7 @@ def project_vault_notes(
             metadata=metadata,
             body=body,
         )
-        projected.notes.append(projected_note)
-        projected.register_note_aliases(projected_note)
-        if projected_note.noesis_id:
-            if projected_note.noesis_id in projected.by_id:
-                projected.issues.append(Issue(projected_note.path, f"duplicate noesis_id {projected_note.noesis_id!r}"))
-            projected.by_id[projected_note.noesis_id] = projected_note
-            projected.by_link[projected_note.noesis_id] = projected_note.path
+        projected.index_note(projected_note)
     return projected
 
 
@@ -2454,7 +2535,7 @@ def extract_evidence(
 ) -> CreatedNote:
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    source = vault.find_note(source_ref)
+    source = vault.find_note_by_id(source_ref)
     if source is None:
         raise ValueError(f"source note not found: {source_ref}")
     if source.type != "source":
@@ -2520,7 +2601,7 @@ def propose_claim(
     vault = Vault.load(root)
     evidence_notes: list[Note] = []
     for ref in evidence_refs:
-        note = vault.find_note(ref)
+        note = vault.find_note_by_id(ref)
         if note is None:
             raise ValueError(f"evidence note not found: {ref}")
         if note.type != "evidence":
@@ -2588,7 +2669,7 @@ def synthesize_claims(
     vault = Vault.load(root)
     claims: list[Note] = []
     for ref in claim_refs:
-        note = vault.find_note(ref)
+        note = vault.find_note_by_id(ref)
         if note is None:
             raise ValueError(f"claim note not found: {ref}")
         if note.type != "claim":
@@ -2719,7 +2800,7 @@ def renew_review(
 
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    target = vault.find_note(note_ref)
+    target = vault.find_note_by_id(note_ref)
     if target is None:
         raise ValueError(f"review target not found: {note_ref}")
     if target.type in {"dashboard", "review", "source", "archived-history"}:
@@ -2831,7 +2912,7 @@ def write_review_decision(
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    target = vault.find_note(note_ref)
+    target = vault.find_note_by_id(note_ref)
     if target is None:
         raise ValueError(f"review target not found: {note_ref}")
     if target.type in {"dashboard", "review", "source", "archived-history"}:
@@ -2953,7 +3034,7 @@ def promote_synthesis(
         raise ValueError("next_review must be YYYY-MM-DD or unknown")
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    synthesis_note = vault.find_note(synthesis_ref)
+    synthesis_note = vault.find_note_by_id(synthesis_ref)
     if synthesis_note is None:
         raise ValueError(f"synthesis note not found: {synthesis_ref}")
     if synthesis_note.type != "synthesis":
@@ -3147,7 +3228,7 @@ def mark_memory_stale(
         raise ValueError("title must not be blank")
     root = ensure_valid_vault(vault_path)
     vault = Vault.load(root)
-    target = vault.find_note(note_ref)
+    target = vault.find_note_by_id(note_ref)
     if target is None:
         raise ValueError(f"memory note not found: {note_ref}")
     if target.type in {"dashboard", "review", "stale-memory", "archived-history"}:
@@ -3155,7 +3236,7 @@ def mark_memory_stale(
 
     superseding_note = None
     if superseded_by:
-        superseding_note = vault.find_note(superseded_by)
+        superseding_note = vault.find_note_by_id(superseded_by)
         if superseding_note is None:
             raise ValueError(f"superseding note not found: {superseded_by}")
 
@@ -3232,7 +3313,7 @@ Keep this note so future context builders can explain why {target_link} no longe
     for context_note in vault.notes:
         if context_note.type != "operational-context":
             continue
-        projected_context = projected_vault.find_note(context_note.noesis_id) or context_note
+        projected_context = projected_vault.find_note_by_id(context_note.noesis_id) or context_note
         context_metadata, context_body = rebuild_context_snapshot(
             vault,
             projected_vault,
@@ -3605,7 +3686,7 @@ def append_dependent_memory_review_changes(
     for context_note in vault.notes:
         if context_note.type != "operational-context":
             continue
-        projected_context = projected_vault.find_note(context_note.noesis_id) or context_note
+        projected_context = projected_vault.find_note_by_id(context_note.noesis_id) or context_note
         context_metadata, context_body = rebuild_context_snapshot(
             vault,
             projected_vault,
@@ -3629,7 +3710,7 @@ def append_updated_reviewed_knowledge_contexts(
     for context_note in vault.notes:
         if context_note.type != "operational-context":
             continue
-        projected_context = projected_vault.find_note(context_note.noesis_id) or context_note
+        projected_context = projected_vault.find_note_by_id(context_note.noesis_id) or context_note
         context_metadata, context_body = rebuild_context_snapshot(
             vault,
             projected_vault,

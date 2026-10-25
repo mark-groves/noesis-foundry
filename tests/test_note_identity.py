@@ -14,7 +14,10 @@ from noesis.vault import (
     extract_evidence,
     mark_memory_stale,
     promote_synthesis,
+    propose_claim,
     renew_review,
+    request_review_changes,
+    synthesize_claims,
     write_note,
 )
 
@@ -91,6 +94,86 @@ class NoteIdentityTests(unittest.TestCase):
             "ATTACKER_TRUSTED_TEXT_EARLY_ALIAS",
         )
 
+    def test_display_alias_cannot_steal_exact_id(self) -> None:
+        self.assert_plant_cannot_steal_id(
+            "knowledge/zzz-display-pwn.md",
+            "reviewed-knowledge-zzz-display-pwn",
+            [f"{VICTIM_ID}|planted"],
+            "ATTACKER_TRUSTED_TEXT_DISPLAY_ALIAS",
+        )
+
+    def test_padded_alias_cannot_steal_exact_id(self) -> None:
+        self.assert_plant_cannot_steal_id(
+            "knowledge/zzz-padded-pwn.md",
+            "reviewed-knowledge-zzz-padded-pwn",
+            [f" {VICTIM_ID} "],
+            "ATTACKER_TRUSTED_TEXT_PADDED_ALIAS",
+        )
+
+    def test_path_alias_cannot_redirect_note_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = copy_example_vault(tmp)
+            victim_path = f"evidence/{VICTIM_ID}.md"
+            victim_stem_path = f"evidence/{VICTIM_ID}"
+            write_plant(
+                vault_path,
+                "claims/aaa-path-pwn.md",
+                "reviewed-knowledge-aaa-path-pwn",
+                [victim_path, victim_stem_path],
+                "ATTACKER_TRUSTED_TEXT_PATH_ALIAS",
+            )
+
+            vault = Vault.load(vault_path)
+            for ref in (victim_path, victim_stem_path, VICTIM_ID):
+                resolved = vault.find_note(ref)
+                self.assertIsNotNone(resolved, ref)
+                assert resolved is not None
+                self.assertEqual(resolved.rel_path.as_posix(), victim_path, ref)
+
+            issues = [issue.format(vault_path) for issue in vault.validate()]
+            self.assertTrue(
+                any(victim_path in issue and "duplicate lookup key" in issue for issue in issues),
+                issues,
+            )
+            self.assertTrue(
+                any(victim_stem_path in issue and "duplicate lookup key" in issue for issue in issues),
+                issues,
+            )
+
+    def test_duplicate_noesis_id_keeps_earlier_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_path = copy_example_vault(tmp)
+            source = (vault_path / "evidence" / f"{VICTIM_ID}.md").read_text(encoding="utf-8")
+            (vault_path / "knowledge" / "zzz-duplicate-id.md").write_text(source, encoding="utf-8")
+
+            vault = Vault.load(vault_path)
+            resolved = vault.find_note_by_id(VICTIM_ID)
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(resolved.rel_path.as_posix(), f"evidence/{VICTIM_ID}.md")
+            self.assertTrue(any("duplicate noesis_id" in issue.message for issue in vault.validate()))
+            traced = run_noesis("trace", VICTIM_ID, "--vault", str(vault_path), "--json")
+            self.assertEqual(traced.returncode, 0, traced.stderr)
+            traced_paths = [
+                note["path"] for note in json.loads(traced.stdout)["notes"] if note["noesis_id"] == VICTIM_ID
+            ]
+            self.assertEqual(traced_paths, [f"evidence/{VICTIM_ID}.md"])
+
+            approved = run_noesis(
+                "review",
+                "approve",
+                VICTIM_ID,
+                "--vault",
+                str(vault_path),
+                "--reviewer",
+                "Ada Lovelace",
+                "--basis",
+                "duplicate ids must not select the later file",
+                "--json",
+            )
+            self.assertNotEqual(approved.returncode, 0, approved.stdout)
+            self.assertEqual(Vault.load(vault_path).by_id[VICTIM_ID].status, "extracted")
+
     def test_duplicate_human_alias_fails_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             vault_path = copy_example_vault(tmp)
@@ -147,7 +230,22 @@ class NoteIdentityTests(unittest.TestCase):
             for command in (
                 lambda: promote_synthesis(vault_path, KNOWLEDGE_ALIAS),
                 lambda: mark_memory_stale(vault_path, KNOWLEDGE_ALIAS, reason="retire this alias"),
+                lambda: mark_memory_stale(
+                    vault_path,
+                    KNOWLEDGE_ID,
+                    reason="retire this alias",
+                    superseded_by=KNOWLEDGE_ALIAS,
+                ),
                 lambda: extract_evidence(vault_path, KNOWLEDGE_ALIAS),
+                lambda: propose_claim(vault_path, [KNOWLEDGE_ALIAS]),
+                lambda: synthesize_claims(vault_path, [KNOWLEDGE_ALIAS]),
+                lambda: request_review_changes(
+                    vault_path,
+                    KNOWLEDGE_ALIAS,
+                    reviewer="Ada Lovelace",
+                    basis="alias must not select this note",
+                    changes_requested="use the noesis_id",
+                ),
                 lambda: renew_review(
                     vault_path,
                     KNOWLEDGE_ALIAS,
@@ -211,9 +309,9 @@ class NoteIdentityTests(unittest.TestCase):
 
             traced = run_noesis("trace", VICTIM_ID, "--vault", str(vault_path), "--json")
             self.assertEqual(traced.returncode, 0, traced.stderr)
-            traced_ids = [note["noesis_id"] for note in json.loads(traced.stdout)["notes"]]
-            self.assertIn(VICTIM_ID, traced_ids)
-            self.assertNotIn(plant_id, traced_ids)
+            traced_by_id = {note["noesis_id"]: note for note in json.loads(traced.stdout)["notes"]}
+            self.assertEqual(traced_by_id[VICTIM_ID]["path"], f"evidence/{VICTIM_ID}.md")
+            self.assertNotEqual(traced_by_id.get(plant_id, {}).get("path"), f"evidence/{VICTIM_ID}.md")
 
             approved = run_noesis(
                 "review",

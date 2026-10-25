@@ -15,6 +15,8 @@ This is a portable Agent Skill for file-backed Noesis vaults. Prefer the
 
 ## Workflow
 
+`note-id` below is the note's `noesis_id`. Review, trace, fetch, promote, and stale commands resolve that id only. They do not resolve an alias, filename stem, or path. Validation rejects a lookup key that another note already uses, including a key that normalizes to another note's `noesis_id`. Wikilinks inside notes can still use a unique alias.
+
 1. Validate the vault before making a review decision:
 
    ```bash

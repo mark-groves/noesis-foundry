@@ -215,7 +215,7 @@ Current commands:
 | `noesis context build --vault <path> --purpose <purpose>` | Generate focused operational context with relevance, exact selected-content budgets, freshness policy, `as_of`, input hashes, and lifecycle exclusions. |
 | `noesis context write --vault <path> --purpose <purpose>` | Write an operational context note from reviewed knowledge. |
 | `noesis trace <note-id> --vault <path>` | Print source -> evidence -> claim -> synthesis -> knowledge lineage. |
-| `noesis vault validate <path>` | Validate V2 metadata, per-type relationships, mature lineage, review identity/basis, raw hashes and sizes, dates, links, views, and context exclusions. |
+| `noesis vault validate <path>` | Validate V2 metadata, per-type relationships, mature lineage, review identity/basis, raw hashes and sizes, dates, links, duplicate lookup keys, views, and context exclusions. |
 
 ### MCP Boundary
 
@@ -237,7 +237,7 @@ Current tools:
 | --- | --- |
 | `noesis_lint_vault` | Validate V2 contract and trust-kernel invariants, required folders, flat YAML, lifecycle values, source integrity, links, views, and context exclusions. |
 | `noesis_search_notes` | Rank note summaries by field-aware lexical relevance with all/any term and lifecycle filters. |
-| `noesis_get_note` | Return a note by `noesis_id`, filename stem, path, alias, or wikilink target, including parsed properties and body. |
+| `noesis_get_note` | Return a note by exact `noesis_id`, including parsed properties and body. |
 | `noesis_get_review_queue` | Return notes that need human or agent review. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive lineage. |
 | `noesis_build_context` | Return current operational context with freshness state, relevance and budget provenance, input hashes, and optional profile-specific handoff rendering. |

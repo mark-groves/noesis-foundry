@@ -144,7 +144,7 @@ class NoesisMcpHandlers:
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
-        found = vault.find_note(note)
+        found = vault.find_note_by_id(note)
         if found is None:
             return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
         return {"ok": True, "vault_path": str(vault.root), "note": mcp_note_to_dict(found, vault.root)}
@@ -211,7 +211,7 @@ class NoesisMcpHandlers:
         issues = vault.validate()
         if issues:
             return validation_error(vault, issues)
-        found = vault.find_note(note)
+        found = vault.find_note_by_id(note)
         if found is None:
             return {"ok": False, "error": f"note not found: {note}", "vault_path": str(vault.root)}
         try:
@@ -619,7 +619,7 @@ def create_server(
 
     @server.tool()
     def noesis_get_note(note: str, vault_path: str | None = None) -> JsonObject:
-        """Fetch one Noesis note by id, filename stem, path, alias, or wikilink target."""
+        """Fetch one Noesis note by exact noesis_id."""
         return handlers.get_note(note, vault_path)
 
     @server.tool()
@@ -648,12 +648,12 @@ def create_server(
 
     @server.tool()
     def noesis_show_review(note: str, vault_path: str | None = None, due_on: str | None = None) -> JsonObject:
-        """Inspect review state, lineage, audit records, support, and downstream impact for one note."""
+        """Inspect review state for one note identified by exact noesis_id."""
         return handlers.show_review(note=note, vault_path=vault_path, due_on=due_on)
 
     @server.tool()
     def noesis_trace_lineage(note: str, vault_path: str | None = None) -> JsonObject:
-        """Trace connected lineage for a Noesis note."""
+        """Trace connected lineage for a note identified by exact noesis_id."""
         return handlers.trace_lineage(note, vault_path)
 
     @server.tool()
@@ -727,7 +727,7 @@ def create_server(
         evidence: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
-        """Create a reviewable evidence draft linked to a source note."""
+        """Create a reviewable evidence draft linked to a source noesis_id."""
         return handlers.create_evidence_draft(
             source=source, vault_path=vault_path, title=title, evidence=evidence, slug=slug
         )
@@ -740,7 +740,7 @@ def create_server(
         claim: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
-        """Create a review-ready claim draft grounded in evidence notes."""
+        """Create a review-ready claim draft grounded in evidence noesis_id values."""
         return handlers.create_claim_draft(
             evidence=evidence, vault_path=vault_path, title=title, claim=claim, slug=slug
         )
@@ -753,7 +753,7 @@ def create_server(
         synthesis: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
-        """Create a review-ready synthesis draft grounded in claim lineage."""
+        """Create a review-ready synthesis draft grounded in claim noesis_id values."""
         return handlers.create_synthesis_draft(
             claim=claim, vault_path=vault_path, title=title, synthesis=synthesis, slug=slug
         )
@@ -768,7 +768,7 @@ def create_server(
         slug: str | None = None,
         next_review: str | None = None,
     ) -> JsonObject:
-        """Approve a reviewable note and write an audit review note."""
+        """Approve one note identified by exact noesis_id and write an audit review note."""
         return handlers.approve_review(
             note=note,
             vault_path=vault_path,
@@ -789,7 +789,7 @@ def create_server(
         title: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
-        """Request review changes and write an audit review note."""
+        """Request changes for one note identified by exact noesis_id and write an audit review note."""
         return handlers.request_review_changes(
             note=note,
             vault_path=vault_path,
@@ -810,7 +810,7 @@ def create_server(
         title: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
-        """Record a scheduled review audit and move the note's next_review date."""
+        """Renew one note identified by exact noesis_id and move its next_review date."""
         return handlers.renew_review(
             note=note,
             next_review=next_review,
@@ -830,7 +830,7 @@ def create_server(
         slug: str | None = None,
         next_review: str | None = None,
     ) -> JsonObject:
-        """Promote an approved synthesis with review audit into reviewed knowledge."""
+        """Promote an approved synthesis identified by exact noesis_id into reviewed knowledge."""
         return handlers.promote_synthesis(
             synthesis=synthesis,
             vault_path=vault_path,
@@ -849,7 +849,7 @@ def create_server(
         title: str | None = None,
         slug: str | None = None,
     ) -> JsonObject:
-        """Mark memory stale or superseded and update affected context exclusions."""
+        """Mark one note identified by exact noesis_id stale or superseded."""
         return handlers.mark_memory_stale(
             note=note,
             reason=reason,
@@ -895,7 +895,7 @@ def create_server(
 
     @server.resource("noesis://note/{note}")
     def noesis_note_resource(note: str) -> JsonObject:
-        """Return one note from the default Noesis vault."""
+        """Return one note from the default vault by exact noesis_id."""
         return handlers.get_note(note)
 
     return server

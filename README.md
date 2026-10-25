@@ -213,7 +213,7 @@ Supported commands:
 | Command | Purpose |
 | --- | --- |
 | `noesis vault doctor <path>` | Report contract compatibility, validation completeness, and CLI/MCP readiness. |
-| `noesis vault validate <path>` | Validate the V2 contract, strict lineage invariants, raw-source hashes and sizes, review identity/basis, dates, wikilinks, Base YAML, Canvas JSON, and context exclusions. |
+| `noesis vault validate <path>` | Validate the V2 contract, strict lineage invariants, raw-source hashes and sizes, review identity/basis, dates, wikilinks, duplicate lookup keys, Base YAML, Canvas JSON, and context exclusions. |
 | `noesis vault init <path>` | Create the V2 contract metadata file, folder schema, templates, review dashboard, Base views, Canvas placeholder, and minimal Obsidian settings. |
 | `noesis vault migrate <path>` | Preview or migrate a V1 vault to V2 with an adjacent backup and post-write validation. |
 | `noesis search <query> --vault <path>` | Rank note summaries with deterministic field-aware lexical retrieval and lifecycle filters; use note retrieval or trace for full detail. |
@@ -230,7 +230,7 @@ Supported commands:
 | `noesis review request-changes <note-id> --vault <path>` | Require reviewer, basis, and requested changes; write an audit note and keep the reviewed note in the queue. |
 | `noesis knowledge promote --vault <path> --synthesis <synthesis-id>` | Promote an approved synthesis with a review audit into active reviewed knowledge. |
 | `noesis memory stale <note-id> --vault <path> --reason <reason>` | Mark memory stale or superseded, create a stale-memory trace note, and update affected context exclusions. |
-| `noesis trace <note> --vault <path>` | Print the connected lineage for a note across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
+| `noesis trace <note-id> --vault <path>` | Print the connected lineage for a `noesis_id` across source, evidence, claim, synthesis, review, knowledge, context, stale memory, and archive history. |
 | `noesis context build --vault <path>` | Build focused context from current reviewed knowledge, always excluding expired memory and optionally excluding review-due memory with `--freshness-policy strict`. Records `as_of`, input hashes, relevance, and exact selected-content budgets. |
 | `noesis context explain --vault <path>` | Explain relevance, freshness, scope, budget, and lifecycle inclusion/exclusion decisions. |
 | `noesis context write --vault <path>` | Write an operational context note from current reviewed knowledge, using the same scope and budget controls as `context build`. |
@@ -336,7 +336,7 @@ Read tools:
 | --- | --- |
 | `noesis_lint_vault` | Validate folder structure, flat YAML frontmatter, lifecycle values, wikilinks, Bases, Canvases, and context exclusions. |
 | `noesis_search_notes` | Return ranked note summaries using field-aware lexical relevance, all/any term matching, and optional lifecycle filters. |
-| `noesis_get_note` | Return one parsed note by `noesis_id`, filename stem, path, alias, or wikilink target. |
+| `noesis_get_note` | Return one parsed note by exact `noesis_id`. |
 | `noesis_get_review_queue` | Return notes whose `review_state` still needs attention. |
 | `noesis_trace_lineage` | Return connected source, evidence, claim, synthesis, review, knowledge, context, and stale-memory lineage. |
 | `noesis_build_context` | Build operational context from current reviewed knowledge only, excluding stale, superseded, and archived memory, with optional scope and budget controls plus selection provenance. Use `profile: "agent-handoff"` for harness-agnostic handoff packs; `codex-handoff` is the Codex dogfood adapter over the same Markdown/YAML contract. |
